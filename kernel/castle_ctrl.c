@@ -20,6 +20,14 @@
 #include "castle_rebuild.h"
 #include "castle_ctrl_prog.h"
 
+/* Define string array for userspace error-codes. */
+#undef CASTLE_ERROR_CODE
+#define CASTLE_ERROR_CODE(err_no, err_code, err_str)  err_str,
+const char *castle_error_strings[] =
+{
+    CASTLE_ERRORS
+};
+
 //#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)  ((void)0)

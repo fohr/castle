@@ -2444,4 +2444,7 @@ extern int castle_extents_process_ratelimit;
 extern int castle_rebuild_freespace_threshold;
 
 extern unsigned int castle_rda_lvl;
+
+extern const char *castle_error_strings[];
+
 #endif /* __CASTLE_H__ */

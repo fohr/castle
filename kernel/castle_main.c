@@ -92,7 +92,6 @@ MODULE_PARM_DESC(castle_rebuild_freespace_threshold, "extproc_freesp_thresh,");
 
 static DECLARE_WAIT_QUEUE_HEAD(castle_detach_waitq);
 
-
 //#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)  ((void)0)

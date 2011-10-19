@@ -11647,14 +11647,14 @@ static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_id
         if (!ct)
         {
             castle_printk(LOG_USERINFO, "Couldn't find the array: 0x%x\n", array_ids[i]);
-            return -EINVAL;
+            return ERR_MERGE_INVAL_ARRAY;
         }
 
         /* Check if the tree is alrady marked for merge. */
         if (ct->merge)
         {
             castle_printk(LOG_USERINFO, "Array is already merging: 0x%x\n", array_ids[i]);
-            return -EINVAL;
+            return ERR_MERGE_ARRAY_BUSY;
         }
 
         /* Check if the tree is dynamic. */
@@ -11662,7 +11662,7 @@ static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_id
         {
             castle_printk(LOG_USERINFO, "Array is dynamic. Can't start merg on: 0x%x\n",
                                     array_ids[i]);
-            return -EINVAL;
+            return ERR_MERGE_ARRAY_KERNEL;
         }
 
         /* Shouldn't be any outstanding write references. */
@@ -11678,7 +11678,7 @@ static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_id
             {
                 castle_printk(LOG_USERINFO, "Array 0x%x is not following 0x%x\n",
                                         array_ids[i], array_ids[i-1]);
-                return -EINVAL;
+                return ERR_MERGE_ARRAYS_OOO;
             }
 
             /* Work out what type of trees are we going to be merging. Return, if
@@ -11686,13 +11686,13 @@ static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_id
             if (in_trees[i-1]->btree_type != ct->btree_type)
             {
                 castle_printk(LOG_USERINFO, "Arrays are not of same type\n");
-                return -EINVAL;
+                return ERR_MERGE_ERROR;
             }
 
             if (ct->level != in_trees[i-1]->level)
             {
                 castle_printk(LOG_USERINFO, "Don't belong to same level\n");
-                return -EINVAL;
+                return ERR_MERGE_ERROR;
             }
         }
 
@@ -11718,14 +11718,14 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
 
     if (merge_cfg->nr_arrays == 0)
     {
-        ret = -EINVAL;
+        ret = ERR_MERGE_0TREES;
         castle_printk(LOG_USERINFO, "Can't do merge on 0 trees\n");
         goto err_out;
     }
 
     if (castle_merge_thread_create(&thread_id) < 0)
     {
-        ret = -EINVAL;
+        ret = ERR_MERGE_THREAD;
         castle_printk(LOG_USERINFO, "Failed to create merge thread\n");
         goto err_out;
     }
@@ -11734,13 +11734,13 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
     in_trees = castle_malloc(sizeof(void *) * merge_cfg->nr_arrays, GFP_KERNEL);
     if (!in_trees)
     {
-        ret = -ENOMEM;
+        ret = ERR_NOMEMORY;
         goto err_out;
     }
 
     /* Get array objects from IDs. */
     ret = castle_da_merge_fill_trees(merge_cfg->nr_arrays, merge_cfg->arrays, in_trees);
-    if (ret < 0)
+    if (ret)
         goto err_out;
 
     /* Get doubling array. */
@@ -11748,7 +11748,7 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
     if (!da)
     {
         castle_printk(LOG_USERINFO, "Couldn't find corresposing version tree.\n");
-        ret = -EINVAL;
+        ret = ERR_MERGE_INVAL_DA;
         goto err_out;
     }
 
@@ -11766,7 +11766,7 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
         if (!merge_cfg->data_exts)
         {
             castle_printk(LOG_USERINFO, "Failed to allocate memory\n");
-            ret = -ENOMEM;
+            ret = ERR_NOMEMORY;
             goto err_out;
         }
 
@@ -11790,7 +11790,7 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
         {
             castle_printk(LOG_USERINFO, "Data extent %llu is not valid\n",
                                         merge_cfg->data_exts[i]);
-            ret = -EINVAL;
+            ret = ERR_MERGE_INVAL_EXT;
             goto err_out;
         }
     }
@@ -11807,7 +11807,7 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
         {
             castle_printk(LOG_USERINFO, "Data extent %llu is not linked to any of the in-trees\n",
                                         merge_cfg->data_exts[i]);
-            ret = -EINVAL;
+            ret = ERR_MERGE_ORPHAN_EXT;
             goto err_out;
         }
     }
@@ -11818,7 +11818,7 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
     if (!merge)
     {
         castle_printk(LOG_USERINFO, "Couldn't allocate merge structure.\n");
-        ret = -ENOMEM;
+        ret = ERR_NOMEMORY;
         goto err_out;
     }
 
@@ -11826,6 +11826,13 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
     if (ret < 0)
     {
         castle_printk(LOG_USERINFO, "Failed to init merge.\n");
+
+        if (ret == -ENOSPC)
+            ret = ERR_NOSPACE;
+        else if (ret == -ENOMEM)
+            ret = ERR_NOMEMORY;
+        else
+            ret = ERR_MERGE_INIT;
 
         /* merge_init() would deallocate on failure. */
         merge = NULL;
@@ -11841,7 +11848,8 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
 
 err_out:
 
-    BUG_ON(ret == 0);
+    /* All userspace errors are +ve. */
+    BUG_ON(ret <= 0);
     BUG_ON(merge);
 
     castle_check_kfree(in_trees);
@@ -11862,7 +11870,7 @@ int castle_merge_do_work(c_merge_id_t merge_id, c_work_size_t work_size, c_work_
     if (!merge)
     {
         castle_printk(LOG_WARN, "Failed to find an active merge with id: %u\n", merge_id);
-        ret = -EINVAL;
+        ret = ERR_MERGE_INVAL_ID;
         goto err_out;
     }
 
@@ -11870,7 +11878,7 @@ int castle_merge_do_work(c_merge_id_t merge_id, c_work_size_t work_size, c_work_
     {
         castle_printk(LOG_WARN, "Can't do merge as it is not attached to any thread: %u\n",
                       merge_id);
-        ret = -EINVAL;
+        ret = ERR_MERGE_ERROR;
         goto err_out;
     }
 
@@ -11881,7 +11889,7 @@ int castle_merge_do_work(c_merge_id_t merge_id, c_work_size_t work_size, c_work_
     if (merge_thread->running)
     {
         castle_printk(LOG_WARN, "Can't do merge as it is already doing work: %u\n", merge_id);
-        ret = -EBUSY;
+        ret = ERR_MERGE_RUNNING;
         goto err_out;
     }
 
@@ -11896,7 +11904,8 @@ int castle_merge_do_work(c_merge_id_t merge_id, c_work_size_t work_size, c_work_
     return 0;
 
 err_out:
-    BUG_ON(ret == 0);
+    /* All user-space errors are +ve. */
+    BUG_ON(ret <= 0);
 
     return ret;
 }

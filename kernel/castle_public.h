@@ -906,4 +906,32 @@ struct castle_fs_superblock_public {
     /*        128 */
 } PACKED;
 
+#define CASTLE_ERRORS                                                                           \
+    CASTLE_ERROR_CODE(0, ERR_SUCCESS, "Operation Succeeded.")                                   \
+    CASTLE_ERROR_CODE(1, ERR_NOSPACE, "Not enough space available on disk.")                    \
+    CASTLE_ERROR_CODE(2, ERR_NOMEMORY, "Not enough memory available.")                          \
+    CASTLE_ERROR_CODE(101, ERR_MERGE_0TREES, "Merge can't be done on zero trees.")              \
+    CASTLE_ERROR_CODE(102, ERR_MERGE_THREAD, "Merge failed to create thread.")                  \
+    CASTLE_ERROR_CODE(103, ERR_MERGE_INVAL_DA, "Arrays belong to invalid version tree.")        \
+    CASTLE_ERROR_CODE(104, ERR_MERGE_INVAL_EXT, "Arrays belong to invalid data extent.")        \
+    CASTLE_ERROR_CODE(105, ERR_MERGE_ORPHAN_EXT, "Data extent doesn't belong to any array.")    \
+    CASTLE_ERROR_CODE(106, ERR_MERGE_INIT, "Merge initialization failed.")                      \
+    CASTLE_ERROR_CODE(107, ERR_MERGE_INVAL_ARRAY, "Array is invalid.")                          \
+    CASTLE_ERROR_CODE(108, ERR_MERGE_ARRAY_BUSY, "Array is already merging.")                   \
+    CASTLE_ERROR_CODE(109, ERR_MERGE_ARRAY_KERNEL, "Array is owned by kernel. Can't do merge.") \
+    CASTLE_ERROR_CODE(110, ERR_MERGE_ARRAYS_OOO, "Arrays are not in order.")                    \
+    CASTLE_ERROR_CODE(111, ERR_MERGE_ERROR, "Internal error in merges.")                        \
+    CASTLE_ERROR_CODE(112, ERR_MERGE_INVAL_ID, "Invalid merge ID.")                             \
+    CASTLE_ERROR_CODE(113, ERR_MERGE_RUNNING, "Merge is already running.")                      \
+    CASTLE_ERROR_CODE(9999, CASTLE_ERROR_MAX, "Invalid error code from kernel.")                \
+
+
+
+#undef CASTLE_ERROR_CODE
+#define CASTLE_ERROR_CODE(err_no, err_code, err_str)  err_code = err_no,
+enum castle_error_codes
+{
+    CASTLE_ERRORS
+};
+
 #endif /* __CASTLE_PUBLIC_H__ */
