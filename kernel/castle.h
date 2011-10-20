@@ -2250,7 +2250,7 @@ struct castle_da_cts_proxy {
                                                          Set for REDIR_INTREE only.             */
         c_ct_redir_state_enum_t         state;      /**< Redirection state.                     */
     } *cts;
-    uint8_t                     nr_cts;     /**< Number of CTs in cts[].                */
+    int                         nr_cts;     /**< Number of CTs in cts[].                */
     void                       *keys;       /**< Buffer of partition keys.              */
     void                       *ext_refs;   /**< Buffer of per-CT extent references.    */
     btree_t                     btree_type; /**< Tree type used for the CTs.            */
