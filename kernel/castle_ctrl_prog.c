@@ -53,14 +53,14 @@ int castle_ctrl_prog_ioctl(cctrl_ioctl_t *ioctl)
             printk("Registering, from pid=%d\n", castle_ctrl_prog_curr_pid_get());
             if(castle_ctrl_prog_state != CTRL_PROG_NOT_PRESENT)
             {
-                ioctl->ctrl_prog_register.ret = -EEXIST;
+                ioctl->ctrl_prog_register.ret = C_ERR_EXISTS;
                 break;
             }
             castle_ctrl_prog_pid = castle_ctrl_prog_curr_pid_get();
             castle_ctrl_prog_state = CTRL_PROG_PRESENT;
             castle_ctrl_prog_touch();
 
-            ioctl->ctrl_prog_register.ret = 0;
+            ioctl->ctrl_prog_register.ret = C_ERR_SUCCESS;
             break;
 
         case CASTLE_CTRL_PROG_DEREGISTER:
@@ -87,40 +87,40 @@ int castle_ctrl_prog_ioctl(cctrl_ioctl_t *ioctl)
                     castle_ctrl_prog_state = CTRL_PROG_NOT_PRESENT;
                 }
             }
-            ioctl->ctrl_prog_deregister.ret = 0;
+            ioctl->ctrl_prog_deregister.ret = C_ERR_SUCCESS;
             break;
 
         case CASTLE_CTRL_PROG_HEARTBEAT:
             printk("Heartbeat, from pid=%d\n", castle_ctrl_prog_curr_pid_get());
             if(castle_ctrl_prog_state != CTRL_PROG_PRESENT)
             {
-                ioctl->ctrl_prog_register.ret = -EEXIST;
+                ioctl->ctrl_prog_register.ret = C_ERR_EXISTS;
                 break;
             }
             if(castle_ctrl_prog_curr_pid_get() != castle_ctrl_prog_pid)
             {
-                ioctl->ctrl_prog_register.ret = -ECHILD;
+                ioctl->ctrl_prog_register.ret = C_ERR_INVAL;
                 break;
             }
             castle_ctrl_prog_touch();
 
-            ioctl->ctrl_prog_heartbeat.ret = 0;
+            ioctl->ctrl_prog_heartbeat.ret = C_ERR_SUCCESS;
             break;
 
         case CASTLE_CTRL_MERGE_START:
-            ioctl->merge_start.ret = -EPERM;
+            ioctl->merge_start.ret = C_ERR_PERM;
             goto check_pid;
         case CASTLE_CTRL_MERGE_DO_WORK:
-            ioctl->merge_do_work.ret = -EPERM;
+            ioctl->merge_do_work.ret = C_ERR_PERM;
             goto check_pid;
         case CASTLE_CTRL_MERGE_STOP:
-            ioctl->merge_stop.ret = -EPERM;
+            ioctl->merge_stop.ret = C_ERR_PERM;
             goto check_pid;
         case CASTLE_CTRL_INSERT_RATE_SET:
-            ioctl->insert_rate_set.ret = -EPERM;
+            ioctl->insert_rate_set.ret = C_ERR_PERM;
             goto check_pid;
         case CASTLE_CTRL_READ_RATE_SET:
-            ioctl->read_rate_set.ret = -EPERM;
+            ioctl->read_rate_set.ret = C_ERR_PERM;
 check_pid:
             /* If ctrl prog not registered, return 'not handled'. */
             if(castle_ctrl_prog_state != CTRL_PROG_PRESENT)

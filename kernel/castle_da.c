@@ -7483,7 +7483,7 @@ int castle_da_insert_rate_set(c_da_t da_id, uint32_t insert_rate)
     {
         castle_printk(LOG_USERINFO, "Couldn't set insert rate for unknown version tree: %u\n",
                                     da_id);
-        return -EINVAL;
+        return C_ERR_INVAL_DA;
     }
 
     /* User passes it in MB/s, but kernel stores it in Bytes/secs. */
@@ -7500,7 +7500,7 @@ int castle_da_read_rate_set(c_da_t da_id, uint32_t read_rate)
     {
         castle_printk(LOG_USERINFO, "Couldn't set read rate for unknown version tree: %u\n",
                                     da_id);
-        return -EINVAL;
+        return C_ERR_INVAL_DA;
     }
 
     /* User passes it in MB/s, but kernel stores it in Bytes/secs. */

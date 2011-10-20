@@ -502,13 +502,13 @@ int castle_fs_init(void)
     if(castle_fs_inited)
     {
         castle_printk(LOG_WARN, "FS is already inited\n");
-        return -EEXIST;
+        return C_ERR_RUNNING;
     }
 
     if(list_empty(&castle_slaves.slaves))
     {
         castle_printk(LOG_ERROR, "Found no slaves\n");
-        return -ENOENT;
+        return C_ERR_NODISK;
     }
 
     /*
@@ -543,7 +543,7 @@ int castle_fs_init(void)
         {
             castle_printk(LOG_INIT, "Error: could not find set of slaves to start filesystem using"
                                     " fs versions %d or %d.\n", max, max - 1);
-            return -EINVAL;
+            return C_ERR_FS_VERSION;
         }
 
         /* No lower version found, so this is the lowest. */
@@ -583,7 +583,7 @@ int castle_fs_init(void)
         } else if (last)
         {
             castle_printk(LOG_INIT, "Error: could not find set of slaves to start filesystem.\n");
-            return -EINVAL;
+            return C_ERR_FS_VERSION;
         }
     }
 
@@ -602,7 +602,7 @@ int castle_fs_init(void)
         if (cs->new_dev != prev_new_dev)
         {
             castle_printk(LOG_ERROR, "Few disks are marked new and few are not\n");
-            return -EINVAL;
+            return C_ERR_FS_VERSION;
         }
 
         if ((cs->fs_versions[0] != bcv) && (cs->fs_versions[1] != bcv))
@@ -627,12 +627,12 @@ int castle_fs_init(void)
                 (castle_slave_version_load(cs, bcv)))
         {
             castle_printk(LOG_ERROR, "Couldn't find version %u on slave: 0x%x\n", bcv, cs->uuid);
-            return -EINVAL;
+            return C_ERR_FS_VERSION;
         }
         if (castle_freespace_slave_init(cs, cs->new_dev))
         {
             castle_printk(LOG_ERROR, "Failed to initialise Freespace on slave: 0x%x\n", cs->uuid);
-            return -EINVAL;
+            return C_ERR_INTERNAL;
         }
         castle_slave_superblock_print(&cs->cs_superblock);
     }
@@ -668,7 +668,7 @@ int castle_fs_init(void)
             {
                 castle_printk(LOG_ERROR, "Castle fs superblocks do not match!\n");
                 castle_fs_superblock_put(cs, 0);
-                return -EINVAL;
+                return C_ERR_FS_VERSION;
             }
         }
 
@@ -687,7 +687,7 @@ int castle_fs_init(void)
         if (i == fs_sb.nr_slaves)
         {
             castle_printk(LOG_ERROR, "Slave 0x%x doesn't belong to this File system.\n", cs->uuid);
-            return -EINVAL;
+            return C_ERR_FS_VERSION;
         }
         castle_fs_superblock_put(cs, 0);
     }
@@ -697,7 +697,7 @@ int castle_fs_init(void)
     if (slave_count < 2)
     {
         castle_printk(LOG_ERROR, "Error: Need a minimum of two disks.\n");
-        return -EINVAL;
+        return C_ERR_FS_VERSION;
     }
 
     castle_checkpoint_ratelimit_set(25 * 1024 * slave_count);
@@ -709,7 +709,7 @@ int castle_fs_init(void)
         else if (nr_live_slaves < nr_fs_slaves)
         {
             castle_printk(LOG_ERROR, "Error: could not find enough slaves to start the filesystem\n");
-            return -EINVAL;
+            return C_ERR_FS_VERSION;
         }
 
         /*
@@ -775,7 +775,7 @@ int castle_fs_init(void)
     if (need_rebuild > 1)
     {
         castle_printk(LOG_ERROR, "Error: too many out-of-service slaves need remapping. Cannot start filesystem\n");
-        return -EINVAL;
+        return C_ERR_FS_VERSION;
     }
 
     /* Init the fs superblock */
@@ -787,15 +787,18 @@ int castle_fs_init(void)
     if (ret)
     {
         if (ret == -ENOSPC)
+        {
             castle_printk(LOG_ERROR, "Failed to create/read extents due to low freespace.\n");
-        else
-            castle_printk(LOG_ERROR, "Failed to create/read extents.\n");
-        return ret;
+            return C_ERR_NOSPC;
+        }
+
+        castle_printk(LOG_ERROR, "Failed to create/read extents.\n");
+        return C_ERR_INTERNAL;
     }
 
     /* Load all extents into memory. */
     if (!first && (ret = castle_extents_read_complete()))
-        return ret;
+        return C_ERR_INTERNAL;
 
     /* If first is still true, we've not found a single non-new cs.
        Init the fs superblock. */
@@ -821,7 +824,7 @@ int castle_fs_init(void)
         {
             castle_printk(LOG_ERROR, "Failed to allocate space for Global Tree.\n");
             castle_extent_transaction_end();
-            return ret;
+            return C_ERR_NOSPC;
         }
 
         if ((ret = castle_new_ext_freespace_init(&castle_global_tree.data_ext_free,
@@ -832,7 +835,7 @@ int castle_fs_init(void)
         {
             castle_printk(LOG_ERROR, "Failed to allocate space for Global Tree Medium Objects.\n");
             castle_extent_transaction_end();
-            return ret;
+            return C_ERR_NOSPC;
         }
 
         castle_extent_transaction_end();
@@ -854,7 +857,7 @@ int castle_fs_init(void)
         put_c2b(c2b);
         /* Init version list */
         if ((ret = castle_versions_zero_init()))
-            return ret;
+            return C_ERR_INTERNAL;
         /* Make sure that fs_sb is up-to-date */
         cs_fs_sb = castle_fs_superblocks_get();
         memcpy(&fs_sb, cs_fs_sb, sizeof(struct castle_fs_superblock));
@@ -870,26 +873,26 @@ int castle_fs_init(void)
 
     /* Read versions in. */
     if (!first && (ret = castle_versions_read()))
-        return ret;
+        return C_ERR_INTERNAL;
 
     /* Read doubling arrays and component trees in. */
     ret = first ? castle_double_array_create() : castle_double_array_read();
-    if (ret) return ret;
+    if (ret) return C_ERR_INTERNAL;
 
     /* Read Collection Attachments. */
     if (!first && (ret = castle_attachments_read()))
-        return ret;
+        return C_ERR_INTERNAL;
 
     /* Read stats in. */
     if (!first && (ret = castle_stats_read()))
-        return ret;
+        return C_ERR_INTERNAL;
 
     FAULT(FS_INIT_FAULT);
 
     if (!first && (ret = castle_chk_disk()))
     {
         castle_printk(LOG_ERROR, "Failed to bring-up sane FS from disks\n");
-        return ret;
+        return C_ERR_INTERNAL;
     }
 
     castle_checkpoint_version_inc();
@@ -899,7 +902,7 @@ int castle_fs_init(void)
     if (castle_double_array_start() < 0)
     {
         castle_printk(LOG_ERROR, "Failed to start Doubling Arrays\n");
-        return -EINVAL;
+        return C_ERR_INTERNAL;
     }
 
     castle_events_init();

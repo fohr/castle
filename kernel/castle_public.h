@@ -916,6 +916,18 @@ struct castle_fs_superblock_public {
     CASTLE_ERROR_CODE(0, C_ERR_SUCCESS, "Operation Succeeded.")                                 \
     CASTLE_ERROR_CODE(1, C_ERR_NOSPC, "Not enough space available on disk.")                    \
     CASTLE_ERROR_CODE(2, C_ERR_NOMEM, "Not enough memory available.")                           \
+    CASTLE_ERROR_CODE(3, C_ERR_FAIL, "Operation Failed.")                                       \
+    CASTLE_ERROR_CODE(4, C_ERR_RUNNING, "Operation already running.")                           \
+    CASTLE_ERROR_CODE(5, C_ERR_NODISK, "No disk available.")                                    \
+    CASTLE_ERROR_CODE(6, C_ERR_FS_VERSION, "FS version on slaves is not matching.")             \
+    CASTLE_ERROR_CODE(7, C_ERR_INTERNAL, "Castle FS internal failure.")                         \
+    CASTLE_ERROR_CODE(8, C_ERR_INVAL_PARAM, "Couldn't find associated structure in kernel.")    \
+    CASTLE_ERROR_CODE(9, C_ERR_NODEV, "No device available.")                                   \
+    CASTLE_ERROR_CODE(10, C_ERR_INVAL_VER, "Invalid version.")                                  \
+    CASTLE_ERROR_CODE(11, C_ERR_MEM_FAULT, "Can't access memory.")                              \
+    CASTLE_ERROR_CODE(12, C_ERR_EXISTS, "Already exists.")                                      \
+    CASTLE_ERROR_CODE(13, C_ERR_INVAL, "Invalid operation.")                                    \
+    CASTLE_ERROR_CODE(14, C_ERR_PERM, "Permission denied.")                                     \
                                                                                                 \
     CASTLE_ERROR_CODE(101, C_ERR_MERGE_0TREES, "Merge can't be done on zero trees.")            \
     CASTLE_ERROR_CODE(102, C_ERR_MERGE_THREAD, "Merge failed to create thread.")                \
@@ -930,6 +942,8 @@ struct castle_fs_superblock_public {
     CASTLE_ERROR_CODE(111, C_ERR_MERGE_ERROR, "Internal error in merges.")                      \
     CASTLE_ERROR_CODE(112, C_ERR_MERGE_INVAL_ID, "Invalid merge ID.")                           \
     CASTLE_ERROR_CODE(113, C_ERR_MERGE_RUNNING, "Merge is already running.")                    \
+                                                                                                \
+    CASTLE_ERROR_CODE(201, C_ERR_INVAL_DA, "Invalid version tree.")                             \
                                                                                                 \
     CASTLE_ERROR_CODE(9999, CASTLE_ERROR_MAX, "Invalid error code from kernel.")                \
 
