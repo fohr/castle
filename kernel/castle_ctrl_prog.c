@@ -128,11 +128,14 @@ check_pid:
             /* If ctrl program registered, and the pids don't match, return 'handled'. */
             if(castle_ctrl_prog_curr_pid_get() != castle_ctrl_prog_pid)
                 return 1;
-            break;
+            /* Otherwise, let the main ctrl code handle this command. */
+            return 0;
+
         default:
             return 0;
     }
 
+    /* If we got here, the command was handled already. */
     return 1;
 }
 
