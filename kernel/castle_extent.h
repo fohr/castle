@@ -136,7 +136,8 @@ void                castle_extents_stat_read       (struct castle_slist_entry *m
 
 int                 castle_extents_create                   (void);
 int                 castle_extents_read                     (void);
-int                 castle_extents_read_complete            (void);
+int                 castle_extents_read_complete            (int *sync_checkpoint);
+void                castle_extents_start                    (void);
 int                 castle_extents_writeback                (void);
 int                 castle_extents_restore                  (void);
 int                 castle_extents_init                     (void);

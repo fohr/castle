@@ -270,6 +270,7 @@ int                        castle_checkpoint_init          (void);
 void                       castle_checkpoint_fini          (void);
 int                        castle_checkpoint_version_inc   (void);
 void                       castle_checkpoint_ratelimit_set (unsigned long ratelimit);
+void                       castle_checkpoint_wait          (void);
 int                        castle_chk_disk                 (void);
 
 void                       castle_cache_stats_print        (int verbose);

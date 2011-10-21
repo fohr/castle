@@ -2490,6 +2490,8 @@ extern int castle_nice_value;
 
 extern int castle_checkpoint_period;
 
+extern int castle_meta_ext_compact_pct;
+
 extern int castle_last_checkpoint_ongoing;
 
 struct castle_merge_thread {

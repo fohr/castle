@@ -6169,6 +6169,36 @@ int castle_checkpoint_version_inc(void)
     return 0;
 }
 
+void castle_checkpoint_wait(void)
+{
+    struct   castle_fs_superblock *fs_sb;
+    uint32_t fs_version;
+    int max_retries = 1000, exit;
+    int castle_checkpoint_period_save;
+
+    /* Read version in. */
+    fs_sb = castle_fs_superblocks_get();
+    fs_version = fs_sb->fs_version;
+    castle_fs_superblocks_put(fs_sb, 0);
+
+    exit = 0;
+    castle_checkpoint_period_save = castle_checkpoint_period;
+    castle_checkpoint_period = 0;
+    while(!exit && max_retries-- > 0)
+    {
+        msleep(1000);
+        fs_sb = castle_fs_superblocks_get();
+        if(fs_sb->fs_version > fs_version)
+            exit = 1;
+        else
+            exit = 0;
+        castle_fs_superblocks_put(fs_sb, 0);
+    }
+    if(!exit)
+        castle_printk(LOG_ERROR, "Waited for a checkpoint, but it never happened.\n");
+    castle_checkpoint_period = castle_checkpoint_period_save;
+}
+
 /**
  * High level handler for writing out stats mstore. It prepares the store, and calls sub-handlers
  * to collect all the stats.

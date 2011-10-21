@@ -225,6 +225,10 @@ c_ext_t sup_ext = {
 };
 
 uint8_t extent_init_done = 0;
+uint8_t extents_allocable = 0; /**< Stops non-logical extent allocation before
+                                    the filesystem initialisation gets far enough
+                                    (in particular that it completes a checkpoint
+                                     after meta extent compation). */
 
 static LIST_HEAD            (castle_lfs_victim_list);
 
@@ -1948,7 +1952,269 @@ out:
     return ret;
 }
 
-int castle_extents_read_complete(void)
+void castle_extents_start(void)
+{
+    extents_allocable = 1;
+}
+
+#define map_chks_per_page(_k_factor)    (PAGE_SIZE / (_k_factor * sizeof(c_disk_chk_t)))
+#define map_size(_ext_chks, _k_factor)  (1 + (_ext_chks-1) / map_chks_per_page(_k_factor))
+
+//#define COMPACTION_DRY_RUN
+struct castle_meta_compactor {
+    void *bitmap;
+    unsigned long bitmap_size;
+    unsigned long bitmap_size_bits;
+    int compaction_idx;
+    int err;
+};
+
+static int castle_extent_meta_mark(c_ext_t *ext, void *compactor_p)
+{
+    struct castle_meta_compactor *compactor = (struct castle_meta_compactor *)compactor_p;
+    uint32_t map_size_pgs;
+    int bit_nr;
+
+    if(ext->maps_cep.ext_id != META_EXT_ID)
+    {
+        castle_printk(LOG_USERINFO,
+                      "Extent: %lld doesn't use meta extent for its maps, it uses %lld.\n",
+                      ext->ext_id, ext->maps_cep.ext_id);
+        return 0;
+    }
+
+    map_size_pgs = map_size(ext->size, ext->k_factor);
+    if(ext->maps_cep.offset % PAGE_SIZE != 0)
+    {
+        castle_printk(LOG_ERROR,
+                      "Map for ext: %lld not page aligned: "cep_fmt_str_nl,
+                       ext->ext_id, cep2str(ext->maps_cep));
+        compactor->err = -EINVAL;
+        return 1;
+    }
+
+    castle_printk(LOG_USERINFO,
+                  "Maps for ext: %lld at cep: "cep_fmt_str" size: %d pgs.\n",
+                  ext->ext_id, cep2str(ext->maps_cep), map_size_pgs);
+    bit_nr = ext->maps_cep.offset / PAGE_SIZE;
+    while(map_size_pgs-- > 0)
+    {
+        set_bit(bit_nr, compactor->bitmap);
+        bit_nr++;
+    }
+
+    return 0;
+}
+
+static int castle_extent_meta_unused_find(struct castle_meta_compactor *compactor, uint32_t pgs)
+{
+    int candidate;
+    int i;
+
+    candidate = compactor->compaction_idx;
+    i = 0;
+    while(candidate + i < compactor->bitmap_size_bits)
+    {
+        if(i >= pgs)
+            break;
+
+        if(test_bit(candidate + i, compactor->bitmap))
+        {
+            candidate = candidate + i + 1;
+            i = -1;
+        }
+
+        i++;
+    }
+
+    if(i < pgs)
+        return -1;
+
+    compactor->compaction_idx = candidate + pgs;
+
+    return candidate;
+}
+
+static unsigned long castle_extent_max_meta_offset_get(struct castle_meta_compactor *compactor)
+{
+    unsigned long max_offset;
+
+    max_offset = (unsigned long)compactor->compaction_idx * PAGE_SIZE;
+    if(atomic64_read(&meta_ext_free.used) > max_offset)
+        max_offset = atomic64_read(&meta_ext_free.used);
+
+    return max_offset;
+}
+
+static int castle_extent_meta_copy(c_ext_t *ext, void *compactor_p)
+{
+    struct castle_meta_compactor *compactor = (struct castle_meta_compactor *)compactor_p;
+    uint32_t map_size_pgs;
+    int unused_idx;
+    c_ext_pos_t new_maps_cep;
+#ifndef COMPACTION_DRY_RUN
+    int i;
+#endif
+
+    if(ext->maps_cep.ext_id != META_EXT_ID)
+        return 0;
+
+    /* Don't copy if the location of the map for this extents is earlier than current
+       compaction_idx. */
+    if(compactor->compaction_idx > ext->maps_cep.offset / PAGE_SIZE)
+    {
+        castle_printk(LOG_ERROR,
+                      "Extent %lld has map in early part of meta ext "cep_fmt_str", not copying.\n",
+                      ext->ext_id, cep2str(ext->maps_cep));
+        return 0;
+    }
+
+    map_size_pgs = map_size(ext->size, ext->k_factor);
+    unused_idx = castle_extent_meta_unused_find(compactor, map_size_pgs);
+    if(unused_idx < 0)
+    {
+        castle_printk(LOG_ERROR, "Failed to find empty space for %d map pages.\n",
+                map_size_pgs);
+        compactor->err = -ENOSPC;
+        return 1;
+    }
+
+    /* Found space to copy the meta extent to, do it, page by page. */
+    new_maps_cep.ext_id = ext->maps_cep.ext_id;
+    new_maps_cep.offset = (unsigned long)unused_idx * PAGE_SIZE;
+    castle_printk(LOG_USERINFO,
+            "Copying %d map pages for ext: %lld from: "cep_fmt_str", to: "cep_fmt_str_nl,
+            map_size_pgs, ext->ext_id, cep2str(ext->maps_cep), cep2str(new_maps_cep));
+#ifndef COMPACTION_DRY_RUN
+    for(i=0; i<map_size_pgs; i++)
+    {
+        c2_block_t *s_c2b, *d_c2b;
+        c_ext_pos_t s_cep, d_cep;
+
+        s_cep.ext_id = ext->maps_cep.ext_id;
+        s_cep.offset = ext->maps_cep.offset + i * PAGE_SIZE;
+
+        d_cep.ext_id = new_maps_cep.ext_id;
+        d_cep.offset = new_maps_cep.offset + i * PAGE_SIZE;
+
+        s_c2b = castle_cache_page_block_get(s_cep);
+        d_c2b = castle_cache_page_block_get(d_cep);
+
+        write_lock_c2b(s_c2b);
+        write_lock_c2b(d_c2b);
+        if(!c2b_uptodate(s_c2b))
+            BUG_ON(submit_c2b_sync(READ, s_c2b));
+        update_c2b(d_c2b);
+        memcpy(c2b_buffer(d_c2b), c2b_buffer(s_c2b), PAGE_SIZE);
+        dirty_c2b(d_c2b);
+        submit_c2b_sync(WRITE, d_c2b);
+        write_unlock_c2b(d_c2b);
+        write_unlock_c2b(s_c2b);
+        put_c2b(s_c2b);
+        put_c2b(d_c2b);
+    }
+
+    /* Now that map has been copied, update the maps_cep in ext structure. */
+    ext->maps_cep = new_maps_cep;
+#endif
+
+    return 0;
+}
+
+#define META_EXT_COMPACT_DEFAULT_PCT 50
+int castle_meta_ext_compact_pct = META_EXT_COMPACT_DEFAULT_PCT;
+
+static void castle_extents_meta_compact(int *force_checkpoint)
+{
+    void *used_meta_bitmap;
+    unsigned long nr_meta_pgs, bitmap_size;
+    struct castle_meta_compactor compactor;
+    unsigned long new_used;
+
+    castle_printk(LOG_INIT, "Meta extent freespace: used=%lld, size=%lld\n",
+            atomic64_read(&meta_ext_free.used), meta_ext_free.ext_size);
+
+    if ((castle_meta_ext_compact_pct < 0) || (castle_meta_ext_compact_pct > 100))
+        castle_meta_ext_compact_pct = META_EXT_COMPACT_DEFAULT_PCT;
+    if(castle_meta_ext_compact_pct && atomic64_read(&meta_ext_free.used) <
+            meta_ext_free.ext_size / (100 / castle_meta_ext_compact_pct))
+    {
+        castle_printk(LOG_INIT, "Less than %d percent meta extent used, not compacting.\n",
+            castle_meta_ext_compact_pct);
+        goto out;
+    }
+
+    castle_printk(LOG_WARN, "More than %d percent meta extent used. Attempting compaction.\n",
+        castle_meta_ext_compact_pct);
+    nr_meta_pgs = meta_ext_free.ext_size / PAGE_SIZE;
+    bitmap_size = nr_meta_pgs / 8 + 1;
+    castle_printk(LOG_USERINFO, "Allocating %lld bitmap for %lld pages of meta ext.\n",
+            bitmap_size, nr_meta_pgs);
+    used_meta_bitmap = castle_vmalloc(bitmap_size);
+    if(!used_meta_bitmap)
+    {
+        castle_printk(LOG_ERROR, "Couldn't allocate used bitmap.\n");
+        goto out;
+    }
+
+    castle_printk(LOG_USERINFO, "Used meta pages bitmap at: %p, compactor: %p\n",
+            used_meta_bitmap, &compactor);
+    /* Initialise compactor structure. */
+    memset(used_meta_bitmap, 0, bitmap_size);
+    compactor.bitmap           = used_meta_bitmap;
+    compactor.bitmap_size      = bitmap_size;
+    compactor.bitmap_size_bits = nr_meta_pgs;
+    compactor.err              = 0;
+    compactor.compaction_idx   = 0;
+
+    /* Go through all extents and record which pages of the meta extent they use. */
+    __castle_extents_hash_iterate(castle_extent_meta_mark, &compactor);
+    if(compactor.err != 0)
+    {
+        castle_printk(LOG_ERROR, "Failed compaction on meta mark.\n");
+        goto err_out_dealloc;
+    }
+
+    /* Copy all the extent maps. */
+    __castle_extents_hash_iterate(castle_extent_meta_copy, &compactor);
+    if(compactor.err != 0)
+    {
+        /* Some extents could have had their maps copied over,
+           make sure that the meta extent freespace structure includes all those copies
+           and force a checkpoint. */
+        castle_printk(LOG_ERROR, "Failed compaction on meta copy.\n");
+        castle_vfree(used_meta_bitmap);
+        *force_checkpoint = 1;
+
+        new_used = castle_extent_max_meta_offset_get(&compactor);
+#ifndef COMPACTION_DRY_RUN
+        atomic64_set(&meta_ext_free.used,    new_used);
+        atomic64_set(&meta_ext_free.blocked, new_used);
+#endif
+        castle_printk(LOG_USERINFO, "Updated used meta extent counter to: %lld\n", new_used);
+
+        return;
+    }
+
+    /* All maps have been copied. Return what cep is now end of the meta extent map. */
+    castle_vfree(used_meta_bitmap);
+
+    *force_checkpoint = 1;
+#ifndef COMPACTION_DRY_RUN
+    atomic64_set(&meta_ext_free.used,    (unsigned long)compactor.compaction_idx * PAGE_SIZE);
+    atomic64_set(&meta_ext_free.blocked, (unsigned long)compactor.compaction_idx * PAGE_SIZE);
+#endif
+    castle_printk(LOG_USERINFO, "Updated used meta extent counter to: %lld\n",
+            (unsigned long)compactor.compaction_idx * PAGE_SIZE);
+    return;
+
+err_out_dealloc:
+    castle_vfree(used_meta_bitmap);
+out:
+    *force_checkpoint = 0;
+}
+
+int castle_extents_read_complete(int *force_checkpoint)
 {
     struct castle_elist_entry mstore_entry;
     struct castle_extents_superblock *ext_sblk = NULL;
@@ -1989,6 +2255,7 @@ int castle_extents_read_complete(void)
         goto error_out;
 
     INJECT_FAULT;
+    castle_extents_meta_compact(force_checkpoint);
 
     castle_extent_transaction_end();
 
@@ -2029,9 +2296,6 @@ struct castle_extent_state {
     c_ext_t *ext;
     c_chk_t  chunks[MAX_NR_SLAVES][MAX_K_FACTOR];
 };
-
-#define map_chks_per_page(_k_factor)    (PAGE_SIZE / (_k_factor * sizeof(c_disk_chk_t)))
-#define map_size(_ext_chks, _k_factor)  (1 + (_ext_chks-1) / map_chks_per_page(_k_factor))
 
 /**
  * Allocates structure used during the extent allocation/destruction in order to
@@ -2548,6 +2812,14 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
 
     /* ext_id would be passed only for logical extents and they musn't be in the hash. */
     BUG_ON(castle_extents_hash_get(ext_id));
+
+    if (!LOGICAL_EXTENT(ext_id) && !extents_allocable)
+    {
+        castle_printk(LOG_ERROR,
+                "Attempted to allocate extent before fs was initialised fully.\n");
+        WARN_ON(1);
+        return INVAL_EXT_ID;
+    }
 
     debug("Creating extent of size: %u/%u\n", ext_size, alloc_size);
     ext = castle_ext_alloc(0);

@@ -9307,6 +9307,10 @@ static int castle_da_rwct_init(struct castle_double_array *da, void *unused)
  */
 int castle_double_array_start(void)
 {
+    /* Create T0 RWCTs for all DAs that don't have them (acquires lock).
+     * castle_da_rwct_init() wraps castle_da_rwcts_create() for hash_iter. */
+    __castle_da_hash_iterate(castle_da_rwct_init, NULL);
+
     /* Check all DAs to see whether any merges need to be done. */
     castle_da_hash_iterate(castle_da_merge_start, NULL);
     castle_da_hash_iterate(castle_da_merge_restart, NULL);
@@ -9748,10 +9752,6 @@ int castle_double_array_read(void)
 
     /* Promote level 0 RWCTs if necessary. */
     castle_da_hash_iterate(castle_da_level0_check_promote, NULL);
-
-    /* Create T0 RWCTs for all DAs that don't have them (acquires lock).
-     * castle_da_rwct_init() wraps castle_da_rwcts_create() for hash_iter. */
-    __castle_da_hash_iterate(castle_da_rwct_init, NULL);
 
     goto out;
 

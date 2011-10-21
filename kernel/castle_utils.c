@@ -494,7 +494,7 @@ void castle_printk(c_printk_level_t level, const char *fmt, ...)
     if (level >= MIN_CONS_LEVEL)
     {
         /* and then only printk() if we're within the ratelimit. */
-        if (castle_printk_ratelimit(level))
+        if (!castle_fs_inited || castle_printk_ratelimit(level))
             printk("%s", tmp_buf);
     }
 }

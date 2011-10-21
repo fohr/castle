@@ -895,6 +895,7 @@ void castle_control_thread_priority(int nice_value, int *ret)
     *ret = 0;
 }
 
+static int castle_control_fs_inited = 0;
 int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     int err;
@@ -917,19 +918,19 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         return -EINVAL;
     }
 
-    if(!castle_fs_inited && (ioctl.cmd != CASTLE_CTRL_CLAIM) &&
-                            (ioctl.cmd != CASTLE_CTRL_INIT) &&
-                            (ioctl.cmd != CASTLE_CTRL_PROTOCOL_VERSION) &&
-                            (ioctl.cmd != CASTLE_CTRL_ENVIRONMENT_SET) &&
-                            (ioctl.cmd != CASTLE_CTRL_FAULT) &&
-                            (ioctl.cmd != CASTLE_CTRL_SLAVE_EVACUATE) &&
-                            (ioctl.cmd != CASTLE_CTRL_SLAVE_SCAN))
+    if(!castle_control_fs_inited && (ioctl.cmd != CASTLE_CTRL_CLAIM) &&
+                                    (ioctl.cmd != CASTLE_CTRL_INIT) &&
+                                    (ioctl.cmd != CASTLE_CTRL_PROTOCOL_VERSION) &&
+                                    (ioctl.cmd != CASTLE_CTRL_ENVIRONMENT_SET) &&
+                                    (ioctl.cmd != CASTLE_CTRL_FAULT) &&
+                                    (ioctl.cmd != CASTLE_CTRL_SLAVE_EVACUATE) &&
+                                    (ioctl.cmd != CASTLE_CTRL_SLAVE_SCAN))
     {
         castle_printk(LOG_WARN, "Disallowed ctrl op %d, before fs gets inited.\n", ioctl.cmd);
         return -EINVAL;
     }
 
-    if(castle_fs_inited && (ioctl.cmd == CASTLE_CTRL_INIT))
+    if(castle_control_fs_inited && (ioctl.cmd == CASTLE_CTRL_INIT))
     {
         castle_printk(LOG_WARN, "Disallowed ctrl op %d, after fs gets inited.\n", ioctl.cmd);
         return -EINVAL;
@@ -951,6 +952,8 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             break;
         case CASTLE_CTRL_INIT:
             castle_control_fs_init(&ioctl.init.ret);
+            if(ioctl.init.ret == 0)
+                castle_control_fs_inited = 1;
             break;
         case CASTLE_CTRL_PROTOCOL_VERSION:
             castle_control_protocol_version(&ioctl.protocol_version.ret,
