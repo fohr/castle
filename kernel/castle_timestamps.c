@@ -74,7 +74,11 @@ int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da
     dfs_resolver->merge            = merge;
     dfs_resolver->mode             = DFS_RESOLVER_NULL;
     if( dfs_resolver->functions & DFS_RESOLVE_TOMBSTONES )
+    {
         do_gettimeofday(&dfs_resolver->now);
+        dfs_resolver->min_u_ts_excluded_cts =
+            castle_da_min_ts_cts_exclude_this_merge_get(dfs_resolver->merge);
+    }
 
 #ifdef DEBUG
     {
@@ -359,7 +363,7 @@ static int castle_timestamped_tombstone_discardable_check(c_dfs_resolver *dfs_re
 
     /* Requirement: the user timestamp of the tombstone is <= the min user timestamp
        on every tree not involved with this merge. */
-    if( u_ts > castle_da_min_ts_cts_exclude_this_merge_get(dfs_resolver->merge) )
+    if( u_ts > dfs_resolver->min_u_ts_excluded_cts )
     {
         debug("%s::merge id %u, cannot discard tombstone (req 2)\n",
                 __FUNCTION__, dfs_resolver->merge->id);
@@ -481,11 +485,11 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
 
         if(entry_included)
         {
-                castle_uint32_stack_push(dfs_resolver->stack, i);
-                dfs_resolver->inclusion_buffer[i].included = 1;
-                entries_included++;
+            castle_uint32_stack_push(dfs_resolver->stack, i);
+            dfs_resolver->inclusion_buffer[i].included = 1;
+            entries_included++;
 #ifdef DEBUG
-                DEBUG_castle_dfs_resolver_stack_check(dfs_resolver->stack)
+            DEBUG_castle_dfs_resolver_stack_check(dfs_resolver->stack)
 #endif
         }
         else

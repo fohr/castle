@@ -78,6 +78,8 @@ typedef struct castle_dfs_resolver
 
     struct timeval now; /* For tombstone delete; init with gettimeofday, which is too expensive
                            to do for every tombstone, so do it once on init. */
+    castle_user_timestamp_t min_u_ts_excluded_cts;
+
 } c_dfs_resolver;
 
 int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da_merge *merge);
