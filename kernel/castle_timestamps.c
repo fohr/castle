@@ -358,7 +358,7 @@ static int castle_timestamped_tombstone_discardable_check(struct castle_da_merge
 
     do_gettimeofday(&now);
     tombstone_realtime = castle_version_immute_timestamp_get(ver);
-    BUG_ON(timeval_compare(&now, &tombstone_realtime) < 0);
+    WARN_ON(timeval_compare(&now, &tombstone_realtime) < 0);
     if( !( (now.tv_sec - tombstone_realtime.tv_sec) >
                 atomic64_read(&merge->da->tombstone_discard_threshold_time_s)) )
     {
