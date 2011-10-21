@@ -2214,6 +2214,212 @@ out:
     *force_checkpoint = 0;
 }
 
+#define META_POOL_SIZE 10000
+
+static meta_pool_entry_t    *meta_extent_pool;
+
+/*
+ * The size of the pool may be less than META_POOL_SIZE if there aren't enough unused
+ * pages in the meta extent.
+ */
+static int                  castle_extent_meta_pool_size = 0;
+
+static struct list_head     meta_pool_available;    /* Pool entries available for use. */
+static struct list_head     meta_pool_inuse;        /* Pool entries in use. */
+static struct list_head     meta_pool_released;     /* Pool entries that have been released. */
+static struct list_head     meta_pool_frozen;       /* Temp list for use during checkpoints. */
+
+int                         meta_pool_inited = 0;   /* set once the pool is available for use. */
+
+/*
+ * Move all freed meta extent pool entries to the frozen list.
+ */
+void castle_extent_meta_pool_freeze(void)
+{
+    castle_extent_transaction_start();
+    BUG_ON(!list_empty(&meta_pool_frozen));
+    list_splice_init(&meta_pool_released, &meta_pool_frozen);
+    castle_extent_transaction_end();
+}
+
+/*
+ * Scan the meta extent pool frozen list, freeing up any entries onto the available list.
+ */
+void castle_extent_meta_pool_free(void)
+{
+    castle_extent_transaction_start();
+    list_splice_init(&meta_pool_frozen, &meta_pool_available);
+    castle_extent_transaction_end();
+}
+
+/*
+ * Find and return a meta extent pool entry from the available list.
+ *
+ * @return: The list entry of one was available, else NULL.
+ */
+int castle_extent_meta_pool_get(c_byte_off_t * offset)
+{
+    meta_pool_entry_t * pent;
+
+    BUG_ON(!castle_extent_in_transaction());
+
+    if (!meta_pool_inited || list_empty(&meta_pool_available))
+        return -ENOENT;
+    else
+    {
+        pent = list_first_entry(&meta_pool_available, meta_pool_entry_t, list);
+        list_del(&pent->list);
+        *offset = pent->offset;
+        list_add_tail(&pent->list, &meta_pool_inuse);
+    }
+    return EXIT_SUCCESS;
+}
+
+/*
+ * Release an entry from the inuse list, placing it on the release list for
+ * later processing during checkpoint.
+ *
+ * @param offset    The meta extent byte offset being released.
+ */
+void castle_extent_meta_pool_release(c_byte_off_t offset)
+{
+    BUG_ON(!castle_extent_in_transaction());
+
+    if (!list_empty(&meta_pool_inuse))
+    {
+        meta_pool_entry_t * pent;
+
+        pent = list_first_entry(&meta_pool_inuse, meta_pool_entry_t, list);
+        list_del(&pent->list);
+        pent->offset = offset;
+        list_add_tail(&pent->list, &meta_pool_released);
+    }
+}
+
+/*
+ * Initialise the meta extent pool.
+ */
+void castle_extents_meta_pool_init(void)
+{
+    unsigned long                   nr_meta_pgs, bitmap_size;
+    void                            *used_meta_bitmap;
+    struct castle_meta_compactor    meta_pool;
+    int                             i, unused_idx;
+    c_byte_off_t                    meta_pool_offset;
+    c_ext_pos_t                     maps_cep;
+
+    INIT_LIST_HEAD(&meta_pool_available);
+    INIT_LIST_HEAD(&meta_pool_inuse);
+    INIT_LIST_HEAD(&meta_pool_released);
+    INIT_LIST_HEAD(&meta_pool_frozen);
+
+    meta_extent_pool = castle_vmalloc(META_POOL_SIZE * sizeof(meta_pool_entry_t));
+    if (!meta_extent_pool)
+    {
+        castle_printk(LOG_ERROR, "Couldn't allocate bitmap.\n");
+        goto out;
+    }
+
+    /* Create a bitmap for use by the meta extent scanner. */
+    nr_meta_pgs = meta_ext_free.ext_size / PAGE_SIZE;
+
+    bitmap_size = nr_meta_pgs / 8 + 1;
+
+    used_meta_bitmap = castle_vmalloc(bitmap_size);
+    if(!used_meta_bitmap)
+    {
+        castle_printk(LOG_ERROR, "Couldn't allocate used bitmap.\n");
+        goto err_out_dealloc;
+    }
+
+    /* Initialise extent scanner state. */
+    memset(used_meta_bitmap, 0, bitmap_size);
+    meta_pool.bitmap           = used_meta_bitmap;
+    meta_pool.bitmap_size      = bitmap_size;
+    meta_pool.bitmap_size_bits = nr_meta_pgs;
+    meta_pool.err              = 0;
+    meta_pool.compaction_idx   = 0;
+
+    /* Go through all extents and record which pages of the meta extent they use. */
+    __castle_extents_hash_iterate(castle_extent_meta_mark, &meta_pool);
+    if (meta_pool.err != 0)
+    {
+        castle_printk(LOG_ERROR, "Failed meta pool init on meta mark.\n");
+        castle_vfree(meta_extent_pool);
+    }
+
+    /* For each meta extent block in the pool ... */
+    for (i=0; i<META_POOL_SIZE; i++)
+    {
+        /* Find a free meta extent block. */
+        unused_idx = castle_extent_meta_unused_find(&meta_pool, 1);
+        if (unused_idx == -1)
+            break;
+        meta_pool_offset = (unsigned long)unused_idx * PAGE_SIZE;
+
+        if (meta_pool_offset >= atomic_read(&meta_ext_free.used))
+            /*
+             * Once we have reached meta_ext_free.used the rest of the pool will come from
+             * unallocated meta_extent pages.
+             */
+            break;
+
+        /*
+         * This block comes from unused space between the start of the meta extent and 
+         * meta_ext_free.used. Add this entry to the meta extent pool available list.
+         */
+        meta_extent_pool[i].offset = meta_pool_offset;
+        list_add_tail(&meta_extent_pool[i].list, &meta_pool_available);
+        castle_extent_meta_pool_size++;
+    }
+
+    debug("Initialising meta ext pool with %d unused pages\n", castle_extent_meta_pool_size);
+
+    if (castle_extent_meta_pool_size < META_POOL_SIZE)
+    {
+        /*
+         * We didn't allocate the entire free pool from meta extent pages before
+         * meta_ext_free.used. Get this directly in one go using the normal freespace allocator so
+         * that meta_ext_free is correctly updated.
+         */
+        if (castle_ext_freespace_get(&meta_ext_free,
+                                    (META_POOL_SIZE - castle_extent_meta_pool_size) * PAGE_SIZE,
+                                    0,
+                                    &maps_cep))
+        {
+            castle_printk(LOG_WARN, "Failed to get %d freespace pages for meta extent pool.\n",
+                         (META_POOL_SIZE - castle_extent_meta_pool_size));
+            goto err_out_nofreespace;
+        }
+        /* Add these entries to the meta extent pool available list. */
+        for (i=castle_extent_meta_pool_size; i<META_POOL_SIZE; i++)
+        {
+            meta_pool_offset = (unsigned long)(maps_cep.offset + (i * PAGE_SIZE));
+            meta_extent_pool[i].offset = meta_pool_offset;
+            list_add_tail(&meta_extent_pool[i].list, &meta_pool_available);
+        }
+        debug("Initialising meta ext pool with %d allocated pages\n",
+              (META_POOL_SIZE - castle_extent_meta_pool_size));
+    }
+
+    castle_extent_meta_pool_size = META_POOL_SIZE;
+
+err_out_nofreespace:
+    if (castle_extent_meta_pool_size)
+    {
+        castle_printk(LOG_USERINFO, "Meta extent pool initialised with %d entries.\n",
+                      castle_extent_meta_pool_size);
+        meta_pool_inited = 1;
+    } else
+        castle_printk(LOG_WARN,
+                      "No free meta extent pages found. Meta extent pool not initialised..\n");
+
+err_out_dealloc:
+    castle_vfree(used_meta_bitmap);
+out:
+    return;
+}
+
 int castle_extents_read_complete(int *force_checkpoint)
 {
     struct castle_elist_entry mstore_entry;
@@ -2289,6 +2495,9 @@ void castle_extents_fini(void)
 
     if (castle_partial_schks_cache)
         kmem_cache_destroy(castle_partial_schks_cache);
+
+    if (meta_extent_pool)
+        castle_vfree(meta_extent_pool);
 }
 
 #define MAX_K_FACTOR   4
@@ -2806,6 +3015,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     c_rda_spec_t *rda_spec = castle_rda_spec_get(rda_type);
     struct castle_extents_superblock *castle_extents_sb;
     c_res_pool_t *pool = NULL;
+    uint32_t     nr_blocks;
 
     BUG_ON(!castle_extent_in_transaction());
     BUG_ON(!extent_init_done && !LOGICAL_EXTENT(ext_id));
@@ -2874,15 +3084,17 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     }
 
     /* Block aligned chunk maps for each extent. */
+    nr_blocks = map_size(ext_size, rda_spec->k_factor);
     if (ext->ext_id == META_EXT_ID)
     {
         ext->maps_cep.ext_id = MICRO_EXT_ID;
         ext->maps_cep.offset = 0;
     }
+    else if ((nr_blocks == 1) &&
+             (castle_extent_meta_pool_get(&ext->maps_cep.offset) == EXIT_SUCCESS))
+        ext->maps_cep.ext_id = META_EXT_ID;
     else
     {
-        uint32_t nr_blocks = map_size(ext_size, rda_spec->k_factor);
-
         if (castle_ext_freespace_get(&meta_ext_free, (nr_blocks * C_BLK_SIZE), 0, &ext->maps_cep))
         {
             castle_printk(LOG_WARN, "Too big of an extent/crossing the boundry.\n");
@@ -3074,6 +3286,7 @@ static void castle_extent_resource_release(void *data)
     struct castle_extents_superblock *castle_extents_sb = NULL;
     c_ext_id_t ext_id = ext->ext_id;
     struct list_head *pos, *tmp;
+    int nr_blocks;
 
     /* Should be in transaction. */
     BUG_ON(!castle_extent_in_transaction());
@@ -3116,6 +3329,14 @@ static void castle_extent_resource_release(void *data)
 
     /* Get the extent lock, to prevent checkpoint happening parallely. */
     castle_extents_sb = castle_extents_super_block_get();
+
+    /*
+     * If this allocation used only 1 page of the meta extent, and the meta extent pool
+     * is not full, then add this page to the meta exetnt pool released list.
+     */
+    nr_blocks = map_size(ext->size, ext->k_factor);
+    if (nr_blocks == 1)
+        castle_extent_meta_pool_release(ext->maps_cep.offset);
 
     /* Remove extent from hash. */
     castle_extents_hash_remove(ext);

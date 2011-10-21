@@ -862,6 +862,9 @@ int castle_fs_init(void)
     if (!first && (ret = castle_extents_read_complete(&sync_checkpoint)))
         return C_ERR_INTERNAL;
 
+    /* Now create the meta extent pool. */
+    castle_extents_meta_pool_init();
+
     /* If first is still true, we've not found a single non-new cs.
        Init the fs superblock. */
     if(first) {

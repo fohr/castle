@@ -6569,6 +6569,9 @@ static int castle_periodic_checkpoint(void *unused)
         castle_extents_sb->current_rebuild_seqno = atomic_read(&current_rebuild_seqno);
         castle_extent_transaction_end();
 
+        /* Save meta extent pool pre-checkpoint state. */
+        castle_extent_meta_pool_freeze();
+
         if (castle_checkpoint_syncing)
         {
             BUG_ON(atomic_read(&castle_extents_presyncvar) == 1);
@@ -6612,6 +6615,9 @@ static int castle_periodic_checkpoint(void *unused)
             BUG_ON(atomic_read(&castle_extents_postsyncvar) == 1);
             atomic_inc(&castle_extents_postsyncvar);
         }
+
+        /* All meta extent pool frozen entries can now be freed. */
+        castle_extent_meta_pool_free();
 
         /* Mark previous on-disk checkpoint as invalid. */
         if (castle_slaves_superblock_invalidate())

@@ -57,6 +57,11 @@ typedef struct castle_extent {
 #endif
 } c_ext_t;
 
+typedef struct meta_pool_entry {
+    struct list_head    list;
+    c_byte_off_t        offset;
+} meta_pool_entry_t;
+
 void                castle_extent_transaction_start         (void);
 void                castle_extent_transaction_end           (void);
 int                 castle_extent_in_transaction            (void);
@@ -153,6 +158,11 @@ c_ext_type_t        castle_extent_type_get                  (c_ext_id_t);
 void                castle_extents_remap_writeback_setstate  (void);
 void                castle_extents_remap_writeback           (void);
 void                castle_extents_process_syncpoint         (void);
+void                castle_extents_meta_pool_init            (void);
+int                 castle_extent_meta_pool_get              (c_byte_off_t * offset);
+void                castle_extent_meta_pool_freeze           (void);
+void                castle_extent_meta_pool_free             (void);
+
 
 extern atomic_t             wi_in_flight;
 extern atomic_t             castle_extents_presyncvar;
