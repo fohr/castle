@@ -1766,8 +1766,6 @@ static c_val_tup_t castle_ct_merged_iter_counter_reduce(struct component_iterato
     struct rb_root rb_root;
     struct rb_node *rb_entry;
 
-    castle_printk(LOG_DEBUG, "%s::start\n", __FUNCTION__);
-
     /* We expecting for the list head of the same_kv list to be a counter (at least). */
     BUG_ON(!CVT_ANY_COUNTER(iter->cached_entry.cvt));
 
