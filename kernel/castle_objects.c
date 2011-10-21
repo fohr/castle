@@ -471,7 +471,7 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
 
     debug("castle_object_replace_complete\n");
 
-    if (err == -EEXIST && !cancelled)
+    if (err == -EEXIST)
         debug(LOG_WARN, "Failed to insert into btree (timestamp violation).\n");
     else if (err && !cancelled)
         castle_printk(LOG_WARN, "Failed to insert into btree.\n");
