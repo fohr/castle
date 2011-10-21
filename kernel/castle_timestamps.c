@@ -116,6 +116,10 @@ void castle_dfs_resolver_destroy(c_dfs_resolver *dfs_resolver)
     castle_uint32_stack_destroy(dfs_resolver->stack);
     dfs_resolver->stack = NULL;
 
+    /* Dealloc stack base struct */
+    castle_free(dfs_resolver->stack);
+    dfs_resolver->stack = NULL;
+
     /* Dealloc inclusion buffer */
     BUG_ON(!dfs_resolver->inclusion_buffer);
     castle_free(dfs_resolver->inclusion_buffer);
