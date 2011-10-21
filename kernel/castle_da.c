@@ -5721,6 +5721,9 @@ deser_done:
         /* If this merge trying to finish the left-over, it should have already set proper bits. */
         BUG_ON(test_and_set_bit(CASTLE_CT_MERGE_INPUT_BIT, &in_trees[i]->flags));
 
+        if (merge->queriable_out_tree)
+            BUG_ON(test_and_set_bit(CASTLE_CT_PARTIAL_TREE_BIT, &in_trees[i]->flags));
+
         in_trees[i]->merge = merge;
         in_trees[i]->merge_id = merge->id;
     }
@@ -5732,6 +5735,9 @@ deser_done:
 
     /* Add the output tree to the DA list. */
     BUG_ON(test_and_set_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &merge->out_tree->flags));
+    if (merge->queriable_out_tree)
+        BUG_ON(test_and_set_bit(CASTLE_CT_PARTIAL_TREE_BIT, &merge->out_tree->flags));
+
     castle_component_tree_add(merge->da, merge->out_tree, NULL);
     da->levels[merge->out_tree->level].nr_output_trees++;
 
