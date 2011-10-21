@@ -30,7 +30,7 @@ int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da
     if(!dfs_resolver->functions)
     {
         ret = -EINVAL;
-        goto err1;
+        goto err0;
     }
 
     /* Allocate and init btree node buffer */
