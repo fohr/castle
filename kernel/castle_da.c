@@ -1811,14 +1811,11 @@ static c_val_tup_t castle_ct_merged_iter_counter_reduce(struct component_iterato
  */
 static c_val_tup_t castle_ct_merged_iter_timestamp_select(struct component_iterator *iter)
 {
-    c_val_tup_t most_recent_object; /* most recent in terms of user timestamp */
-    struct rb_root rb_root;
-    struct rb_node *rb_entry;
+    c_val_tup_t                most_recent_object; /* most recent in terms of user timestamp */
+    struct component_iterator *most_recent_iter;
     struct list_head *l, *t;
 
-    /* We start with the most recent iter; therefore, we would only change to a different iter if
-       another iter has an object with a newer timestamp. Thus, in the event of equal user timestamps,
-       the newer iter wins. */
+    most_recent_iter   = iter;
     most_recent_object = iter->cached_entry.cvt;
     BUG_ON(!CVT_LEAF_VAL(most_recent_object));
 
@@ -1826,42 +1823,31 @@ static c_val_tup_t castle_ct_merged_iter_timestamp_select(struct component_itera
     if(list_empty(&iter->same_kv_head))
         return most_recent_object;
 
-    /* remove list entries of iters that don't have greater timestamps */
+    /* Walk same_kv list looking for a deprecating entry; sort order is timestamp then iter */
     list_for_each_safe(l, t, &iter->same_kv_head)
     {
+        int more_recent_entry_found = 0;
         struct component_iterator *current_iter;
         current_iter = list_entry(l, struct component_iterator, same_kv_list);
         BUG_ON(!CVT_LEAF_VAL(current_iter->cached_entry.cvt));
 
-        if(!(current_iter->cached_entry.cvt.user_timestamp > most_recent_object.user_timestamp))
-            list_del(l);
+        if(current_iter->cached_entry.cvt.user_timestamp > most_recent_object.user_timestamp)
+            more_recent_entry_found = 1; /* deprecation by timestamp */
+        else if((current_iter->cached_entry.cvt.user_timestamp == most_recent_object.user_timestamp) &&
+                current_iter > most_recent_iter)
+            more_recent_entry_found = 1; /* same timestamp; deprecation by iter order */
+
+        if( more_recent_entry_found )
+        {
+            most_recent_iter   = current_iter;
+            most_recent_object = current_iter->cached_entry.cvt;
+        }
+
+        list_del(l);
     }
-
-    /* If the new same_kv list is emtpy, return now. */
-    if(list_empty(&iter->same_kv_head))
-        return most_recent_object;
-
-    /* The same_kv list isn't sorted. Insert sort it. */
-    castle_ct_merged_iter_same_kv_iters_sort(&iter->same_kv_head, &rb_root);
-
-    /* Now check the user_timestamps one iterator at the time. */
-    rb_entry = rb_first(&rb_root);
-    /* There was a check for emtpy same_kv list, so there should be something in the tree. */
-    BUG_ON(!rb_entry);
-    do {
-        iter = rb_entry(rb_entry, struct component_iterator, rb_node);
-        BUG_ON(!CVT_LEAF_VAL(iter->cached_entry.cvt));
-
-        if (iter->cached_entry.cvt.user_timestamp > most_recent_object.user_timestamp)
-            most_recent_object = iter->cached_entry.cvt;
-
-    } while((rb_entry = rb_next(&iter->rb_node)));
 
     BUG_ON(!CVT_LEAF_VAL(most_recent_object));
     return most_recent_object;
-    //TODO@tr here we have the most recent entry for kv within v; next we need to resolve against
-    //        ancestral versions to decide if we should include this entry or not... and right here
-    //        would be a good place to do it.
 }
 
 static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
