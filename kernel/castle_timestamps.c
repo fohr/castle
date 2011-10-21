@@ -454,6 +454,7 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
 
         /* Handle tombstone discardation */
         if( ( dfs_resolver->functions & DFS_RESOLVE_TOMBSTONES ) && /* Discarding tombstones... */
+            ( entry_included ) && /* AND this entry not already discarded because of timestamp... */
             ( CVT_TOMBSTONE(entry_i_cvt) ) &&    /* AND this is a tombstone... */
             ( (dfs_resolver->stack->top == 0) || /* AND (it has no included ancestors... */
               CVT_TOMBSTONE(stack_top_cvt) ) )   /*    OR the newest ancestor is a tombstone)... */
