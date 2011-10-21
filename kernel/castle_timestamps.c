@@ -30,7 +30,7 @@ int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da
     if(!dfs_resolver->functions)
     {
         ret = -EINVAL;
-        goto err0;
+        goto error;
     }
 
     /* Allocate and init btree node buffer */
@@ -39,7 +39,7 @@ int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da
     if(!dfs_resolver->buffer_node)
     {
         ret = -ENOMEM;
-        goto err0;
+        goto error;
     }
     castle_da_node_buffer_init(merge->out_btree, dfs_resolver->buffer_node, new_node_size);
 
@@ -51,7 +51,7 @@ int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da
     if(!dfs_resolver->inclusion_buffer)
     {
         ret = -ENOMEM;
-        goto err1;
+        goto error;
     }
 
     /* Alloc DFS walker stack base structure */
@@ -59,13 +59,13 @@ int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da
     if( !dfs_resolver->stack )
     {
         ret = -ENOMEM;
-        goto err2;
+        goto error;
     }
 
     /* Construct DFS walker stack */
     ret = castle_uint32_stack_construct(dfs_resolver->stack, max_entries);
     if(ret)
-        goto err3;
+        goto error;
 
     /* Init stuff */
     dfs_resolver->_buffer_max      = max_entries;
@@ -87,16 +87,8 @@ int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da
             __FUNCTION__, dfs_resolver->merge->id, dfs_resolver->functions, dfs_resolver->_buffer_max);
     return 0;
 
-err3:
-    castle_free(dfs_resolver->stack);
-    dfs_resolver->stack = NULL;
-err2:
-    castle_free(dfs_resolver->inclusion_buffer);
-    dfs_resolver->inclusion_buffer = NULL;
-err1:
-    castle_free(dfs_resolver->buffer_node);
-    dfs_resolver->buffer_node = NULL;
-err0:
+error:
+    castle_dfs_resolver_destroy(dfs_resolver);
     castle_printk(LOG_ERROR, "%s::failed for merge id %u (%p)\n",
         __FUNCTION__,
         merge->id,
@@ -112,23 +104,17 @@ void castle_dfs_resolver_destroy(c_dfs_resolver *dfs_resolver)
     castle_printk(LOG_DEBUG, "%s::merge id %u\n", __FUNCTION__, dfs_resolver->merge->id);
 
     /* Destroy stack */
-    BUG_ON(!dfs_resolver->stack);
-    castle_uint32_stack_destroy(dfs_resolver->stack);
-    dfs_resolver->stack = NULL;
+    if(!dfs_resolver->stack)
+        castle_uint32_stack_destroy(dfs_resolver->stack);
 
     /* Dealloc stack base struct */
-    castle_free(dfs_resolver->stack);
-    dfs_resolver->stack = NULL;
+    castle_check_free(dfs_resolver->stack);
 
     /* Dealloc inclusion buffer */
-    BUG_ON(!dfs_resolver->inclusion_buffer);
-    castle_free(dfs_resolver->inclusion_buffer);
-    dfs_resolver->inclusion_buffer = NULL;
+    castle_check_free(dfs_resolver->inclusion_buffer);
 
     /* Dealloc btree node buffer */
-    BUG_ON(!dfs_resolver->buffer_node);
-    castle_free(dfs_resolver->buffer_node);
-    dfs_resolver->buffer_node = NULL;
+    castle_check_free(dfs_resolver->buffer_node);
 }
 
 /* should be called by merge_da_entry_add for a set of same k entries */
