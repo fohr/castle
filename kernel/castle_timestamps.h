@@ -75,6 +75,9 @@ typedef struct castle_dfs_resolver
     c_dfs_resolver_functions_t  functions; /* what functions the resolver provides */
 
     struct castle_btree_node *buffer_node;
+
+    struct timeval now; /* For tombstone delete; init with gettimeofday, which is too expensive
+                           to do for every tombstone, so do it once on init. */
 } c_dfs_resolver;
 
 int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da_merge *merge);

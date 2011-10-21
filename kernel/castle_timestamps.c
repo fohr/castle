@@ -73,6 +73,8 @@ int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da
     dfs_resolver->curr_index       = 0;
     dfs_resolver->merge            = merge;
     dfs_resolver->mode             = DFS_RESOLVER_NULL;
+    if( dfs_resolver->functions & DFS_RESOLVE_TOMBSTONES )
+        do_gettimeofday(&dfs_resolver->now);
 
 #ifdef DEBUG
     {
@@ -320,15 +322,14 @@ static void DEBUG_castle_dfs_resolver_stack_check(c_uint32_stack *stack)
  *
  * There's not a lot of sanity checking here - use with caution!
  */
-static int castle_timestamped_tombstone_discardable_check(struct castle_da_merge *merge,
+static int castle_timestamped_tombstone_discardable_check(c_dfs_resolver *dfs_resolver,
                                                           c_ver_t ver,
                                                           castle_user_timestamp_t u_ts)
 {
     int ret;
-    struct timeval now;
     struct timeval tombstone_realtime;
-    BUG_ON(!merge);
-    BUG_ON(!merge->da->user_timestamping);
+    BUG_ON(!dfs_resolver);
+    BUG_ON(!dfs_resolver->merge->da->user_timestamping);
 
     /* Requirement: this tombstone's REAL timestamp is > now()-T_d */
     /* (we guesstimate the tombstone's real timestsamp as the immute timestamp of
@@ -336,33 +337,32 @@ static int castle_timestamped_tombstone_discardable_check(struct castle_da_merge
 
     /* Sub-requirement: cannot discard tombstone in leaf version */
     debug("%s::merge id %u, checking if version %u is leaf\n",
-            __FUNCTION__, merge->id, ver);
+            __FUNCTION__, dfs_resolver->merge->id, ver);
     ret = castle_version_is_leaf(ver);
     BUG_ON(ret == -EINVAL);
     if(ret)
     {
         debug("%s::merge id %u, cannot discard tombstone (req 1a)\n",
-                __FUNCTION__, merge->id);
+                __FUNCTION__, dfs_resolver->merge->id);
         return 0;
     }
 
-    do_gettimeofday(&now);
     tombstone_realtime = castle_version_immute_timestamp_get(ver);
-    WARN_ON(timeval_compare(&now, &tombstone_realtime) < 0);
-    if( !( (now.tv_sec - tombstone_realtime.tv_sec) >
-                atomic64_read(&merge->da->tombstone_discard_threshold_time_s)) )
+    WARN_ON(timeval_compare(&dfs_resolver->now, &tombstone_realtime) < 0);
+    if( !( (dfs_resolver->now.tv_sec - tombstone_realtime.tv_sec) >
+                atomic64_read(&dfs_resolver->merge->da->tombstone_discard_threshold_time_s)) )
     {
         debug("%s::merge id %u, cannot discard tombstone (req 1b)\n",
-                __FUNCTION__, merge->id);
+                __FUNCTION__, dfs_resolver->merge->id);
         return 0;
     }
 
     /* Requirement: the user timestamp of the tombstone is <= the min user timestamp
        on every tree not involved with this merge. */
-    if( u_ts > castle_da_min_ts_cts_exclude_this_merge_get(merge) )
+    if( u_ts > castle_da_min_ts_cts_exclude_this_merge_get(dfs_resolver->merge) )
     {
         debug("%s::merge id %u, cannot discard tombstone (req 2)\n",
-                __FUNCTION__, merge->id);
+                __FUNCTION__, dfs_resolver->merge->id);
         return 0;
     }
     return 1;
@@ -460,7 +460,7 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
             {
                 /* and it's satisfied the timestamping requirements... */
                 discard_tombstone =
-                    castle_timestamped_tombstone_discardable_check(dfs_resolver->merge,
+                    castle_timestamped_tombstone_discardable_check(dfs_resolver,
                                                                    entry_i_version,
                                                                    entry_i_ts);
             }
