@@ -12343,6 +12343,13 @@ int castle_da_vertree_compact(c_da_t da_id)
     c_array_id_t *arrays = NULL;
     int i, j;
 
+    if (castle_golden_nugget == 1)
+    {
+        castle_printk(LOG_USERINFO, "Version tree compact can't be done from kernel with"
+                                   "golden nugget\n");
+        return -ENOSYS;
+    }
+
     if (da == NULL)
     {
         castle_printk(LOG_WARN, "Compaction can't be done on invalid da: %u\n", da_id);
