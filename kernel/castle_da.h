@@ -93,7 +93,6 @@ struct castle_da_merge {
     /* Members copied from castel_double_array.levels */
     struct castle_key_ptr_t       redirection_partition; /**< The key used to decide if a query
                                                               should be redirected to output ct */
-    struct castle_component_tree *queriable_out_tree;
 
     /* Merge serialisation/deserialisation */
     struct {
