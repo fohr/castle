@@ -87,25 +87,16 @@ struct castle_da_merge {
     /* partition activate copies the above into... */
     c_ext_pos_t                  *in_tree_shrinkable_cep;
 
-    growth_control_state_t growth_control_tree; /* btree leaf node extent growth control */
-    growth_control_state_t growth_control_data; /* medium objects extent growth control */
+    growth_control_state_t        growth_control_tree; /* btree leaf node extent growth control */
+    growth_control_state_t        growth_control_data; /* medium objects extent growth control */
 
     /* Members copied from castel_double_array.levels */
-    struct castle_key_ptr_t redirection_partition; /**< The key used to decide if a query
-                                                        should be redirected to output ct */
-    struct castle_component_tree *queriable_out_tree; /**< This pointer and serdes.out_tree
-                                                           pointer are non-NULL at different
-                                                           times based on their intended
-                                                           usage, so although it seems like
-                                                           redundancy, its cleaner to
-                                                           have them both.                */
+    struct castle_key_ptr_t       redirection_partition; /**< The key used to decide if a query
+                                                              should be redirected to output ct */
+    struct castle_component_tree *queriable_out_tree;
+
     /* Merge serialisation/deserialisation */
     struct {
-#ifdef DEBUG_MERGE_SERDES
-        int                            merge_completed;
-#endif
-        struct castle_component_tree  *out_tree; /* points to merge->out_tree, which holds
-                                                        list of serialised large_objs */
         /* Design note: On large_obj handling.
 
            Before merge checkpointing, we could assume that a cct only contained/owned a

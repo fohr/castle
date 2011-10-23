@@ -165,6 +165,12 @@ static inline void put_c2b(c2_block_t *c2b)
     atomic_dec(&c2b->count);
 }
 
+#define check_and_put_c2b(_c2b)                                                     \
+do {                                                                                \
+    if (_c2b)                                                                       \
+        put_c2b(_c2b);                                                              \
+} while(0)
+
 extern void put_c2b_and_demote(c2_block_t *c2b);
 
 
