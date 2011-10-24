@@ -788,7 +788,8 @@ static int castle_back_stateful_op_prod(struct castle_back_stateful_op *stateful
 
 static int castle_back_reply(struct castle_back_op *op, int err,
                              castle_interface_token_t token,
-                             uint64_t length);
+                             uint64_t length,
+                             castle_user_timestamp_t user_timestamp);
 
 /**
  * Finish all ops on the stateful op queue, giving them err & closing their buffers
@@ -815,7 +816,7 @@ static void castle_back_stateful_op_finish_all(struct castle_back_stateful_op *s
             castle_back_buffer_put(op->conn, op->buf);
         /* even though we have the lock, this is safe since conn reference count cannot be
          * decremented to 0 since the stateful_op has a count */
-        castle_back_reply(op, err, 0, 0);
+        castle_back_reply(op, err, 0, 0, 0);
 //#ifdef DEBUG
         cancelled++;
 //#endif
@@ -915,7 +916,8 @@ static struct vm_operations_struct castle_back_vm_ops = {
 static int castle_back_reply(struct castle_back_op *op,
                              int err,
                              castle_interface_token_t token,
-                             uint64_t length)
+                             uint64_t length,
+                             castle_user_timestamp_t user_timestamp)
 {
     struct castle_back_conn *conn = op->conn;
     castle_back_ring_t *back_ring = &conn->back_ring;
@@ -926,9 +928,10 @@ static int castle_back_reply(struct castle_back_op *op,
     resp.err = err;
     resp.token = token;
     resp.length = length;
+    resp.user_timestamp = user_timestamp;
 
-    debug("castle_back_reply op=%p, call_id=%d, err=%d, token=0x%x, length=%llu\n",
-        op, op->req.call_id, err, token, length);
+    debug("castle_back_reply op=%p, call_id=%d, err=%d, token=0x%x, length=%llu, timestamp = %llu\n",
+        op, op->req.call_id, err, token, length, user_timestamp);
 
     spin_lock(&conn->response_lock);
 
@@ -1181,8 +1184,7 @@ static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *val,
                                                uint32_t buf_used,
                                                uint32_t *this_v_used,
                                                c_collection_id_t collection_id,
-                                               int get_ool,
-                                               int ret_timestamp)
+                                               int get_ool)
 {
     struct castle_iter_val *val_copy;
     uint32_t length, val_length, rem_buf_len;
@@ -1197,8 +1199,6 @@ static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *val,
 
     /* Total size is sum of userland val structure + value itself. */
     length = sizeof(struct castle_iter_val) + val_length;
-    if (ret_timestamp)
-        length += sizeof(castle_user_timestamp_t);
 
     if (rem_buf_len < length)
     {
@@ -1229,11 +1229,6 @@ static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *val,
     else
         /* Set the collection_id. */
         val_copy->collection_id = collection_id;
-
-    if (ret_timestamp)
-        memcpy((uint8_t *)(castle_back_user_to_kernel(buf, val_copy->val) + val->length),
-                &val->user_timestamp,
-                sizeof(castle_user_timestamp_t));
 
     *this_v_used = length;
 
@@ -1266,7 +1261,7 @@ static void castle_back_replace_complete(struct castle_object_replace *replace, 
     if(err==-EEXIST)
         err=0;
 
-    castle_back_reply(op, err, 0, 0);
+    castle_back_reply(op, err, 0, 0, 0);
 }
 
 static uint32_t castle_back_replace_data_length_get(struct castle_object_replace *replace)
@@ -1367,7 +1362,7 @@ static void castle_back_replace(void *data)
 err3: if (op->buf) castle_back_buffer_put(conn, op->buf);
 err2: castle_free(key);
 err1: castle_attachment_put(op->attachment);
-err0: castle_back_reply(op, err, 0, 0);
+err0: castle_back_reply(op, err, 0, 0, 0);
 }
 
 static void castle_back_timestamped_replace(void *data)
@@ -1435,7 +1430,7 @@ static void castle_back_timestamped_replace(void *data)
 err3: if (op->buf) castle_back_buffer_put(conn, op->buf);
 err2: castle_free(key);
 err1: castle_attachment_put(op->attachment);
-err0: castle_back_reply(op, err, 0, 0);
+err0: castle_back_reply(op, err, 0, 0, 0);
 }
 
 static void castle_back_counter_replace(void *data)
@@ -1506,7 +1501,7 @@ static void castle_back_counter_replace(void *data)
 err3: if (op->buf) castle_back_buffer_put(conn, op->buf);
 err2: castle_free(key);
 err1: castle_attachment_put(op->attachment);
-err0: castle_back_reply(op, err, 0, 0);
+err0: castle_back_reply(op, err, 0, 0, 0);
 }
 
 static void castle_back_remove_complete(struct castle_object_replace *replace, int err)
@@ -1533,7 +1528,7 @@ static void castle_back_remove_complete(struct castle_object_replace *replace, i
     if(err==-EEXIST)
         err=0;
 
-    castle_back_reply(op, err, 0, 0);
+    castle_back_reply(op, err, 0, 0, 0);
 }
 
 /**
@@ -1579,7 +1574,7 @@ static void castle_back_remove(void *data)
 
 err2: castle_free(key);
 err1: castle_attachment_put(op->attachment);
-err0: castle_back_reply(op, err, 0, 0);
+err0: castle_back_reply(op, err, 0, 0, 0);
 }
 
 static void castle_back_timestamped_remove(void *data)
@@ -1620,7 +1615,7 @@ static void castle_back_timestamped_remove(void *data)
 
 err2: castle_free(key);
 err1: castle_attachment_put(op->attachment);
-err0: castle_back_reply(op, err, 0, 0);
+err0: castle_back_reply(op, err, 0, 0, 0);
 }
 
 int castle_back_get_reply_continue(struct castle_object_get *get,
@@ -1637,7 +1632,7 @@ int castle_back_get_reply_continue(struct castle_object_get *get,
     {
         castle_back_buffer_put(op->conn, op->buf);
         castle_attachment_put(op->attachment);
-        castle_back_reply(op, err, 0, 0);
+        castle_back_reply(op, err, 0, 0, 0);
     }
 
     BUG_ON(!buffer);
@@ -1656,20 +1651,10 @@ int castle_back_get_reply_continue(struct castle_object_get *get,
     if (last)
     {
         uint32_t get_value_len = op->req.get.value_len;
+        castle_user_timestamp_t u_ts = ULLONG_MAX;
 
-        /* Return timestamps */
-        if( CASTLE_RING_FLAG_RET_TIMESTAMP & get->flags ){
-            if( buffer_len - op->buffer_offset - 1 >= sizeof(castle_user_timestamp_t) )
-            {
-                /* user requested return timestamp, and we have space for it */
-                void *ts_dest = castle_back_user_to_kernel(op->buf, op->req.get.value_ptr + op->buffer_offset);
-                memcpy(ts_dest, &get->cvt.user_timestamp, sizeof(castle_user_timestamp_t));
-                op->buffer_offset += sizeof(castle_user_timestamp_t);
-                get_value_len += sizeof(castle_user_timestamp_t);
-            }
-            else
-                err = -ENOSPC;
-        }
+        if( CASTLE_RING_FLAG_RET_TIMESTAMP & get->flags )
+            u_ts = get->cvt.user_timestamp;
 
         castle_back_buffer_put(op->conn, op->buf);
 
@@ -1682,7 +1667,7 @@ int castle_back_get_reply_continue(struct castle_object_get *get,
 
         castle_free(get->key);
         castle_attachment_put(op->attachment);
-        castle_back_reply(op, err, 0, op->value_length);
+        castle_back_reply(op, err, 0, op->value_length, u_ts);
     }
 
     return last;
@@ -1725,7 +1710,7 @@ err:
     castle_free(get->key);
     castle_back_buffer_put(op->conn, op->buf);
     castle_attachment_put(op->attachment);
-    castle_back_reply(op, err_prime, 0, 0);
+    castle_back_reply(op, err_prime, 0, 0, 0);
 
     /* Return value ignored if there was an error. */
     return 0;
@@ -1798,7 +1783,7 @@ static void castle_back_get(void *data)
 err3: castle_back_buffer_put(conn, op->buf);
 err2: castle_free(key);
 err1: castle_attachment_put(op->attachment);
-err0: castle_back_reply(op, err, 0, 0);
+err0: castle_back_reply(op, err, 0, 0, 0);
 }
 
 /**** ITERATORS ****/
@@ -1990,7 +1975,7 @@ static void castle_back_iter_reply(struct castle_back_stateful_op *stateful_op,
 {
     debug_iter("castle_back_iter_reply, token = 0x%x.\n", stateful_op->token);
 
-    castle_back_reply(op, err, stateful_op->token, 0);
+    castle_back_reply(op, err, stateful_op->token, 0, 0);
 
     spin_lock(&stateful_op->lock);
 
@@ -2080,7 +2065,7 @@ err:
     stateful_op->attachment = NULL;
     spin_lock(&stateful_op->lock);
     castle_back_put_stateful_op(conn, stateful_op);
-    castle_back_reply(op, err, 0, 0);
+    castle_back_reply(op, err, 0, 0, 0);
 }
 
 /**
@@ -2185,7 +2170,7 @@ err2: castle_attachment_put(attachment);
 err1: /* No one could have added another op to queue as we haven't returns token yet */
       spin_lock(&stateful_op->lock);
       castle_back_put_stateful_op(conn, stateful_op);
-err0: castle_back_reply(op, err, 0, 0);
+err0: castle_back_reply(op, err, 0, 0, 0);
 }
 
 /**
@@ -2208,10 +2193,10 @@ static uint32_t castle_back_save_key_value_to_list(struct castle_back_stateful_o
 {
     int save_val = !(stateful_op->flags & CASTLE_RING_FLAG_ITER_NO_VALUES);
     int get_ool  =   stateful_op->flags & CASTLE_RING_FLAG_ITER_GET_OOL;
-    int ret_timestamp = stateful_op->flags & CASTLE_RING_FLAG_RET_TIMESTAMP;
     uint32_t rem_buf_len;   /* How much space is free in the userland buffer.   */
     uint32_t this_kv_used;  /* How much space has been used saving this KVP.    */
     uint32_t key_len, val_len, cvt_len = 0;
+    castle_user_timestamp_t u_ts = ULLONG_MAX;
 
     BUG_ON(!kv_list);
 
@@ -2251,8 +2236,7 @@ static uint32_t castle_back_save_key_value_to_list(struct castle_back_stateful_o
                                                  buf_used + this_kv_used,       /* buf_used     */
                                                  &val_len,                      /* this_v_used  */
                                                  collection_id,                 /* collection_id*/
-                                                 get_ool,                       /* get_ool      */
-                                                 ret_timestamp);                /* ret_timestamp*/
+                                                 get_ool);                      /* get_ool      */
         if (val_len == 0)
         {
             this_kv_used = 0;
@@ -2260,6 +2244,11 @@ static uint32_t castle_back_save_key_value_to_list(struct castle_back_stateful_o
         }
         this_kv_used += val_len;
     }
+
+    if( CASTLE_RING_FLAG_RET_TIMESTAMP & stateful_op->flags )
+        u_ts = val->user_timestamp;
+
+    kv_list->user_timestamp = u_ts;
 
     stateful_op->iterator.nr_keys++;
     stateful_op->iterator.nr_bytes += cvt_len;
@@ -2558,7 +2547,7 @@ static void castle_back_iter_next(void *data)
     {
         castle_printk(LOG_INFO, "%s Token not found 0x%x\n",
                 __FUNCTION__, op->req.iter_next.token);
-        castle_back_reply(op, -EBADFD, 0, 0);
+        castle_back_reply(op, -EBADFD, 0, 0, 0);
 
         return;
     }
@@ -2606,7 +2595,7 @@ static void __castle_back_iter_finish(void *data)
 
     err = castle_object_iter_finish(stateful_op->iterator.iterator);
 
-    castle_back_reply(stateful_op->curr_op, err, 0, 0);
+    castle_back_reply(stateful_op->curr_op, err, 0, 0, 0);
 
     spin_lock(&stateful_op->lock);
     stateful_op->curr_op = NULL;
@@ -2692,7 +2681,7 @@ static void castle_back_iter_finish(void *data)
     {
         castle_printk(LOG_INFO, "%s Token not found 0x%x\n",
                 __FUNCTION__, op->req.iter_finish.token);
-        castle_back_reply(op, -EBADFD, 0, 0);
+        castle_back_reply(op, -EBADFD, 0, 0, 0);
 
         return;
     }
@@ -2754,7 +2743,7 @@ static void castle_back_big_put_continue(struct castle_object_replace *replace)
             castle_back_buffer_put(stateful_op->conn, op->buf);
 
         /* Respond back to client. */
-        castle_back_reply(op, 0, stateful_op->token, 0);
+        castle_back_reply(op, 0, stateful_op->token, 0, 0);
         stateful_op->curr_op = NULL;
     }
 
@@ -2786,7 +2775,7 @@ static void castle_back_big_put_complete(struct castle_object_replace *replace, 
         if (op->req.tag == CASTLE_RING_PUT_CHUNK && op->buf)
             castle_back_buffer_put(stateful_op->conn, op->buf);
 
-        castle_back_reply(op, err, stateful_op->token, 0);
+        castle_back_reply(op, err, stateful_op->token, 0, 0);
         stateful_op->curr_op = NULL;
     }
 
@@ -2967,7 +2956,6 @@ static void castle_back_big_put(void *data)
     /* We would never big_put counters. */
     stateful_op->replace.counter_type = CASTLE_OBJECT_NOT_COUNTER;
 
-    //TODO@tr would we ever timestamp big_puts?
     stateful_op->replace.has_user_timestamp = 0;
 
     /* Work structure to run every queued op. Every put_chunk gets queued. */
@@ -2991,7 +2979,125 @@ err1: /* Safe as no-one could have queued up an op - we have not returned token 
       stateful_op->curr_op = NULL;
       /* will drop stateful_op->lock */
       castle_back_put_stateful_op(conn, stateful_op);
-err0: castle_back_reply(op, err, 0, 0);
+err0: castle_back_reply(op, err, 0, 0, 0);
+}
+
+/**
+ * Begin stateful op put of big value at specified key,version in DA, with a timestamp.
+ *
+ * @also castle_object_replace()
+ * @also castle_back_put_chunk()
+ */
+static void castle_back_timestamped_big_put(void *data)
+{
+    struct castle_back_op *op = data;
+    struct castle_back_conn *conn = op->conn;
+    int err;
+    struct castle_attachment *attachment;
+    c_vl_bkey_t *key;
+    castle_interface_token_t token;
+    struct castle_back_stateful_op *stateful_op;
+
+    debug("castle_back_timestamped_big_put\n");
+
+    /* @TODO: 0 indicates we don't know the length, but not supported yet */
+    if (op->req.timestamped_big_put.value_len <= MAX_INLINE_VAL_SIZE)
+    {
+        err = -EINVAL;
+        goto err0;
+    }
+
+    /* Get a new stateful op to handle timestamped_big_put. */
+    token = castle_back_stateful_op_get(conn,
+                                        &stateful_op,
+                                        op->cpu,
+                                        op->cpu_index,
+                                        castle_back_big_put_expire);
+
+    /* Couldn't find a free stateful op. */
+    if (!stateful_op)
+    {
+        error("castle_back: no more free stateful ops!\n");
+        err = -EAGAIN;
+        goto err0;
+    }
+
+    /* Get reference on attachment - Consequently on DA. */
+    attachment = castle_attachment_get(op->req.timestamped_big_put.collection_id, WRITE);
+    if (attachment == NULL)
+    {
+        error("Collection not found id=0x%x\n", op->req.timestamped_big_put.collection_id);
+        err = -ENOTCONN;
+        goto err1;
+    }
+
+    /* Get a copy of the key into kernel memory from userspace shared buffer. - Why? */
+    /* start_key and end_key are freed by castle_object_iter_finish */
+    err = castle_back_key_copy_get(conn, op->req.timestamped_big_put.key_ptr,
+        op->req.timestamped_big_put.key_len, &key);
+    if (err)
+        goto err2;
+
+    #ifdef DEBUG
+    debug("key: \n");
+    vl_bkey_print(LOG_DEBUG, key);
+    #endif
+
+    /* Initialize stateful op. */
+    stateful_op->tag = CASTLE_RING_BIG_PUT;
+    stateful_op->queued_size = 0;
+    /* big_put is the first op, followed by series of put_chunks. */
+    stateful_op->curr_op = op;
+    stateful_op->attachment = attachment;
+
+    /* Length of the complete value. */
+    stateful_op->replace.value_len = op->req.timestamped_big_put.value_len;
+
+    /* Call on completion of an operation in castle_object and to continue with next
+     * operation. Gets called before copying data. */
+    stateful_op->replace.replace_continue = castle_back_big_put_continue;
+
+    /* Call on completion of big_put, including data copy. */
+    stateful_op->replace.complete = castle_back_big_put_complete;
+
+    /* Length of current put_chunk. */
+    stateful_op->replace.data_length_get = castle_back_big_put_data_length_get;
+
+    /* Copy data from interface buffers into given cache buffers(C2B). */
+    stateful_op->replace.data_copy = castle_back_big_put_data_copy;
+
+    /* Store key and free it after completion of operation. */
+    stateful_op->replace.key = key;
+
+    /* We would never big_put counters. */
+    stateful_op->replace.counter_type = CASTLE_OBJECT_NOT_COUNTER;
+
+    stateful_op->replace.has_user_timestamp = 1;
+    stateful_op->replace.user_timestamp     =
+            op->req.timestamped_big_put.user_timestamp;
+
+    /* Work structure to run every queued op. Every put_chunk gets queued. */
+    INIT_WORK(&stateful_op->work[0], castle_back_put_chunk_continue, stateful_op);
+
+    /* Call castle_object layer to insert (k,v) pair. */
+    err = castle_object_replace(&stateful_op->replace,
+                                attachment,
+                                op->cpu_index,
+                                0 /*tombstone*/);
+    if (err)
+        goto err3;
+
+    return;
+
+err3: castle_free(key);
+err2: castle_attachment_put(attachment);
+      stateful_op->attachment = NULL;
+err1: /* Safe as no-one could have queued up an op - we have not returned token */
+      spin_lock(&stateful_op->lock);
+      stateful_op->curr_op = NULL;
+      /* will drop stateful_op->lock */
+      castle_back_put_stateful_op(conn, stateful_op);
+err0: castle_back_reply(op, err, 0, 0, 0);
 }
 
 static void castle_back_put_chunk(void *data)
@@ -3065,7 +3171,7 @@ static void castle_back_put_chunk(void *data)
     return;
 
 err1: castle_back_buffer_put(conn, op->buf);
-err0: castle_back_reply(op, err, 0, 0);
+err0: castle_back_reply(op, err, 0, 0, 0);
 }
 
 static void castle_back_put_chunk_continue(void *data)
@@ -3153,7 +3259,8 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
     castle_back_reply(stateful_op->curr_op,
                       err ? err : (not_found ? -ENOENT : 0),
                       stateful_op->token,
-                      length);
+                      length,
+                      pull->cvt.user_timestamp);
 
     if (err || done)
     {
@@ -3280,7 +3387,7 @@ err1: /* Safe as no one will have queued up a op - we haven't returned token yet
       spin_lock(&stateful_op->lock);
       stateful_op->curr_op = NULL;
       castle_back_put_stateful_op(conn, stateful_op);
-err0: castle_back_reply(op, err, 0, 0);
+err0: castle_back_reply(op, err, 0, 0, 0);
 }
 
 static void castle_back_get_chunk(void *data)
@@ -3358,7 +3465,7 @@ static void castle_back_get_chunk(void *data)
     return;
 
 err1: castle_back_buffer_put(conn, op->buf);
-err0: castle_back_reply(op, err, 0, 0);
+err0: castle_back_reply(op, err, 0, 0, 0);
 }
 
 /******************************************************************
@@ -3471,7 +3578,7 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
             if(val_len != sizeof(int64_t))
             {
                 error("Counter value len %lld is invalid; must be 8 bytes.\n", val_len);
-                castle_back_reply(op, -EINVAL, 0, 0);
+                castle_back_reply(op, -EINVAL, 0, 0, 0);
                 return;
             }
             /* Note: the following sanity check has never been tested */
@@ -3480,7 +3587,7 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
             {
                 error("Counter op flag (add) must be either 0 (SET) or 1 (ADD); value %d not recognized.\n",
                         counter_add_flag);
-                castle_back_reply(op, -EINVAL, 0, 0);
+                castle_back_reply(op, -EINVAL, 0, 0, 0);
                 return;
             }
             INIT_WORK(&op->work, castle_back_counter_replace, op);
@@ -3504,6 +3611,12 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
          *      are more likely to start/end on a frequently-used key
          *
          * Regardless of type, subsequent stateful ops will use the same CPU. */
+
+        case CASTLE_RING_TIMESTAMPED_BIG_PUT: /* put, key-hash CPU-affinity */
+            INIT_WORK(&op->work, castle_back_timestamped_big_put, op);
+            key_len = op->req.timestamped_big_put.key_len;
+            castle_back_key_copy_get(conn, op->req.big_put.key_ptr, key_len, &key);
+            break;
 
         case CASTLE_RING_BIG_PUT: /* put, key-hash CPU-affinity */
             INIT_WORK(&op->work, castle_back_big_put, op);
@@ -3559,7 +3672,7 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
 
         default:
             error("Unknown request tag %d\n", op->req.tag);
-            castle_back_reply(op, -ENOSYS, 0, 0);
+            castle_back_reply(op, -ENOSYS, 0, 0, 0);
 
             return;
     }
