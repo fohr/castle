@@ -926,6 +926,8 @@ struct castle_fs_superblock_public {
  * 1    -   100                 - Generic errors.
  * 101  -   200                 - Userspace controlled merge errors.
  * 201  -   300                 - Control command errors.
+ * 500                          - CASTLE_ERROR_MAX - don't increase is too much. Error string
+ *                                array will take more space.
  */
 #define CASTLE_ERRORS                                                                           \
     CASTLE_ERROR_CODE(0, C_ERR_SUCCESS, "Operation Succeeded.")                                 \
@@ -960,7 +962,7 @@ struct castle_fs_superblock_public {
                                                                                                 \
     CASTLE_ERROR_CODE(201, C_ERR_INVAL_DA, "Invalid version tree.")                             \
                                                                                                 \
-    CASTLE_ERROR_CODE(9999, CASTLE_ERROR_MAX, "Invalid error code from kernel.")                \
+    CASTLE_ERROR_CODE(500, CASTLE_ERROR_MAX, "Invalid error code from kernel.")                 \
 
 
 

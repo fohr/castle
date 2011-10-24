@@ -22,8 +22,8 @@
 
 /* Define string array for userspace error-codes. */
 #undef CASTLE_ERROR_CODE
-#define CASTLE_ERROR_CODE(err_no, err_code, err_str)  err_str,
-const char *castle_error_strings[] =
+#define CASTLE_ERROR_CODE(err_no, err_code, err_str)  [err_no] = err_str,
+const char *castle_error_strings[CASTLE_ERROR_MAX+1] =
 {
     CASTLE_ERRORS
 };
