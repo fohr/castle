@@ -35,6 +35,34 @@ void ATTRIB_NORET bug_fn(char *file, unsigned long line)
     panic("Castle BUG, from: %s:%ld\n", file, line);
 }
 
+void castle_atomic64_min(uint64_t new_val, atomic64_t *v)
+{
+    uint64_t c;
+    uint64_t old;
+
+    while(1)
+    {
+        c = atomic64_read(v);
+        old = atomic_cmpxchg(v, c, min(c, new_val));
+        if(likely(old == c))
+            break;
+    }
+}
+
+void castle_atomic64_max(uint64_t new_val, atomic64_t *v)
+{
+    uint64_t c;
+    uint64_t old;
+
+    while(1)
+    {
+        c = atomic64_read(v);
+        old = atomic_cmpxchg(v, c, max(c, new_val));
+        if(likely(old == c))
+            break;
+    }
+}
+
 /****** Stack implementation, designed to hold array indices ******/
 int castle_uint32_stack_construct(c_uint32_stack *stack, uint32_t size)
 {

@@ -367,5 +367,7 @@ int         castle_map_vm_area(void *addr_p, struct page **pages, int nr_pages, 
 
 uint32_t    murmur_hash_32(const void *key, int len, uint32_t seed);
 uint64_t    murmur_hash_64(const void *key, int len, uint32_t seed);
+void        castle_atomic64_max(uint64_t new_val, atomic64_t *v);
+void        castle_atomic64_min(uint64_t new_val, atomic64_t *v);
 
 #endif /* __CASTLE_UTILS_H__ */

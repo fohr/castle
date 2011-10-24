@@ -5211,12 +5211,10 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
 
     if (merge->da->user_timestamping)
     {
-        atomic64_set(&merge->out_tree->max_user_timestamp,
-                max((uint64_t)atomic64_read(&merge->out_tree->max_user_timestamp),
-                    (uint64_t)cvt.user_timestamp));
-        atomic64_set(&merge->out_tree->min_user_timestamp,
-                min((uint64_t)atomic64_read(&merge->out_tree->min_user_timestamp),
-                    (uint64_t)cvt.user_timestamp));
+        castle_atomic64_max(cvt.user_timestamp,
+                            &merge->out_tree->max_user_timestamp);
+        castle_atomic64_min(cvt.user_timestamp,
+                            &merge->out_tree->min_user_timestamp);
     }
 
     if (merge->out_tree->bloom_exists)
@@ -10772,7 +10770,8 @@ found:
 }
 
 /**
- * Returns a +ve if the ct's max timestamp is > t, -ve if it's < t, 0 if it's == t...
+ * Let t = cvt->user_timestamp, returns a +ve if the ct's max timestamp is > t,
+ * -ve if it's < t, 0 if it's == t.
  *
  * Up to the caller to make sure this DA is timestamping, the candidate cvt is valid,
  * and the candidate cvt is not a counter.
@@ -10794,7 +10793,11 @@ static int64_t castle_da_ct_timestamp_compare(struct castle_component_tree *ct,
     max_ct_ts_for_cvt = atomic64_read(&ct->max_user_timestamp);
     ret = max_ct_ts_for_cvt - candidate_timestamp;
     if(ret < 0) /* the entire ct does not have anything with a timestamp > t */
+    {
+        debug("%s::ct %d skippable (max user timestamp = %lld, cvt user timestamp = %lld)",
+                __FUNCTION__, ct->seq, max_ct_ts_for_cvt, candidate_timestamp);
         return ret;
+    }
 
     /* TODO@tr if we come up with something more fine-grained than the max timestamp of the entire ct,
        here is where we would set max_ct_ts_for_cvt and calculate the new ret. */
