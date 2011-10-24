@@ -22,3 +22,11 @@ INTERFACE-fastpath_requests.libcastle.hg.patch
 ===
 Implements an ioctl()-based interface for puts that avoids using the shared ring.
 No other special changes required.
+
+
+keys_normalized_stress_test.c
+===
+Stress tests the packing / unpacking functions of normalized keys, in
+order to hopefully catch bugs which only creep up in minority corner
+cases etc. Change the testing parameters by modifying the MIN / MAX
+constants at the beginning of the file.

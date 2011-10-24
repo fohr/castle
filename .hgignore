@@ -29,5 +29,6 @@ kernel/Module.markers
 kernel/castle-fs.ko
 kernel/castle-fs.mod.c
 kernel/castle_compile.h
+misc/keys_normalized_stress_test
 user/utils/castle-fs-cli
 user/utils/mkcastlefs
