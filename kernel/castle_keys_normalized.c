@@ -54,6 +54,46 @@ void *castle_dup_or_copy(const void *src, size_t src_len, void *dst, size_t *dst
 
 /*
  * Data structure definitions (see also castle_keys_normalized.h).
+ *
+ * Aside of the special value which denotes that the number of dimensions is too large to
+ * be encoded with two bytes, the definitions here mainly deal with the structure of
+ * individual dimensions inside the normalized key. Each of these dimensions is laid out
+ * "laced", with a marker byte after every few content bytes. The important thing to
+ * notice here is that the stride of marker bytes is variable-length, increasing as the
+ * key size gets bigger.
+ *
+ * With the current implementation, a marker is inserted after the first content byte,
+ * then after the fourth, then every four content bytes until the sixteenth, and then the
+ * stride doubles every time the count of content bytes becomes a power of four (i.e.,
+ * quadruples). The stride does not go beyond 64, because that's the largest power of two
+ * which can be represented by our one-byte marker encoding scheme (though presumably a
+ * larger non power of two could be used).
+ *
+ * This scheme (double the stride every time the key length quadruples) has been chosen in
+ * order to minimize both the padding overhead (at the end of the dimension), as well as
+ * the lacing overhead, for small and large key values alike. In particular, suppose we
+ * have a dimension of size n, with a marker stride of k. Then the padding overhead can be
+ * up to k/n, while the lacing overhead is around 1/k. To keep both these ratios low, the
+ * obvious choice for k is sqrt(n), and this is what our scheme tries to approximate.
+ * Furthermore, the marker byte after the first content byte guarantees that empty and
+ * single-byte dimensions remain small.
+ *
+ * Implementation-wise, the STRIDE_VALUES array encodes the list of marker strides used,
+ * while the STRIDE_BOUNDS array encodes the thresholds of the number of content bytes at
+ * which the marker stride changes. One must always make sure that each bound occurs
+ * exactly at a point where a marker is inserted, otherwise the code is not guaranteed to
+ * work correctly.
+ *
+ * A couple of helper defines are also provided to reduce code duplication. Functions
+ * which deal with markers should "call" STRIDE_INIT_VARS at the beginning of the
+ * function, and then check if the stride needs to be increaded with
+ * STRIDE_CHECK_BOUND(pos), where pos is the number of content bytes which have been seen
+ * so far.
+ *
+ * Please note: the maximum key size for slim trees has been chosen based on the maximum
+ * possible expansion of a VLBA key when it is normalized. If the size limit for VLBA keys
+ * is changed, or if the variable-length marker scheme is modified, then that maximum key
+ * size needs to be recalculated too.
  */
 
 /* special values for the number of dimensions field */

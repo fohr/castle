@@ -28,10 +28,11 @@
  *
  * Each of the key's dimensions is stored in order, one after the other. For each
  * dimension, the key value is laid out "laced", with a special marker byte after every
- * MARKER_STRIDE bytes of the actual value, padded with zeroes if necessary. The
- * in-between markers of a key value are always KEY_MARKER_CONTINUES, while the ending
- * marker is a computed value which encodes the number of bytes that the value occupied
- * after the last marker, and also whether this is a "next" value.
+ * few bytes of the actual value (see the relevant comment in castle_keys_normalized.c),
+ * padded with zeroes if necessary. The in-between markers of a key value are always
+ * KEY_MARKER_CONTINUES, while the ending marker is a computed value which encodes the
+ * number of bytes that the value occupied after the last marker, and also whether this is
+ * a "next" value.
  *
  * There are also special markers to denote plus and minus infinity for this particular
  * dimension. Additionally, +infinity has the characteristic that the padding bytes that
