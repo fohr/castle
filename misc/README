@@ -30,3 +30,11 @@ Stress tests the packing / unpacking functions of normalized keys, in
 order to hopefully catch bugs which only creep up in minority corner
 cases etc. Change the testing parameters by modifying the MIN / MAX
 constants at the beginning of the file.
+
+
+keys_normalized_max_size.c
+===
+Given the maximum size of the VLBA keys passed from userspace,
+calculates the maximum size of the resulting normalized keys. Needs to
+be forward-ported / rerun every time the size limit or the normalized
+keys implementation changes.
