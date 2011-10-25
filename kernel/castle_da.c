@@ -12362,7 +12362,7 @@ int castle_da_vertree_compact(c_da_t da_id)
     if (castle_golden_nugget == 1)
     {
         castle_printk(LOG_USERINFO, "Version tree compact can't be done from kernel with"
-                                   "golden nugget\n");
+                                    "golden nugget\n");
         return -ENOSYS;
     }
 
@@ -12443,7 +12443,7 @@ int castle_da_vertree_compact(c_da_t da_id)
 #endif
 
     castle_golden_nugget = 1;
-    if (castle_merge_start(&merge_cfg, &merge_id, 0) < 0)
+    if (castle_merge_start(&merge_cfg, &merge_id, 0))
     {
         castle_printk(LOG_WARN, "Failed to create merge for compaction\n");
         goto err_out;
