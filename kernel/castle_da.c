@@ -7413,23 +7413,6 @@ static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry 
             __FUNCTION__, da->id, level);
 }
 
-int castle_da_insert_rate_set(c_da_t da_id, uint32_t insert_rate)
-{
-    struct castle_double_array *da = castle_da_hash_get(da_id);
-
-    if (!da)
-    {
-        castle_printk(LOG_USERINFO, "Couldn't set insert rate for unknown version tree: %u\n",
-                                    da_id);
-        return C_ERR_INVAL_DA;
-    }
-
-    /* User passes it in MB/s, but kernel stores it in Bytes/secs. */
-    da->write_rate = insert_rate * 1024L * 1024L;
-
-    return 0;
-}
-
 int castle_da_read_rate_set(c_da_t da_id, uint32_t read_rate)
 {
     struct castle_double_array *da = castle_da_hash_get(da_id);
@@ -7458,9 +7441,8 @@ static inline uint64_t castle_da_throttle_time_get(uint64_t data_bytes, uint64_t
 {
     uint64_t nr_usecs;
 
-    /* If the rate is not set, consider as infinite. */
-    if (set_rate == 0)
-        return 0;
+    /* We shouldn't come till here, if the set_rate is 0. */
+    BUG_ON(set_rate == 0);
 
     /* Number of micro seconds that should have been taken. */
     nr_usecs = (data_bytes / set_rate) * 1000000L;
@@ -7472,40 +7454,13 @@ static inline uint64_t castle_da_throttle_time_get(uint64_t data_bytes, uint64_t
 }
 
 /**
- * Check if number of trees in level 1 are not too many. If so, enable inserts.
+ * Enable inserts, unconditionally. This runs in interrupt context and it doesn't hold any
+ * lock. It's not safe to do any checks here.
  */
 static void castle_da_inserts_enable(unsigned long data)
 {
     struct castle_double_array *da = (struct castle_double_array *)data;
-    struct timeval cur_time;
     int i;
-
-    /* If FS is exiting, enable inserts, un-conditionally. */
-    if (castle_fs_exiting)
-        goto enable_inserts;
-
-    /* Check for number of tree in level 1. */
-    if ((da->levels[1].nr_trees >= 4 * castle_double_array_request_cpus()) ||
-            da->write_rate == 0)
-    {
-        /* If the number of trees are too many, disable inserts. */
-        castle_da_write_rate_check(da);
-        return;
-    }
-
-enable_inserts:
-
-    /* Get current time. */
-    do_gettimeofday(&cur_time);
-
-    /* Inserts should have been disabled. */
-    BUG_ON(!test_bit(CASTLE_DA_INSERTS_DISABLED, &da->flags));
-
-    /* Note the current time. */
-    da->prev_time = cur_time;
-
-    /* Reset data byte count for next sample duration. */
-    atomic64_set(&da->sample_data_bytes, 0);
 
     /* Enable inserts. */
     clear_bit(CASTLE_DA_INSERTS_DISABLED, &da->flags);
@@ -7526,58 +7481,123 @@ enable_inserts:
     wake_up(&da->merge_waitq);
 }
 
+static int _castle_da_inserts_enable(struct castle_double_array *da, void *unused)
+{
+    castle_da_insert_rate_set(da->id, 500);
+
+    return 0;
+}
+
+void castle_double_array_inserts_enable(void)
+{
+    __castle_da_hash_iterate(_castle_da_inserts_enable, NULL);
+}
+
 /**
  * Checks the current write rate and throttles them if the writes are going faster than
  * set rate.
  */
-void castle_da_write_rate_check(struct castle_double_array *da)
+void castle_da_write_rate_check(struct castle_double_array *da, uint32_t nr_bytes)
 {
     struct timeval cur_time;
-    uint64_t delta_time, throttle_time, data_bytes;
+    uint64_t delta_time, throttle_time;
 
-    /* No rate control on exit. */
     if (castle_fs_exiting)
         return;
 
-    /* Get current time. */
-    do_gettimeofday(&cur_time);
+    spin_lock(&da->rate_ctrl_lock);
 
-    /* Time since last recorded sample in micro seconds. */
-    delta_time      = (timeval_to_ns(&cur_time) - timeval_to_ns(&da->prev_time)) / 1000;
-    data_bytes      = atomic64_read(&da->sample_data_bytes);
+    da->sample_data_bytes += nr_bytes;
 
-    /* Reset timer and accumulating counter. */
+    /* If this is not yet time for sampling, just return. */
+    if (da->sample_data_bytes < da->sample_rate)
+        goto out;
 
-    /* If the number of trees in level 1 or more than 4 or write rate 0 - disable inserts. */
-    if ((da->levels[1].nr_trees >= 4 * castle_double_array_request_cpus()) ||
-            da->write_rate == 0)
+    /* If inserts are already disabled, return from here. */
+    if (test_bit(CASTLE_DA_INSERTS_DISABLED, &da->flags))
+        goto out;
+
+    /* If write rate is 0 - disable inserts. */
+    if (da->write_rate == 0)
+    {
+        /* Don't set timer, but disable inserts. Inserts would be enabled by insert_rate_set(). */
+        throttle_time = 0;
+        goto throttle_ios;
+    }
+
+    /* If the number of trees in level 1 are more than 4 - disable inserts. */
+    if (da->levels[1].nr_trees >= 4 * castle_double_array_request_cpus())
     {
         /* Note: This could be starving ios, unncessary long time. Fix it. */
         throttle_time = 1000; /* in micro seconds. */
         goto throttle_ios;
     }
 
+    /* Get current time. */
+    do_gettimeofday(&cur_time);
+
+    /* Time since last recorded sample in micro seconds. */
+    delta_time    = (timeval_to_ns(&cur_time) - timeval_to_ns(&da->prev_time)) / 1000;
+
     /* Find the time to throttle writes. */
-    throttle_time   = castle_da_throttle_time_get(data_bytes, delta_time, da->write_rate);
+    throttle_time = castle_da_throttle_time_get(da->sample_data_bytes, delta_time, da->write_rate);
+
+    /* Reset sample counters. */
+    da->sample_data_bytes = 0;
+    da->prev_time         = cur_time;
 
     /* If data rate is under the limit, just return. */
     if (!throttle_time)
-        return;
-
-    /* If writes running over the limit, disable them for some time and ignore the current
-     * sample. We don't care about this. We still compare to the old one. */
+        goto out;
 
 throttle_ios:
-    da->prev_time   = cur_time;
-    atomic64_set(&da->sample_data_bytes, 0);
 
     /* Disable inserts. */
     set_bit(CASTLE_DA_INSERTS_DISABLED, &da->flags);
+
+    /* If write rate is 0, don't even set timer. */
+    if (!throttle_time)
+        goto out;
 
     /* Reschedule ourselves. */
     /* Throttle_time is in micro seconds, convert it into jiffies. */
     mod_timer(&da->write_throttle_timer,
                jiffies + (HZ * throttle_time) / (1000L * 1000L) + 1);
+
+out:
+    spin_unlock(&da->rate_ctrl_lock);
+}
+
+int castle_da_insert_rate_set(c_da_t da_id, uint32_t insert_rate)
+{
+    struct castle_double_array *da = castle_da_hash_get(da_id);
+    int enable_inserts = 0;
+
+    if (!da)
+    {
+        castle_printk(LOG_USERINFO, "Couldn't set insert rate for unknown version tree: %u\n",
+                                    da_id);
+        return C_ERR_INVAL_DA;
+    }
+
+    /* We don't want to change the rate, while check is going on. */
+    spin_lock(&da->rate_ctrl_lock);
+
+    if (da->write_rate == 0 && insert_rate)
+        enable_inserts = 1;
+
+    /* User passes it in MB/s, but kernel stores it in Bytes/secs. */
+    da->write_rate = insert_rate * 1024L * 1024L;
+
+    /* Note: In rare circumstances, this could be racing with castle_da_inserts_enable(),
+     * due to timer expire. But, that is okay - castle_da_inserts_enable() is thread safe
+     * against itself. */
+    if (enable_inserts)
+        castle_da_inserts_enable((unsigned long)da);
+
+    spin_unlock(&da->rate_ctrl_lock);
+
+    return 0;
 }
 
 /**
@@ -7699,8 +7719,9 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
     da->write_rate                  = UINT_MAX * 1024 * 1024;
     da->read_rate                   = 0;
     da->sample_rate                 = 1 * 1024 * 1024;
-    atomic64_set(&da->sample_data_bytes, 0);
+    da->sample_data_bytes           = 0;
     do_gettimeofday(&da->prev_time);
+    spin_lock_init(&da->rate_ctrl_lock);
 
     /* Setup rate control timer. */
     setup_timer(&da->write_throttle_timer, castle_da_inserts_enable, (unsigned long)da);

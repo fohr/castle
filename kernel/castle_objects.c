@@ -298,14 +298,8 @@ static void castle_object_replace_data_copy(struct castle_object_replace *replac
     replace->data_copy(replace, buffer, buffer_length, not_last);
     atomic64_add(buffer_length, &da->write_data_bytes);
 
-    /* Increment counters since last sample. */
-    if (!test_bit(CASTLE_DA_INSERTS_DISABLED, &da->flags) &&
-        (atomic64_add_return(buffer_length, &da->sample_data_bytes) > da->sample_rate) &&
-        !test_and_set_bit(CASTLE_DA_RATE_CHECK_ONGOING, &da->flags))
-    {
-        castle_da_write_rate_check(da);
-        clear_bit(CASTLE_DA_RATE_CHECK_ONGOING, &da->flags);
-    }
+    /* Do rate control checks. We take samples, once per sample_delay. */
+    castle_da_write_rate_check(da, buffer_length);
 }
 
 static int castle_object_data_write(struct castle_object_replace *replace)

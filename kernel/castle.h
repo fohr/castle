@@ -2374,7 +2374,8 @@ struct castle_double_array {
                                                     /**< Timer to check write rate and throttle
                                                      **< if required.                           */
     uint64_t                    sample_rate;
-    atomic64_t                  sample_data_bytes;
+    uint64_t                    sample_data_bytes;
+    spinlock_t                  rate_ctrl_lock;
     uint8_t                     user_timestamping;  /**< User timestamping (init 1/0)           */
     atomic64_t                  tombstone_discard_threshold_time_s;
 

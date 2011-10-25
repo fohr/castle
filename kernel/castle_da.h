@@ -233,7 +233,7 @@ int  castle_merge_stop                  (c_merge_id_t merge_id);
 int  castle_da_vertree_compact          (c_da_t da_id);
 int  castle_da_insert_rate_set          (c_da_t da_id, uint32_t insert_rate);
 int  castle_da_read_rate_set            (c_da_t da_id, uint32_t read_rate);
-void castle_da_write_rate_check         (struct castle_double_array *da);
+void castle_da_write_rate_check         (struct castle_double_array *da, uint32_t length);
 int  castle_data_ext_add                (c_ext_id_t ext_id,
                                          uint64_t   nr_entries,
                                          uint64_t   nr_bytes,
@@ -260,5 +260,5 @@ castle_user_timestamp_t castle_da_min_ts_cts_exclude_this_merge_get(struct castl
 
 struct castle_double_array *castle_da_ptr_get(struct castle_attachment *att);
 
-
+void castle_double_array_inserts_enable(void);
 #endif /* __CASTLE_DA_H__ */
