@@ -1434,6 +1434,8 @@ typedef struct castle_bio_vec {
 
     /* Bloom filters. */
     c_bloom_lookup_t                bloom_lookup;   /**< Bloom lookup request structure.        */
+    uint8_t                         bloom_skip;     /**< Whether bloom filter advised skipping
+                                                         tree. @also castle_bloom_debug         */
 #ifdef CASTLE_BLOOM_FP_STATS
     int bloom_positive;
 #endif

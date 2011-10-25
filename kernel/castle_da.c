@@ -10825,6 +10825,12 @@ inline void castle_da_bloom_submit_cb(void *private, int key_exists)
 
     BUG_ON(key_exists < 0);
 
+    /* If we are debugging bloom filters, record cases where the bloom filter
+     * advised us not to query the current tree and query it anyway. */
+    c_bvec->bloom_skip = castle_bloom_debug && !key_exists;
+    if (unlikely(c_bvec->bloom_skip))
+        key_exists = 1;
+
     if (key_exists)
     {
         /* Key may exist, submit request to btree. */
@@ -10880,8 +10886,11 @@ void castle_da_bloom_submit(c_bvec_t *c_bvec, int go_async)
             _castle_da_bloom_submit(&c_bvec->work);
     }
     else
+    {
         /* Submit directly to btree. */
+        c_bvec->bloom_skip = 0;
         castle_btree_submit(c_bvec, go_async);
+    }
 }
 
 /**
@@ -11017,6 +11026,12 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
         castle_da_ct_read_complete_cvt_timestamp_check(c_bvec, &cvt, 1);
         goto complete;
     }
+
+    if (castle_bloom_debug && !err && !CVT_INVALID(cvt) && c_bvec->bloom_skip)
+        castle_printk(LOG_ERROR, "c_bvec=%p c_bvec->tree=%p\n",
+                c_bvec, c_bvec->tree);
+    /* Fail if we find a key in a CT the bloom filter told us to skip. */
+    BUG_ON(castle_bloom_debug && !err && !CVT_INVALID(cvt) && c_bvec->bloom_skip);
 
     /* Handle counter accumulation. */
     if (!err && CVT_ADD_ALLV_COUNTER(cvt))

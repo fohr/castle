@@ -3,6 +3,8 @@
 
 #include "castle.h"
 
+extern int castle_bloom_debug;
+
 /**** Bloom filter builds ****/
 
 /**

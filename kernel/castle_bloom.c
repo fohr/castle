@@ -16,9 +16,14 @@
 #define debug(_f, _a...)          (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
-static int castle_bloom_use = 1; /* 1 or 0 */
+static int castle_bloom_use = 1;    /**< Whether to use bloom filters, 1 or 0. */
 module_param(castle_bloom_use, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_bloom_use, "Use bloom filters");
+
+int castle_bloom_debug = 1;         /**< Whether to verify bloom filter misses (for point gets),
+                                         1 or 0. */
+module_param(castle_bloom_debug, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_bloom_debug, "Verify bloom misses (for point gets)");
 
 /*
  * Changing *ANY* of these constants will change the format of the persisted bloom filters
@@ -497,6 +502,9 @@ int castle_bloom_add(castle_bloom_t *bf, struct castle_btree_type *btree, void *
 
     /* User failed to provision sufficient space for the bloom filter. */
     BUG_ON(bf_bp->elements_inserted == bf_bp->max_num_elements);
+
+    /* Trying to hash different key types. */
+    BUG_ON(btree != bf->btree);
 
     elems_mod = bf_bp->elements_inserted % BLOOM_ELEMENTS_PER_CHUNK;
     if (elems_mod == 0)
