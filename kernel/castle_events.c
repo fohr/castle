@@ -274,7 +274,6 @@ int castle_uevent(struct kobj_uevent_env *env)
         return result;
     }
 
-    printk("=> Sending: %s\n", env->buf);
     result = genlmsg_unicast(skb, castle_uevent_pid);
 
     /*
