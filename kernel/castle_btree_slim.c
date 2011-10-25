@@ -454,9 +454,10 @@ static size_t castle_slim_entry_size_predict(const struct castle_norm_key *key,
 
 inline static size_t castle_slim_entry_size(const struct castle_btree_node *node, int idx)
 {
+    void *entry = NODE_ENTRY_PTR(node, idx);
     return BTREE_NODE_IS_LEAF(node) ?
-        leaf_entry_size(NODE_LEAF_ENTRY_PTR(node, idx)) :
-        intern_entry_size(NODE_INTERN_ENTRY_PTR(node, idx));
+        leaf_entry_size((struct slim_leaf_entry *) entry) :
+        intern_entry_size((struct slim_intern_entry *) entry);
 }
 
 /*
