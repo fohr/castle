@@ -7,15 +7,23 @@ void castle_uevent2(uint16_t cmd, uint64_t arg1, uint64_t arg2);
 void castle_uevent1(uint16_t cmd, uint64_t arg1);
 void castle_events_slave_rebuild_notify(void);
 
+int  castle_netlink_init(void);
+void castle_netlink_fini(void);
+
 /* Events which do not correspond to any particular command. Defined in 0x80+ range not
    to overlap with IOCTL command ids. */
 #define CASTLE_EVENT_SPINUP                 (128)
 #define CASTLE_EVENT_SPINDOWN               (129)
 #define CASTLE_EVENT_TRANFSER_FINISHED      (130)
+
 #define CASTLE_EVENT_NEW_TREE_ADDED         (131)
 #define CASTLE_EVENT_MERGE_WORK_FINISHED    (132)
 #define CASTLE_EVENT_VERSION_TREE_CREATED   (133)
 #define CASTLE_EVENT_VERSION_TREE_DESTROYED (134)
+/* Events delivered to the ctrl prog go through a different interface (netlink socket).
+   This range controls which ones exactly. */
+#define CASTLE_CTRL_PROG_EVENT_RANGE_START   CASTLE_EVENT_NEW_TREE_ADDED
+#define CASTLE_CTRL_PROG_EVENT_RANGE_END     CASTLE_EVENT_VERSION_TREE_DESTROYED
 
 #define CASTLE_EVENTS_SUCCESS (0)
 
