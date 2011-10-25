@@ -1242,6 +1242,10 @@ void __castle_object_get_complete(struct work_struct *work)
                                              last);
     read_unlock_c2b(c2b);
 
+    /* Safe to access to tree structure, we still got the reference. Accessing DA from attachment,
+     * seems expensive. */
+    atomic64_add(data_c2b_length, &c_bvec->tree->da->read_data_bytes);
+
     if (last || dont_want_more)
         goto out;
 
@@ -1428,6 +1432,8 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
 
 //        castle_printk(LOG_DEBUG, "%s::Inline.\n", __FUNCTION__);
 
+        /* For INLINE values reference on CT is already released. Not safe to depend on ct pointer. */
+        atomic64_add(cvt.length, &(castle_da_ptr_get(c_bvec->c_bio->attachment)->read_data_bytes));
         get->reply_start(get,
                          0,
                          cvt.length,
@@ -1552,6 +1558,10 @@ void __castle_object_chunk_pull_complete(struct work_struct *work)
     read_lock_c2b(pull->curr_c2b);
     memcpy(pull->buf, c2b_buffer(pull->curr_c2b), to_copy);
 
+    /* For non-inline values we should have the proxy reference; update stats by reading DA
+     * pointer from proxy ref. */
+    atomic64_add(to_copy, &pull->cts_proxy->da->read_data_bytes);
+
     pull->offset += to_copy;
     pull->remaining -= to_copy;
 
@@ -1649,6 +1659,12 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
 
     pull->cts_proxy = c_bvec->cts_proxy;
     pull->cvt       = cvt;
+
+    /* For inline values, update stats here. We willn't have c_bvec after this. Can't get DA
+     * pointer. */
+    if (!err && CVT_INLINE(cvt))
+        atomic64_add(cvt.length, &(castle_da_ptr_get(c_bvec->c_bio->attachment)->read_data_bytes));
+
     castle_object_bvec_key_dealloc(c_bvec);
     castle_utils_bio_free(c_bvec->c_bio);
 
@@ -1659,7 +1675,6 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
 
         debug("Error, invalid or tombstone.\n");
 
-        pull->cts_proxy = NULL;
         CVT_INVALID_INIT(pull->cvt);
         pull->pull_continue(pull, err, 0, 1 /*done*/);
     }

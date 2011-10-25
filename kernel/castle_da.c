@@ -11238,7 +11238,7 @@ static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *
  * Since an attachment exists, the DA structure is guaranteed to be found, and thus this
  * function cannot return NULL.
  */
-static struct castle_double_array *castle_da_ptr_get(struct castle_attachment *att)
+struct castle_double_array *castle_da_ptr_get(struct castle_attachment *att)
 {
     struct castle_double_array *da;
     c_da_t da_id;
@@ -11900,6 +11900,7 @@ static int castle_merge_thread_start(void *_data)
     while(!castle_da_exiting && !kthread_should_stop())
     {
         int ret;
+        uint64_t prev_nr_bytes;
 
         set_current_state(TASK_INTERRUPTIBLE);
         schedule();
@@ -11913,21 +11914,29 @@ static int castle_merge_thread_start(void *_data)
         merge = castle_merges_hash_get(merge_thread->merge_id);
         BUG_ON(!merge);
 
+        /* Take snapshot of current status. */
+        prev_nr_bytes = merge->nr_bytes;
+
         /* Check if merge completed successfully. */
         if ((ret = castle_da_merge_do(merge, merge_thread->cur_work_size)) == 0)
         {
-            castle_events_merge_work_finished(merge_thread->merge_id, 1, 1);
+            BUG_ON(merge->nr_bytes < prev_nr_bytes);
+            castle_events_merge_work_finished(merge_thread->merge_id,
+                                              merge->nr_bytes - prev_nr_bytes, 1);
             merge_thread->merge_id = INVAL_MERGE_ID;
 
             /* No need of this thread any more - exit. */
             goto exit_thread;
         }
-        /* Merge not completed, but work completed successfully. */
-        else if (ret == EAGAIN)
-            castle_events_merge_work_finished(merge_thread->merge_id, 1, 0);
-        /* Merge not completed and work not completed. */
+        /* Merge not completed, but work completed successfully.
+         *              (or)
+         * Merge not completed and work not completed. */
         else
-            castle_events_merge_work_finished(merge_thread->merge_id, 0, 0);
+        {
+            BUG_ON(merge->nr_bytes < prev_nr_bytes);
+            castle_events_merge_work_finished(merge_thread->merge_id,
+                                              merge->nr_bytes - prev_nr_bytes, 0);
+        }
 
         merge_thread->running = 0;
     }

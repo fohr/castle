@@ -258,6 +258,7 @@ void castle_da_node_buffer_init(struct castle_btree_type *btree,
                                 uint16_t node_size);
 castle_user_timestamp_t castle_da_min_ts_cts_exclude_this_merge_get(struct castle_da_merge *merge);
 
+struct castle_double_array *castle_da_ptr_get(struct castle_attachment *att);
 
 
 #endif /* __CASTLE_DA_H__ */
