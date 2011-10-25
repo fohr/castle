@@ -43,7 +43,7 @@ void castle_atomic64_min(uint64_t new_val, atomic64_t *v)
     while(1)
     {
         c = atomic64_read(v);
-        old = atomic_cmpxchg(v, c, min(c, new_val));
+        old = atomic64_cmpxchg(v, c, min(c, new_val));
         if(likely(old == c))
             break;
     }
@@ -57,7 +57,7 @@ void castle_atomic64_max(uint64_t new_val, atomic64_t *v)
     while(1)
     {
         c = atomic64_read(v);
-        old = atomic_cmpxchg(v, c, max(c, new_val));
+        old = atomic64_cmpxchg(v, c, max(c, new_val));
         if(likely(old == c))
             break;
     }
