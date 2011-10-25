@@ -11027,9 +11027,6 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
         goto complete;
     }
 
-    if (castle_bloom_debug && !err && !CVT_INVALID(cvt) && c_bvec->bloom_skip)
-        castle_printk(LOG_ERROR, "c_bvec=%p c_bvec->tree=%p\n",
-                c_bvec, c_bvec->tree);
     /* Fail if we find a key in a CT the bloom filter told us to skip. */
     BUG_ON(castle_bloom_debug && !err && !CVT_INVALID(cvt) && c_bvec->bloom_skip);
 

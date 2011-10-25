@@ -156,8 +156,12 @@ int castle_bloom_create(castle_bloom_t *bf, c_da_t da_id, btree_t btree_type, ui
         bf->num_blocks_last_chunk = blocks_remainder;
     bf->btree = btree;
 
-    debug("castle_bloom_create num_elements=%llu num_chunks=%u num_blocks=%u size=%llu num_blocks_last_chunk=%u num_btree_nodes=%u\n",
-            num_elements, bf->num_chunks, num_blocks, size, bf->num_blocks_last_chunk, atomic_read(&bf->num_btree_nodes));
+    debug("%s: num_elements=%llu num_chunks=%u num_blocks=%u size=%llu "
+            "num_blocks_last_chunk=%u num_btree_nodes=%u blocks_remainder=%d "
+            "BLOOM_BLOCKS_PER_CHUNK(bf)=%d\n",
+            __FUNCTION__, num_elements, bf->num_chunks, num_blocks, size,
+            bf->num_blocks_last_chunk, atomic_read(&bf->num_btree_nodes),
+            blocks_remainder, BLOOM_BLOCKS_PER_CHUNK(bf));
 
     bf_bp->node_cep.ext_id = bf->ext_id;
     bf_bp->node_cep.offset = 0;
@@ -278,7 +282,7 @@ static void castle_bloom_complete_chunk(castle_bloom_t *bf)
 
     bf_bp->chunks_complete++;
 
-    debug("chunk completed, offset was %llu, ", bf_bp->chunk_cep.offset);
+    debug("%s: chunk completed, offset was %llu, ", __FUNCTION__, bf_bp->chunk_cep.offset);
     bf_bp->chunk_cep.offset += BLOOM_CHUNK_SIZE;
     debug("now %llu.\n", bf_bp->chunk_cep.offset);
 }
@@ -300,8 +304,10 @@ static void castle_bloom_next_chunk(castle_bloom_t *bf)
 
     bf_bp->chunk_c2b = castle_cache_block_get(bf_bp->chunk_cep, bf_bp->cur_chunk_num_blocks * bf->block_size_pages);
 
-    castle_printk(LOG_DEBUG, "%s::new chunk at " cep_fmt_str" for bf %p.\n",
-            __FUNCTION__, cep2str(bf_bp->chunk_c2b->cep), bf);
+    castle_printk(LOG_DEBUG, "%s::new chunk at " cep_fmt_str" for bf %p "
+            "cur_chunk_num_blocks=%d chunks_complete=%d.\n",
+            __FUNCTION__, cep2str(bf_bp->chunk_c2b->cep), bf,
+            bf_bp->cur_chunk_num_blocks, bf_bp->chunks_complete);
 
     write_lock_c2b(bf_bp->chunk_c2b);
     if (bf->num_chunks <= BLOOM_MAX_SOFTPIN_CHUNKS)
@@ -368,7 +374,8 @@ void castle_bloom_complete(castle_bloom_t *bf)
 {
     struct castle_bloom_build_params *bf_bp = bf->private;
 
-    debug("castle_bloom_complete, elements inserted %llu, expected %llu\n", bf_bp->elements_inserted, bf_bp->max_num_elements);
+    debug("%s: bf=%p elements inserted %llu, expected %llu\n",
+            __FUNCTION__, bf, bf_bp->elements_inserted, bf_bp->max_num_elements);
 
     if (bf_bp->elements_inserted == 0)
     {
@@ -386,8 +393,22 @@ void castle_bloom_complete(castle_bloom_t *bf)
     bf->private = NULL;
 
     /* set number of chunks to actual number */
-    debug("actual num_chunks was %u, expected was %u.\n", bf_bp->chunks_complete, bf->num_chunks);
-    bf->num_chunks = bf_bp->chunks_complete;
+    debug("%s: bf=%p actual num_chunks was %u, expected was %u.\n",
+            __FUNCTION__, bf, bf_bp->chunks_complete, bf->num_chunks);
+    if (bf->num_chunks != bf_bp->chunks_complete)
+    {
+        /* If we overestimated the number of chunks required, we truncate that
+         * estimate here, by settings num_chunks equal to the number of chunks
+         * actually used.  In this case the actual final chunk will have been
+         * built with BLOOM_BLOCKS_PER_CHUNK blocks, not num_blocks_last_chunk
+         * as per the bloom filter.  We handle this here by massaging
+         * num_blocks_last_chunk to be what we expect to see.
+         * @TODO Remove variable number of blocks in last chunk. */
+        bf->num_chunks = bf_bp->chunks_complete;
+        bf->num_blocks_last_chunk = BLOOM_BLOCKS_PER_CHUNK(bf);
+        debug("%s: bf=%p num_chunks=%d num_blocks_last_chunk=%d\n",
+                __FUNCTION__, bf, bf->num_chunks, bf->num_blocks_last_chunk);
+    }
 }
 
 /**
