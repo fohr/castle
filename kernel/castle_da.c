@@ -12001,7 +12001,7 @@ static int castle_merge_thread_create(c_thread_id_t *thread_id)
 
     merge_thread->running = 0;
     merge_thread->thread  = kthread_create(castle_merge_thread_start, merge_thread,
-                                           "castle_mthread_%u", castle_merge_threads_count);
+                                           "castle_mt_%u", castle_merge_threads_count);
     if (IS_ERR(merge_thread->thread))
     {
         castle_printk(LOG_USERINFO, "Failed to create merge thread\n");
