@@ -141,6 +141,11 @@ check_pid:
 
 static void castle_ctrl_prog_work_do(void *unused)
 {
+    /* Do nothing if the FS hasn't been inited yet. */
+    if(!castle_fs_inited)
+        return;
+
+    /* Otherwise consider whether anything needs to be done. */
     switch(castle_ctrl_prog_state)
     {
         case CTRL_PROG_NOT_PRESENT:
