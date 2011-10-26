@@ -8970,6 +8970,9 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge)
     for(i=0; i<merge_mstore->nr_trees; i++)
         castle_mstore_entry_insert(castle_dmser_in_tree_store, &in_tree_merge_mstore_arr[i]);
 
+    /* Writeback data extents. */
+    castle_ct_data_exts_writeback(ct, castle_data_exts_maps_store);
+
     /* flush and shrink extents if neccesary */
     if(current_state == VALID_AND_FRESH_DAM_SERDES)
     {
@@ -9028,9 +9031,6 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge)
             castle_cache_extent_flush_schedule(cl->data_ext_free_bs.ext_id, 0,
                                                cl->data_ext_free_bs.used);
 
-        /* Writeback data extents. */
-        castle_ct_data_exts_writeback(ct, castle_data_exts_maps_store);
-
         if(cl->bloom_exists)
         {
             BUG_ON(EXT_ID_INVAL(cl->bloom_ext_id));
@@ -9042,7 +9042,6 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge)
         new_state = VALID_AND_STALE_DAM_SERDES;
         atomic_set(&merge->serdes.valid, (int)new_state);
     }
-
 }
 
 /**
