@@ -2062,11 +2062,11 @@ struct castle_object_replace {
 };
 
 struct castle_object_get {
+    c_val_tup_t                   cvt;              /**< Describes value (e.g. disk offset).    */
     struct castle_cache_block    *data_c2b;
     uint64_t                      data_c2b_length;
     uint64_t                      data_length;
     int                           first;            /**< First call of _object_iter_continue()? */
-    c_val_tup_t                   cvt;              /**< Describes value (e.g. disk offset).    */
     c_vl_bkey_t                  *key;              /**< Requested key.                         */
     uint8_t                       flags;            /**< From userland request                  */
     castle_user_timestamp_t       user_timestamp;   //TODO@tr get rid of this if we don't want to use it!
@@ -2085,13 +2085,13 @@ struct castle_object_get {
 };
 
 struct castle_object_pull {
+    c_val_tup_t                   cvt;
     struct castle_da_cts_proxy   *cts_proxy;     /**< Reference-taking snapshot of CTs in DA.*/
     uint64_t                      remaining;
     uint64_t                      offset;
 
     c_vl_bkey_t                  *key;           /**< Key of the value to be replaced.       */
 
-    c_val_tup_t                   cvt;
     struct castle_cache_block    *curr_c2b;
 
     void                         *buf;
