@@ -1238,7 +1238,7 @@ void __castle_object_get_complete(struct work_struct *work)
 
     /* Safe to access to tree structure, we still got the reference. Accessing DA from attachment,
      * seems expensive. */
-    atomic64_add(data_c2b_length, &c_bvec->tree->da->read_data_bytes);
+    atomic64_add(data_c2b_length, &c_bvec->cts_proxy->da->read_data_bytes);
 
     if (last || dont_want_more)
         goto out;
