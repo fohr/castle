@@ -1834,7 +1834,7 @@ static c_val_tup_t castle_ct_merged_iter_timestamp_select(struct component_itera
         if(current_iter->cached_entry.cvt.user_timestamp > most_recent_object.user_timestamp)
             more_recent_entry_found = 1; /* deprecation by timestamp */
         else if((current_iter->cached_entry.cvt.user_timestamp == most_recent_object.user_timestamp) &&
-                current_iter > most_recent_iter)
+                current_iter < most_recent_iter)
             more_recent_entry_found = 1; /* same timestamp; deprecation by iter order */
 
         if( more_recent_entry_found )
