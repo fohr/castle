@@ -119,7 +119,7 @@ int castle_uevent_init(struct sk_buff *unused, struct genl_info *info)
 
     castle_uevent_pid = info->snd_pid;
 
-    castle_printk(LOG_DEVEL, "Recieved castle uevent initialisation request (PID: %u)\n",
+    castle_printk(LOG_DEVEL, "Received castle uevent initialisation request (PID: %u)\n",
                   castle_uevent_pid);
 
     /* Insert initialisation here ... */
