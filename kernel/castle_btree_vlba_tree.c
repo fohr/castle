@@ -650,8 +650,6 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
         vlba_node->dead_bytes = 0;
         vlba_node->free_bytes = VLBA_TREE_NODE_LENGTH(node) - sizeof(struct castle_btree_node) -
                                 sizeof(struct castle_vlba_tree_node);
-        BUG_ON( sizeof(struct castle_btree_node) + sizeof(struct castle_vlba_tree_node) +
-                vlba_node->free_bytes + vlba_node->dead_bytes != VLBA_TREE_NODE_LENGTH(node));
     }
 
     BUG_ON(key_length > VLBA_TREE_MAX_KEY_SIZE);
