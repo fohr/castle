@@ -146,7 +146,8 @@ MODULE_PARM_DESC(castle_use_ssd_leaf_nodes, "Use SSDs for btree leaf nodes");
 DEFINE_HASH_TBL(castle_da, castle_da_hash, CASTLE_DA_HASH_SIZE, struct castle_double_array, hash_list, c_da_t, id);
 DEFINE_HASH_TBL(castle_ct, castle_ct_hash, CASTLE_CT_HASH_SIZE, struct castle_component_tree, hash_list, tree_seq_t, seq);
 DEFINE_HASH_TBL(castle_data_exts, castle_data_exts_hash, CASTLE_DATA_EXTS_HASH_SIZE, struct castle_data_extent, hash_list, c_ext_id_t, ext_id);
-static LIST_HEAD(castle_deleted_das);
+
+atomic_t castle_zomby_da_count = ATOMIC(0);
 
 typedef enum {
     DAM_MARSHALL_ALL = 0,  /**< Marshall all merge state          */
@@ -5566,16 +5567,9 @@ int check_dext_list(c_ext_id_t ext_id, c_ext_id_t *list, uint32_t size)
 }
 
 /**
- * Initialize merge process for multiple component trees. Merges, other than
- * compaction, process on 2 trees only.
+ * Initialize merge process for multiple component trees.
  *
- * @param da        [in]    doubling array to be merged
- * @param level     [in]    merge level in doubling array
- * @param nr_trees  [in]    number of trees to be merged
- * @param in_trees  [in]    component trees to be merged
- *
- * @return intialized merge structure. NULL in case of error.
- * @note Things inited here should have matching fini in castle_da_merge_dealloc
+ * @param merge  [in]    merge to be initialised.
  *
  * @also castle_da_merge_dealloc
  */
@@ -11597,8 +11591,6 @@ static int castle_da_wait_for_compaction(struct castle_double_array *da, void *u
 
 void castle_double_array_merges_fini(void)
 {
-    int deleted_das;
-
     castle_da_exiting = 1;
 
     /* Write memory barried to make sure all threads see castle_da_exiting. */
@@ -11618,14 +11610,10 @@ void castle_double_array_merges_fini(void)
 
     /* This is happening at the end of execution. No need for the hash lock. */
     __castle_da_hash_iterate(castle_da_merge_stop, NULL);
+
     /* Also, wait for merges on deleted DAs. Merges will hold the last references to those DAs. */
-    do {
-        CASTLE_TRANSACTION_BEGIN;
-        deleted_das = !list_empty(&castle_deleted_das);
-        CASTLE_TRANSACTION_END;
-        if(deleted_das)
-            msleep(10);
-    } while(deleted_das);
+    while (atomic_read(&castle_zomby_da_count))
+        msleep(10);
 }
 
 void castle_double_array_fini(void)
@@ -11711,13 +11699,13 @@ void castle_da_destroy_complete(struct castle_double_array *da)
     /* Destroy Version and Rebuild Version Tree. */
     castle_version_tree_delete(da->root_version);
 
-    /* Delete the DA from the list of deleted DAs. */
-    list_del(&da->hash_list);
-
     castle_sysfs_da_del_check(da);
 
     /* Dealloc the DA. */
     castle_da_dealloc(da);
+
+    /* Delete the DA from the list of deleted DAs. */
+    atomic_dec(&castle_zomby_da_count);
 }
 
 static void castle_da_get(struct castle_double_array *da)
@@ -11907,8 +11895,10 @@ int castle_double_array_destroy(c_da_t da_id)
     castle_da_deleted_set(da);
     /* Restart the merge threads, so that they get to exit, and drop their da refs. */
     castle_da_merge_restart(da, NULL);
-    /* Add it to the list of deleted DAs. */
-    list_add(&da->hash_list, &castle_deleted_das);
+
+    /* Increment count of zomby DAs. */
+    atomic_inc(&castle_zomby_da_count);
+
     /* Put the (usually) last reference to the DA. */
     castle_da_put_locked(da);
 
