@@ -22,8 +22,6 @@ int  castle_sysfs_collection_add (struct castle_attachment *attachment);
 void castle_sysfs_collection_del (struct castle_attachment *attachment);
 int  castle_sysfs_ct_add         (struct castle_component_tree *ct);
 void castle_sysfs_ct_del         (struct castle_component_tree *ct);
-int  castle_sysfs_merge_thread_add(struct castle_merge_thread *merge_thread);
-void castle_sysfs_merge_thread_del(struct castle_merge_thread *merge_thread);
 int  castle_sysfs_merge_add      (struct castle_da_merge *merge);
 void castle_sysfs_merge_del      (struct castle_da_merge *merge);
 int  castle_sysfs_data_extent_add(struct castle_data_extent *data_ext);

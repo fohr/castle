@@ -2519,7 +2519,6 @@ struct castle_merge_thread {
     c_merge_id_t          merge_id;
     int                   running;
     uint64_t              cur_work_size;
-    struct kobject        kobj;
     struct list_head      hash_list;
 };
 

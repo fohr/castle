@@ -11997,8 +11997,6 @@ static int castle_merge_thread_start(void *_data)
 exit_thread:
     castle_printk(LOG_DEVEL, "Thread destroy: %u\n", merge_thread->id);
 
-    castle_sysfs_merge_thread_del(merge_thread);
-
     castle_merge_threads_hash_remove(merge_thread);
 
     castle_kfree(merge_thread);
@@ -12045,8 +12043,6 @@ static int castle_merge_thread_create(c_thread_id_t *thread_id)
     *thread_id = merge_thread->id = castle_merge_threads_count++;
 
     castle_merge_threads_hash_add(merge_thread);
-
-    castle_sysfs_merge_thread_add(merge_thread);
 
     wake_up_process(merge_thread->thread);
 
