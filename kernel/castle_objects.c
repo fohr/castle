@@ -652,7 +652,6 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
         return -EEXIST; /* existential crisis */
     }
     /* this object passed the timestamp smell test...proceed with replace. */
-
     new_cvt->user_timestamp = replace->user_timestamp;
 
     /* Bookkeeping for large objects (about to be inserted into the tree). */
@@ -916,7 +915,6 @@ int castle_object_replace(struct castle_object_replace *replace,
     {
         //TODO@tr infer timestamp from attachment/version
         replace->user_timestamp = 0;
-        //replace->user_timestamp = version.creation_ts;
     }
 
 
@@ -1378,8 +1376,8 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     struct castle_object_get *get = c_bvec->c_bio->get;
     c_bio_t *c_bio = c_bvec->c_bio;
 
-    debug("Returned from btree walk with value of type 0x%x and length 0x%llu\n",
-          cvt.type, (uint64_t)cvt.length);
+    debug("Returned from btree walk with value of type 0x%x and length 0x%llu and timestamp %llu\n",
+          cvt.type, (uint64_t)cvt.length, cvt.user_timestamp);
 
     /* Sanity checks on the bio */
     BUG_ON(c_bvec_data_dir(c_bvec) != READ);
@@ -1387,14 +1385,21 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     BUG_ON(c_bio->err != 0);
 
     /* We are handling a counter if either we just got a counter or we were already
-       accumulating counters. */
-    if (CVT_ANY_COUNTER(cvt) || CVT_ANY_COUNTER(get->cvt))
+       accumulating counters, and we did not already attempt to resolve timestamps,
+       which would have meant this query would not be resolving counters. */
+    if ( get->resolve_counters && (CVT_ANY_COUNTER(cvt) || CVT_ANY_COUNTER(get->cvt)) )
     {
         int finished;
 
+        get->resolve_timestamps = 0;
+
         /* Prepare the accumulator, if isn't ready yet. */
-        if(CVT_INVALID(get->cvt))
+        if(CVT_INVALID(get->cvt) || !CVT_LOCAL_COUNTER(get->cvt))
+        {
             CVT_COUNTER_LOCAL_ADD_INIT(get->cvt, 0);
+            /* we don't support timestamped counters but let's explicitly set the timestamp field anyway */
+            get->cvt.user_timestamp = 0;
+        }
 
         finished = castle_counter_simple_reduce(&get->cvt, cvt);
         /* Return early if we have to keep accumulating. */

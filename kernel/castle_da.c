@@ -1771,6 +1771,8 @@ static c_val_tup_t castle_ct_merged_iter_counter_reduce(struct component_iterato
 
     /* Prepare the accumulator. */
     CVT_COUNTER_LOCAL_ADD_INIT(accumulator, 0);
+    /* we don't support timestamped counters but let's explicitly set the timestamp field anyway */
+    accumulator.user_timestamp = 0;
 
     /* Deal with the list head. */
     if(castle_counter_simple_reduce(&accumulator, iter->cached_entry.cvt))
@@ -1818,6 +1820,10 @@ static c_val_tup_t castle_ct_merged_iter_timestamp_select(struct component_itera
     most_recent_iter   = iter;
     most_recent_object = iter->cached_entry.cvt;
     BUG_ON(!CVT_LEAF_VAL(most_recent_object));
+
+    /* if the most recent object by iter order is a counter, we should have done counter resolution
+       instead of this */
+    BUG_ON(CVT_ANY_COUNTER(most_recent_object));
 
     /* If the list same_kv list is emtpy, return now. */
     if(list_empty(&iter->same_kv_head))
@@ -4865,6 +4871,7 @@ static int castle_da_entry_skip(struct castle_da_merge *merge,
     void *last_key = merge->last_key;
 
     merge->is_new_key = (last_key)? btree->key_compare(key, last_key): 1;
+
     /* Compare the keys. If looking at new key then reset data
      * structures. */
     if (merge->is_new_key)
@@ -4953,6 +4960,9 @@ static void castle_da_counter_delete(struct castle_da_merge *merge,
         castle_printk(LOG_DEBUG, "Entry cvt is an add.\n");
         /* Accumulation is neccessary. Accumulate entry_cvt first. */
         CVT_COUNTER_LOCAL_ADD_INIT(accumulator_cvt, 0);
+        /* we don't support timestamped counters but let's explicitly set the timestamp field anyway */
+        accumulator_cvt.user_timestamp = 0;
+
         ret = castle_counter_simple_reduce(&accumulator_cvt, entry_cvt);
         /* We know that entry_cvt is an add, therefore accumulation musn't terminate. */
         BUG_ON(ret);
@@ -5294,7 +5304,6 @@ static int castle_da_merge_tv_resolver_flush(struct castle_da_merge *merge,
 
     BUG_ON(!merge);
     BUG_ON(!merge->tv_resolver);
-    BUG_ON(!merge->da->user_timestamping);
 
     expected_pop_count = castle_dfs_resolver_process(merge->tv_resolver);
     while(castle_dfs_resolver_entry_pop(merge->tv_resolver,
@@ -5308,8 +5317,12 @@ static int castle_da_merge_tv_resolver_flush(struct castle_da_merge *merge,
         BUG_ON(!tvr_key);
         BUG_ON(tvr_u_ts != tvr_cvt.user_timestamp);
         BUG_ON(actual_pop_count == expected_pop_count);
-        actual_pop_count++;
         BUG_ON(!CVT_LEAF_VAL(tvr_cvt) && !CVT_LOCAL_COUNTER(tvr_cvt));
+
+        /* if this is the first pop, then this is a new key, else it's not a new key */
+        merge->is_new_key = (actual_pop_count == 0);
+        actual_pop_count++;
+
         ret = castle_da_entry_do(merge,
                                  tvr_key,
                                  tvr_cvt,
@@ -10967,19 +10980,30 @@ void castle_da_next_ct_read(c_bvec_t *c_bvec)
  * Return 1 if we're sure that we have the most up-to-date entry in get->cvt; else return 0.
  */
 int castle_da_ct_read_complete_cvt_timestamp_check(c_bvec_t *c_bvec,
-                                                   c_val_tup_t *cvt,
-                                                   int last_tree)
+                                                   c_val_tup_t *cvt)
 {
     struct castle_object_get *get = c_bvec->c_bio->get;
-    int finished = 0;
 
-    if(CVT_INVALID(*cvt))
+    BUG_ON(CVT_INVALID(*cvt));
+
+    if (CVT_ANY_COUNTER(*cvt))
     {
-        BUG_ON(!last_tree);
-        if(!CVT_ANY_COUNTER(get->cvt))
-            *cvt = get->cvt;
+        /* the only way we expect to get here is if the user had inserted some value into a
+           timestamped DA after inserting a counter to the same key, which would mean that we
+           should have already seen a get candidate cvt that wasn't a counter, which would mean
+           the following assertions must hold. */
+        BUG_ON(get->resolve_counters);
+        BUG_ON(CVT_INVALID(get->cvt));
+
+        /* If the user is mixing counters and non-counters on the same key, then they must not be
+           relying on timestamps. Ignore this counter and terminate the query now before we get
+           into any more trouble */
         return 1;
     }
+
+    /* if we make it this far, that means we have seen at least one non-counter and not seen
+       any counters, and so we don't expect to resolve counters. */
+    get->resolve_counters = 0;
 
     /*
     TODO@tr use suspicioun tags to indicate if we can safely terminate
@@ -10990,9 +11014,6 @@ int castle_da_ct_read_complete_cvt_timestamp_check(c_bvec_t *c_bvec,
             return 1;
     Note: doing this means we need the version as well as the timestamp of the cvt.
     */
-
-    if(finished)
-        return finished;
 
     if(CVT_INVALID(get->cvt))
         get->cvt = *cvt;
@@ -11012,7 +11033,7 @@ int castle_da_ct_read_complete_cvt_timestamp_check(c_bvec_t *c_bvec,
         }
     }
 
-    return finished;
+    return 0;
 }
 
 /**
@@ -11034,6 +11055,7 @@ int castle_da_ct_read_complete_cvt_timestamp_check(c_bvec_t *c_bvec,
 static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
 {
     void (*callback) (struct castle_bio_vec *c_bvec, int err, c_val_tup_t cvt);
+    struct castle_object_get *get = c_bvec->c_bio->get;
 
     callback = c_bvec->orig_complete;
 
@@ -11043,7 +11065,13 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
     /* No more candidate trees available, callback now. */
     if (!err && !c_bvec->tree)
     {
-        castle_da_ct_read_complete_cvt_timestamp_check(c_bvec, &cvt, 1);
+        if(get->resolve_timestamps && CVT_INVALID(cvt) && !CVT_INVALID(get->cvt))
+        {
+            /* If we had performed any timestamp resolution, we must have disabled
+               counter resolution. */
+            BUG_ON(get->resolve_counters);
+            cvt = get->cvt;
+        }
         goto complete;
     }
 
@@ -11051,7 +11079,9 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
     BUG_ON(castle_bloom_debug && !err && !CVT_INVALID(cvt) && c_bvec->bloom_skip);
 
     /* Handle counter accumulation. */
-    if (!err && CVT_ADD_ALLV_COUNTER(cvt))
+    if (!err &&                    /* no error */
+        get->resolve_counters &&   /* we are still able to resolve counters */
+        CVT_ADD_ALLV_COUNTER(cvt)) /* we have something that needs accumulating */
     {
         /* Callback handles counter accumulation. */
         callback(c_bvec, err, cvt);
@@ -11061,9 +11091,15 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
         return;
     }
     /* Handle timestamps */
-    else if (!err && !CVT_INVALID(cvt))
+    else if (!err &&                                /* no error */
+             get->resolve_timestamps &&             /* we are re still able to resolve timestamps */
+             !CVT_INVALID(cvt) &&                   /* this cvt is valid */
+             c_bvec->tree->da->user_timestamping && /* this DA is timestamped */
+             !CVT_ANY_COUNTER(cvt) &&               /* not dealing with a counter */
+             !CVT_ANY_COUNTER(get->cvt))            /* not already accumulating a counter. */
     {
-        if(!castle_da_ct_read_complete_cvt_timestamp_check(c_bvec, &cvt, 0))
+        /* handle timestamps */
+        if(!castle_da_ct_read_complete_cvt_timestamp_check(c_bvec, &cvt))
         {
             /* Continue. */
             castle_da_next_ct_read(c_bvec);

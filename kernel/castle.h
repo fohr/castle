@@ -2062,14 +2062,22 @@ struct castle_object_replace {
 };
 
 struct castle_object_get {
+    /*********************** do not move this block, relying on union alignment *******************/
     c_val_tup_t                   cvt;              /**< Describes value (e.g. disk offset).    */
+    /* in order to maintain the uneasy ceasefire between counters and timestamps, queries need to
+       keep track of whethery they are doing one or the other; the idea is to unset these flags
+       once we know if we are supposed to resolve timestamps, or counters - never attempt both. */
+    uint8_t                      resolve_counters;
+    uint8_t                      resolve_timestamps;
+    /*********************** do not move this block, relying on union alignment *******************/
+
     struct castle_cache_block    *data_c2b;
     uint64_t                      data_c2b_length;
     uint64_t                      data_length;
     int                           first;            /**< First call of _object_iter_continue()? */
     c_vl_bkey_t                  *key;              /**< Requested key.                         */
     uint8_t                       flags;            /**< From userland request                  */
-    castle_user_timestamp_t       user_timestamp;   //TODO@tr get rid of this if we don't want to use it!
+
 
 
     int       (*reply_start)     (struct castle_object_get *get,
@@ -2085,7 +2093,15 @@ struct castle_object_get {
 };
 
 struct castle_object_pull {
+    /*********************** do not move this block, relying on union alignment *******************/
     c_val_tup_t                   cvt;
+    /* in order to maintain the uneasy ceasefire between counters and timestamps, queries need to
+       keep track of whethery they are doing one or the other; the idea is to unset these flags
+       once we know if we are supposed to resolve timestamps, or counters - never attempt both. */
+    uint8_t                      resolve_counters;
+    uint8_t                      resolve_timestamps;
+    /*********************** do not move this block, relying on union alignment *******************/
+
     struct castle_da_cts_proxy   *cts_proxy;     /**< Reference-taking snapshot of CTs in DA.*/
     uint64_t                      remaining;
     uint64_t                      offset;

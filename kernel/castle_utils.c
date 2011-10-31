@@ -292,12 +292,17 @@ void castle_counter_accumulating_reduce(c_val_tup_t *accumulator,
     if(CVT_COUNTER_ACCUM_SET_SET(*accumulator))
     {
         castle_printk(LOG_WARN, "SET/SET accumulator used in reductions.\n");
+        WARN_ON(1);
         return;
     }
 
     /* Work out the types of subcounters in the accumulator. */
     counter1_set = 0;
     counter2_set = CVT_COUNTER_ACCUM_ADD_SET(*accumulator);
+
+    /* We do not support timestamped counters, but let's explicitly set the timestamp to the
+       timestamp of the "newest" delta. */
+    accumulator->user_timestamp = max(accumulator->user_timestamp, delta_cvt.user_timestamp);
 
     /* If delta isn't a counter, finish reduction early. */
     if(!CVT_ANY_COUNTER(delta_cvt))
@@ -356,6 +361,10 @@ void castle_counter_accumulating_reduce(c_val_tup_t *accumulator,
 int castle_counter_simple_reduce(c_val_tup_t *accumulator, c_val_tup_t delta_cvt)
 {
     int64_t delta_counter;
+
+    /* We do not support timestamped counters, but let's explicitly set the timestamp to the
+       timestamp of the "newest" delta. */
+    accumulator->user_timestamp = max(accumulator->user_timestamp, delta_cvt.user_timestamp);
 
     if(!CVT_ANY_COUNTER(delta_cvt))
     {

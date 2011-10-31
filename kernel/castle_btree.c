@@ -1006,6 +1006,7 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
                                  key,
                                  version,
                                  new_cvt);
+
         castle_btree_io_end(c_bvec, new_cvt, 0);
         return;
     }
@@ -1093,11 +1094,14 @@ static c_val_tup_t castle_btree_counter_read(struct castle_btree_node *node,
     if(CVT_ACCUM_COUNTER(cvt))
     {
         CVT_COUNTER_ACCUM_ALLV_TO_LOCAL(accumulator, cvt);
+        accumulator.user_timestamp = cvt.user_timestamp;
         return accumulator;
     }
 
     /* Otherwise init the accumulator. */
     CVT_COUNTER_LOCAL_ADD_INIT(accumulator, 0);
+    /* we don't support timestamped counters but let's explicitly set the timestamp field anyway */
+    accumulator.user_timestamp = 0;
 
     /* Accumulate the start cvt. */
     finish = castle_counter_simple_reduce(&accumulator, cvt);
@@ -3001,6 +3005,8 @@ static void castle_rq_iter_counter_accum_init(c_rq_iter_t *rq_iter, c_val_tup_t 
 
     /* Initialise the accumulator. */
     CVT_COUNTER_LOCAL_ADD_INIT(rq_iter->counter_accumulator, 0);
+    /* we don't support timestamped counters but let's explicitly set the timestamp field anyway */
+    rq_iter->counter_accumulator.user_timestamp = 0;
 
     /* Deal with the current cvt. */
     castle_rq_iter_counter_accum_continue(rq_iter, cvt);
