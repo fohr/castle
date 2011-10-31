@@ -6509,11 +6509,18 @@ static int castle_extent_mask_create(c_ext_t            *ext,
      * Note:  Global mask gets updated by mask_create() and mask_destroy(). mask_create()
      * changes the global mask only in case of grow().
      */
-    if (ext->chkpt_global_mask.start > mask->range.start)
-        ext->chkpt_global_mask.start = mask->range.start;
+    if (MASK_RANGE_EMPTY(ext->chkpt_global_mask))
+    {
+        ext->chkpt_global_mask = mask->range;
+    }
+    else
+    {
+        if (ext->chkpt_global_mask.start > mask->range.start)
+            ext->chkpt_global_mask.start = mask->range.start;
 
-    if (ext->chkpt_global_mask.end < mask->range.end)
-        ext->chkpt_global_mask.end = mask->range.end;
+        if (ext->chkpt_global_mask.end < mask->range.end)
+            ext->chkpt_global_mask.end = mask->range.end;
+    }
 
     debug_mask("Updated global mask to " cemr_cstr "\n", cemr2str(ext->chkpt_global_mask));
 
