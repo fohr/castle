@@ -4913,6 +4913,13 @@ static void castle_da_counter_delete(struct castle_da_merge *merge,
     level = &merge->levels[0];
     btree = merge->out_btree;
 
+    /* non counters are treated as implicit SET 0s */
+    if(!CVT_ANY_COUNTER(cvt))
+    {
+        CVT_COUNTER_LOCAL_SET_INIT(cvt, 0);
+        cvt.user_timestamp = 0;
+    }
+
     /* If the node doesn't exist, it means there are no descendants to worry about. */
     if(!level->node_c2b)
         return;
@@ -5372,9 +5379,12 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
         if (castle_da_entry_skip(merge, key, version))
         {
             /* If a counter is being deleted, it needs to be pushed to its
-               descendants, otherwise we would loose its contribution. */
-            if (CVT_ANY_COUNTER(cvt))
-                castle_da_counter_delete(merge, key, version, cvt);
+               descendants, otherwise we would loose its contribution. But
+               we have to test every value, not just counters, because our
+               counters semantics require that non-counters are implicit
+               SET 0s, and we should not lose their contribution. */
+            castle_da_counter_delete(merge, key, version, cvt);
+
             /* Update per-version and merge statistics.
              *
              * We do not need to decrement keys/tombstones for level 1 merges
