@@ -180,7 +180,7 @@ static void castle_da_write_bvec_start(struct castle_double_array *da, c_bvec_t 
 static void castle_da_reserve(struct castle_double_array *da, c_bvec_t *c_bvec);
 static void castle_da_get(struct castle_double_array *da);
 static void castle_da_put(struct castle_double_array *da);
-static void castle_da_merge_serialise(struct castle_da_merge *merge, int using_tvr, int update_now);
+static void castle_da_merge_serialise(struct castle_da_merge *merge);
 static void castle_da_merge_marshall(struct castle_dmserlist_entry *merge_mstore,
                                      struct castle_in_tree_merge_state_entry *in_tree_merge_mstore,
                                      struct castle_da_merge *merge,
@@ -5209,6 +5209,46 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
 {
     int ret;
 
+    /* Skip entry if version marked for deletion and no descendant keys. */
+    if (castle_da_entry_skip(merge, key, version))
+    {
+        /* If a counter is being deleted, it needs to be pushed to its
+           descendants, otherwise we would loose its contribution. But
+           we have to test every value, not just counters, because our
+           counters semantics require that non-counters are implicit
+           SET 0s, and we should not lose their contribution. */
+        castle_da_counter_delete(merge, key, version, cvt);
+
+        /* Update per-version and merge statistics.
+         *
+         * We do not need to decrement keys/tombstones for level 1 merges
+         * as these keys have not yet been accounted for; skip them. */
+        merge->skipped_count++;
+        stats_p->version_deletes++;
+        if (CVT_TOMBSTONE(cvt))
+            stats_p->tombstones--;
+        else
+            stats_p->keys--;
+        castle_version_live_stats_adjust(version, *stats_p);
+        if (merge->level == 1)
+        {
+            /* Key & tombstones inserts have not been accounted for in
+             * level 1 merges so don't record removals. */
+            stats_p->keys = 0;
+            stats_p->tombstones = 0;
+        }
+        castle_version_private_stats_adjust(version, *stats_p, &merge->version_states);
+
+        /*
+         * The skipped key gets freed along with the input extent.
+         */
+
+        return EXIT_SUCCESS;
+    }
+
+    if(MERGE_CHECKPOINTABLE(merge))
+        castle_da_merge_serialise(merge);
+
     /* Make sure we got enough space for the entry_add() current cvt to be success. */
     while (castle_da_merge_space_reserve(merge, cvt))
     {
@@ -5327,7 +5367,7 @@ static int castle_da_merge_tv_resolver_flush(struct castle_da_merge *merge,
         BUG_ON(!CVT_LEAF_VAL(tvr_cvt) && !CVT_LOCAL_COUNTER(tvr_cvt));
 
         /* if this is the first pop, then this is a new key, else it's not a new key */
-        merge->is_new_key = (actual_pop_count == 0);
+        //merge->is_new_key = (actual_pop_count == 0);
         actual_pop_count++;
 
         ret = castle_da_entry_do(merge,
@@ -5375,42 +5415,6 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
         /* Start with merged iterator stats (see castle_da_each_skip()). */
         stats = merge->merged_iter->stats;
 
-        /* Skip entry if version marked for deletion and no descendant keys. */
-        if (castle_da_entry_skip(merge, key, version))
-        {
-            /* If a counter is being deleted, it needs to be pushed to its
-               descendants, otherwise we would loose its contribution. But
-               we have to test every value, not just counters, because our
-               counters semantics require that non-counters are implicit
-               SET 0s, and we should not lose their contribution. */
-            castle_da_counter_delete(merge, key, version, cvt);
-
-            /* Update per-version and merge statistics.
-             *
-             * We do not need to decrement keys/tombstones for level 1 merges
-             * as these keys have not yet been accounted for; skip them. */
-            merge->skipped_count++;
-            stats.version_deletes++;
-            if (CVT_TOMBSTONE(cvt))
-                stats.tombstones--;
-            else
-                stats.keys--;
-            castle_version_live_stats_adjust(version, stats);
-            if (merge->level == 1)
-            {
-                /* Key & tombstones inserts have not been accounted for in
-                 * level 1 merges so don't record removals. */
-                stats.keys = 0;
-                stats.tombstones = 0;
-            }
-            castle_version_private_stats_adjust(version, stats, &merge->version_states);
-
-            /*
-             * The skipped key gets freed along with the input extent.
-             */
-
-            goto entry_done;
-        }
 
         /* If we are using a timestamp-version resolver, we handle the buffering here. */
         if(merge->tv_resolver)
@@ -5423,18 +5427,12 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
                     return -ESHUTDOWN;
                 if (ret != EXIT_SUCCESS)
                     goto err_out;
-                if(MERGE_CHECKPOINTABLE(merge))
-                    castle_da_merge_serialise(merge, 1, 1); /* try to update output tree state */
             }
-            if(MERGE_CHECKPOINTABLE(merge))
-                castle_da_merge_serialise(merge, 1, 0); /* try to update itors state */
             castle_dfs_resolver_entry_add(merge->tv_resolver, key, cvt, version, cvt.user_timestamp);
         }
         else
         {
             /* not timestamping */
-            if(MERGE_CHECKPOINTABLE(merge))
-                castle_da_merge_serialise(merge, 0, 0); /* use is_new_key to manage state */
             ret = castle_da_entry_do(merge, key, cvt, version, max_nr_bytes, &stats);
             if(ret == -ESHUTDOWN)
                 return -ESHUTDOWN;
@@ -5442,7 +5440,8 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
                 goto err_out;
         }
 
-entry_done:
+        /* entry done */
+
         castle_perf_debug_getnstimeofday(&ts_start);
         castle_perf_debug_getnstimeofday(&ts_end);
 
@@ -5461,7 +5460,6 @@ entry_done:
             return -ESHUTDOWN;
         if (ret != EXIT_SUCCESS)
             goto err_out;
-        /* don't bother serialising merge state anymore, the merge is nearly done */
     }
 
     /* Return success, if we are finished with the merge. */
@@ -6103,9 +6101,7 @@ static void castle_da_merge_perf_stats_flush_reset(struct castle_double_array *d
  * @note positioning of the call is crucial: it MUST be after iter state is updated,
  *       and before the output tree is updated.
  */
-static void castle_da_merge_serialise(struct castle_da_merge *merge,
-                                      int using_tvr,
-                                      int tvr_update_outct_now)
+static void castle_da_merge_serialise(struct castle_da_merge *merge)
 {
     int i;
     struct castle_double_array *da;
@@ -6194,16 +6190,10 @@ alloc_fail_1:
 
     if( unlikely(current_state == INVALID_DAM_SERDES) )
     {
-        int update_outct_now = 0;
-        if(using_tvr)
-            update_outct_now = tvr_update_outct_now;
-        else
-            update_outct_now = merge->is_new_key;
-
         mutex_lock(&merge->serdes.mutex);
         BUG_ON(!merge->serdes.mstore_entry);
 
-        if( update_outct_now )
+        if( merge->is_new_key )
         {
             /* update output tree state */
             castle_da_merge_marshall(merge->serdes.mstore_entry,
@@ -8965,8 +8955,8 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge)
 
     current_state = atomic_read(&merge->serdes.valid);
 
-    castle_printk(LOG_DEBUG, "%s::checkpointing merge on da %d, level %d\n",
-            __FUNCTION__, da->id, level);
+    castle_printk(LOG_DEVEL, "%s::[%p] checkpointing merge %u\n",
+            __FUNCTION__, merge, merge->id);
 
     /* writeback LOs */
     {
@@ -11075,11 +11065,18 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
     /* No more candidate trees available, callback now. */
     if (!err && !c_bvec->tree)
     {
-        if(get->resolve_timestamps && CVT_INVALID(cvt) && !CVT_INVALID(get->cvt))
+        //TODO@tr this needs to be tightened up considerably - need a careful review
+        //        of how big_get works!
+        if(get->resolve_timestamps &&
+           CVT_INVALID(cvt) &&
+           !CVT_INVALID(get->cvt) &&
+           !get->resolve_counters) //a hack to hopefully get big gets to do the right thing, TODO@tr unhack this!
         {
             /* If we had performed any timestamp resolution, we must have disabled
                counter resolution. */
-            BUG_ON(get->resolve_counters);
+
+            //TODO@tr tighten this up... with big_gets, the following BUG can be hit
+            //BUG_ON(get->resolve_counters);
             cvt = get->cvt;
         }
         goto complete;
