@@ -43,7 +43,7 @@ typedef struct castle_extent {
     atomic_t            link_cnt;
     /* This global mask gets updated after freeing resources. Checkpoint has to commit
      * this to mstore. */
-    c_ext_mask_range_t  chkpt_global_mask;
+    c_ext_mask_range_t  global_mask;
     struct list_head    mask_list;      /* List of all valid masks - latest first.      */
     struct list_head    schks_list;     /* List of partially used superchunks.          */
     c_res_pool_t       *pool;           /* Reservation pool that this extent tied to.*/

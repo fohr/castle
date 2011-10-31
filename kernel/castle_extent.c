@@ -111,7 +111,7 @@
         (_me)->curr_rebuild_seqno = (_ext)->curr_rebuild_seqno;             \
         (_me)->ext_type     = (_ext)->ext_type;                             \
         (_me)->cur_mask     = GET_LATEST_MASK(_ext)->range;                 \
-        (_me)->prev_mask    = (_ext)->chkpt_global_mask;                    \
+        (_me)->prev_mask    = (_ext)->global_mask;                          \
         (_me)->da_id        = (_ext)->da_id;
 
 #define FAULT_CODE EXTENT_FAULT
@@ -1272,7 +1272,7 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     ext->dirtytree->ext_size= 0;
     ext->dirtytree->ext_type= ext->ext_type;
 #endif
-    ext->chkpt_global_mask = EMPTY_MASK_RANGE;
+    ext->global_mask = EMPTY_MASK_RANGE;
 
     debug("Allocated extent ext_id=%lld.\n", ext->ext_id);
 
@@ -2800,7 +2800,7 @@ int castle_extent_space_alloc(c_ext_t *ext, c_da_t da_id, c_chk_cnt_t alloc_size
     max_map_page_idx = map_chks_per_page(ext->k_factor);
 
 retry:
-    start = ext->chkpt_global_mask.end;
+    start = ext->global_mask.end;
     map_cep = castle_extent_map_cep_get(ext->maps_cep, start, ext->k_factor);
     map_cep.offset = MASK_BLK_OFFSET(map_cep.offset);
     map_page_idx = start % max_map_page_idx;
@@ -3558,7 +3558,7 @@ uint32_t castle_extent_map_get(c_ext_id_t     ext_id,
         BUG();
     }
 
-    if ((offset < ext->chkpt_global_mask.start) || (offset >= ext->chkpt_global_mask.end))
+    if ((offset < ext->global_mask.start) || (offset >= ext->global_mask.end))
         return 0;
 
     __castle_extent_map_get(ext, offset, chk_map);
@@ -6509,20 +6509,20 @@ static int castle_extent_mask_create(c_ext_t            *ext,
      * Note:  Global mask gets updated by mask_create() and mask_destroy(). mask_create()
      * changes the global mask only in case of grow().
      */
-    if (MASK_RANGE_EMPTY(ext->chkpt_global_mask))
+    if (MASK_RANGE_EMPTY(ext->global_mask))
     {
-        ext->chkpt_global_mask = mask->range;
+        ext->global_mask = mask->range;
     }
     else
     {
-        if (ext->chkpt_global_mask.start > mask->range.start)
-            ext->chkpt_global_mask.start = mask->range.start;
+        if (ext->global_mask.start > mask->range.start)
+            ext->global_mask.start = mask->range.start;
 
-        if (ext->chkpt_global_mask.end < mask->range.end)
-            ext->chkpt_global_mask.end = mask->range.end;
+        if (ext->global_mask.end < mask->range.end)
+            ext->global_mask.end = mask->range.end;
     }
 
-    debug_mask("Updated global mask to " cemr_cstr "\n", cemr2str(ext->chkpt_global_mask));
+    debug_mask("Updated global mask to " cemr_cstr "\n", cemr2str(ext->global_mask));
 
     /* Release link references from previous mask. */
     if (!MASK_ID_INVAL(prev_mask_id))
@@ -6594,10 +6594,10 @@ static int castle_extent_mask_destroy(c_ext_mask_t *mask)
     if (ext_free)
         /* Last mask to be freed. */
         castle_extent_mask_reduce(ext, mask->range, EMPTY_MASK_RANGE,
-                                  &ext->chkpt_global_mask, 1);
+                                  &ext->global_mask, 1);
     else
         castle_extent_mask_reduce(ext, mask->range, GET_OLDEST_MASK(ext)->range,
-                                  &ext->chkpt_global_mask, 1);
+                                  &ext->global_mask, 1);
 
     if (ext_free)
         /* Free the extent resources. */
@@ -6907,7 +6907,7 @@ out:
 }
 
 static void castle_extent_mask_split(c_ext_mask_range_t   range,
-                                     c_ext_mask_range_t   seperator,
+                                     c_ext_mask_range_t   separator,
                                      c_ext_mask_range_t  *split1,
                                      c_ext_mask_range_t  *split2)
 {
@@ -6917,22 +6917,22 @@ static void castle_extent_mask_split(c_ext_mask_range_t   range,
     if (MASK_RANGE_EMPTY(range))
         return;
 
-    /* Get the first half before serperator, if any. */
-    if (range.start < seperator.start)
+    /* Get the first half before separator, if any. */
+    if (range.start < separator.start)
     {
         split1->start   = range.start;
-        split1->end     = (range.end < seperator.start)? range.end: seperator.start;
+        split1->end     = (range.end < separator.start)? range.end: separator.start;
     }
 
-    /* Get the second half after serperator, if any. */
-    if (range.end > seperator.end)
+    /* Get the second half after separator, if any. */
+    if (range.end > separator.end)
     {
-        split2->start   = (range.start > seperator.end)? range.start: seperator.end;
+        split2->start   = (range.start > separator.end)? range.start: separator.end;
         split2->end     = range.end;
     }
 
     debug_mask("Splitting " cemr_cstr " by " cemr_cstr " into " cemr_cstr " and " cemr_cstr "\n",
-                  cemr2str(range), cemr2str(seperator), cemr2str(*split1), cemr2str(*split2));
+                  cemr2str(range), cemr2str(separator), cemr2str(*split1), cemr2str(*split2));
 
 }
 
