@@ -2945,7 +2945,7 @@ c_ext_id_t castle_extent_alloc_sparse(c_rda_type_t             rda_type,
  * @param rda_type      [in]    RDA algorithm to be used.
  * @param da_id         [in]    Double-Array that this extent belongs to.
  * @param ext_type      [in]    Type of data, that will be stored in extent.
- * @param count         [in]    Size of extent (in chunks). Extent could occupy more space
+ * @param ext_size      [in]    Size of extent (in chunks). Extent could occupy more space
  *                              than this, depends on RDA algorithm and freespace algos.
  * @param in_tran       [in]    Already in the extent transaction.
  * @param data          [in]    Data to be used in event handler.

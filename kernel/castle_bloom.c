@@ -54,132 +54,141 @@ MODULE_PARM_DESC(castle_bloom_debug, "Verify bloom misses (for point gets)");
 /* the maximum number of chunks in a bloom filter for which we softpin */
 #define BLOOM_MAX_SOFTPIN_CHUNKS      (castle_cache_size_get() / (5 * BLOOM_CHUNK_SIZE_PAGES))
 
-#define LAST_CHUNK(_bf, _chunk_id)           (_chunk_id == _bf->num_chunks - 1)
-#define BLOCKS_IN_CHUNK(_bf, _chunk_id)      (LAST_CHUNK(_bf, _chunk_id) ? _bf->num_blocks_last_chunk : BLOOM_BLOCKS_PER_CHUNK(_bf))
-
-
 uint32_t opt_hashes_per_bit[] =
 { 0, 1, 2, 3, 3, 4, 5, 5, 6, 7, 7, 8, 9, 10, 10, 11, 12 };
 
 #define ceiling(_a, _b)         ((_a - 1) / _b + 1)
 
 /**
- * Initialize a bloom filter.  Call castle_bloom_add to add a key and
- * castle_bloom_complete when all keys are added.  Call castle_bloom_destory
- * to delete the bloom filter from disk.
+ * Initialise bloom filter by allocating build params structure and bloom extent.
  *
- * @param   bf      The Bloom filter to initialize
- * @param   da_id   The doubling array the bloom filter belongs to
+ * Keys are added via castle_bloom_add(), bloom filter is finalised with
+ * castle_bloom_complete() and cleaned up from disk with castle_bloom_destroy().
+ *
+ * @param   bf              The Bloom filter to initialize
+ * @param   da_id           The doubling array the bloom filter belongs to
+ * @param   btree_type      Btree type for bloom index (must be same as CT type)
  * @param   num_elements    Expected number of elements.  The actual number of elements added
  *                          can be less, but not more.
+ *
+ * @return -ENOSYS          Bloom filters disabled
+ * @return -ENOMEM          Failed to allocate bloom build params structure
+ * @return -ENOSPC          Failed to allocate bloom extent
+ *
+ * @also castle_bloom_add()
+ * @also castle_bloom_complete()
+ * @also castle_bloom_destroy()
  */
-int castle_bloom_create(castle_bloom_t *bf, c_da_t da_id, btree_t btree_type, uint64_t num_elements)
+int castle_bloom_create(castle_bloom_t *bf,
+                        c_da_t da_id,
+                        btree_t btree_type,
+                        uint64_t num_elements)
 {
+    struct castle_btree_type *btree = castle_btree_type_get(btree_type);
     uint32_t bits_per_element = BLOOM_BITS_PER_ELEMENT;
     uint32_t num_hashes = opt_hashes_per_bit[bits_per_element];
-    uint32_t num_blocks, blocks_remainder;
     uint64_t nodes_size, chunks_size, size;
-    int ret = 0;
     struct castle_bloom_build_params *bf_bp;
-    struct castle_btree_type *btree = castle_btree_type_get(btree_type);
+    int ret = 0;
 
-    BUG_ON(num_elements == 0);
+    /* Return immediately if bloom filters disabled. */
+    if (!castle_bloom_use)
+        return -ENOSYS;
 
     /* Double the bloom filter size estimate to allow for every key to have
      * distinct significant stripped dimensions. */
     num_elements *= 2;
+    BUG_ON(num_elements == 0);
 
-    if (!castle_bloom_use)
-        return -ENOSYS;
-
-    bf->private = castle_malloc(sizeof(struct castle_bloom_build_params), GFP_KERNEL);
+    /* Allocate structures for bloom filter build params. */
+    bf->private = castle_alloc(sizeof(struct castle_bloom_build_params));
     if (!bf->private)
     {
-        castle_printk(LOG_WARN, "Failed to alloc castle_bloom_t\n");
-        ret = -ENOMEM;
-        goto err0;
+        castle_printk(LOG_WARN, "%s: Failed to alloc bloom build params da=%d\n",
+                __FUNCTION__, da_id);
+        return -ENOMEM;
     }
     bf_bp = bf->private;
     memset(bf_bp, 0, sizeof(struct castle_bloom_build_params));
 
-    /* The given number of elements may be less so this is a maximum.
-     * bf->num_chunks is updated to the actual number in castle_bloom_complete */
+    /* Calculate maximum num_chunks based on num_elements.  This is updated to
+     * the actual number of used chunks in castle_bloom_complete(). */
     bf->num_chunks = ceiling(num_elements, BLOOM_ELEMENTS_PER_CHUNK);
 
-    /* This is incremented as new nodes are created... note that this is _non-empty_
-       nodes, so the increment is only done once something actually occupies the node. */
+    /* Incremented as a new btree node is used for the first time. */
     atomic_set(&bf->num_btree_nodes, 0);
 
+    /* Calculate space required by the bloom filter extent. */
     nodes_size = ceiling(ceiling(num_elements, BLOOM_ELEMENTS_PER_CHUNK),
-                         btree->max_entries(BLOOM_INDEX_NODE_SIZE_PAGES)) *
-                 BLOOM_INDEX_NODE_SIZE;
-
+            btree->max_entries(BLOOM_INDEX_NODE_SIZE_PAGES)) * BLOOM_INDEX_NODE_SIZE;
     chunks_size = bf->num_chunks * BLOOM_CHUNK_SIZE;
     size = nodes_size + chunks_size;
+    BUG_ON(size % C_CHK_SIZE); /* should be a whole number of chunks */
 
-    /* Try for SSD extent. If fails, go for DEFAULT_RDA */
-    /* No need to handle Low Free-Space situation. Dont use bloom filter, in case of LFS. */
-    bf->ext_id = castle_extent_alloc(SSD_ONLY_EXT, da_id, EXT_T_BLOOM_FILTER,
-                                     ceiling(size, C_CHK_SIZE), 0,
-                                     NULL, NULL);
-    castle_printk(LOG_DEBUG, "%s::making bf %p on ext %d\n", __FUNCTION__, bf, bf->ext_id);
-    if (EXT_ID_INVAL(bf->ext_id))
-    {
-        bf->block_size_pages = BLOOM_BLOCK_SIZE_HDD_PAGES;
-
-        /* No need to handle Low Free-Space situation. Dont use bloom filter, in case of LFS. */
-        bf->ext_id = castle_extent_alloc(castle_get_rda_lvl(), da_id, EXT_T_BLOOM_FILTER,
-                                         ceiling(size, C_CHK_SIZE), 0,
-                                         NULL, NULL);
-        if (EXT_ID_INVAL(bf->ext_id))
-        {
-            castle_printk(LOG_WARN, "Failed to create extent for bloom\n");
-            ret = -ENOSPC;
-            goto err1;
-        }
-    } else
+    /* Allocate btree extent.  Try and use an SSD first, falling back on HDD. */
+    bf->ext_id = castle_extent_alloc(SSD_ONLY_EXT,
+                                     da_id,
+                                     EXT_T_BLOOM_FILTER,
+                                     size / C_CHK_SIZE,
+                                     0, NULL, NULL);
+    if (!EXT_ID_INVAL(bf->ext_id))
+        /* Successfully allocated SSD extent. */
         bf->block_size_pages = BLOOM_BLOCK_SIZE_SSD_PAGES;
-#ifdef DEBUG
-    bf_bp->elements_inserted_per_block = castle_malloc(sizeof(uint32_t) * BLOOM_BLOCKS_PER_CHUNK(bf), GFP_KERNEL);
-#endif
-
-    bf_bp->max_num_elements = num_elements;
-    bf->num_hashes = num_hashes;
-    bf->chunks_offset = nodes_size;
-
-    num_blocks = ceiling(num_elements, BLOOM_ELEMENTS_PER_BLOCK(bf));
-    blocks_remainder = num_blocks % BLOOM_BLOCKS_PER_CHUNK(bf);
-
-    if (blocks_remainder == 0)
-        bf->num_blocks_last_chunk = BLOOM_BLOCKS_PER_CHUNK(bf);
     else
-        bf->num_blocks_last_chunk = blocks_remainder;
-    bf->btree = btree;
+    {
+        /* Failed to allocate SSD extent, try DEFAULT_RDA. */
+        bf->ext_id = castle_extent_alloc(castle_get_rda_lvl(),
+                                         da_id,
+                                         EXT_T_BLOOM_FILTER,
+                                         size / C_CHK_SIZE,
+                                         0, NULL, NULL);
+        if (!EXT_ID_INVAL(bf->ext_id))
+            /* Successfully allocated HDD extent. */
+            bf->block_size_pages = BLOOM_BLOCK_SIZE_HDD_PAGES;
+        else
+        {
+            /* Failed to allocate SSD and HDD extent.  We don't need to handle
+             * LFS here as we continue without a bloom filter. */
+            castle_printk(LOG_WARN, "%s: Failed to create bloom extent for da=%d\n",
+                    __FUNCTION__, da_id);
+            ret = -ENOSPC;
+            goto alloc_fail;
+        }
+    }
+    castle_printk(LOG_DEBUG, "%s: Allocated ext_id=%d for bf=%p bf_bp=%p\n",
+            __FUNCTION__, bf->ext_id, bf, bf_bp);
 
-    debug("%s: num_elements=%llu num_chunks=%u num_blocks=%u size=%llu "
-            "num_blocks_last_chunk=%u num_btree_nodes=%u blocks_remainder=%d "
-            "BLOOM_BLOCKS_PER_CHUNK(bf)=%d\n",
-            __FUNCTION__, num_elements, bf->num_chunks, num_blocks, size,
-            bf->num_blocks_last_chunk, atomic_read(&bf->num_btree_nodes),
-            blocks_remainder, BLOOM_BLOCKS_PER_CHUNK(bf));
-
-    bf_bp->node_cep.ext_id = bf->ext_id;
-    bf_bp->node_cep.offset = 0;
-
-    bf_bp->chunk_cep.ext_id = bf->ext_id;
-    bf_bp->chunk_cep.offset = bf->chunks_offset;
-
+    /* Finish initialising bloom filter structures. */
+    bf->num_hashes    = num_hashes;
+    bf->chunks_offset = nodes_size;
+    bf->btree         = btree;
 #ifdef CASTLE_BLOOM_FP_STATS
     atomic64_set(&bf->queries, 0);
     atomic64_set(&bf->false_positives, 0);
 #endif
 
+#ifdef DEBUG
+    bf_bp->elems_in_block = castle_alloc(sizeof(uint32_t)
+            * BLOOM_BLOCKS_PER_CHUNK(bf)); /* safe if this fails */
+#endif
+    bf_bp->max_num_elements = num_elements;
+    bf_bp->node_cep.ext_id  = bf->ext_id;
+    bf_bp->node_cep.offset  = 0;
+    bf_bp->chunk_cep.ext_id = bf->ext_id;
+    bf_bp->chunk_cep.offset = bf->chunks_offset;
+
+    castle_printk(LOG_DEBUG, "%s: bf=%p bf_bp=%p num_elements=%llu "
+            "num_chunks=%u size=%llu num_btree_nodes=%u "
+            "BLOOM_BLOCKS_PER_CHUNK(bf)=%d\n",
+            __FUNCTION__, bf, bf_bp, num_elements, bf->num_chunks, size,
+            atomic_read(&bf->num_btree_nodes), BLOOM_BLOCKS_PER_CHUNK(bf));
+
     return 0;
 
-err1:
-    castle_kfree(bf->private);
+alloc_fail:
+    castle_free(bf->private);
     bf->private = NULL;
-err0: return ret;
+    return ret;
 }
 
 static void castle_bloom_node_buffer_init(struct castle_btree_type *btree,
@@ -263,16 +272,24 @@ static void castle_bloom_complete_chunk(castle_bloom_t *bf)
     BUG_ON(bf_bp->chunk_c2b == NULL);
 
 #ifdef DEBUG
-    for (block = 0; block < bf_bp->cur_chunk_num_blocks; block++)
+    if (likely(bf_bp->elems_in_block))
     {
-        bits_set = 0;
-        for (bit = 0; bit < BLOOM_BLOCK_SIZE_BITS(bf); bit++)
-            if (test_bit(bit + block * BLOOM_BLOCK_SIZE_BITS(bf), bf_bp->cur_chunk_buffer))
-                bits_set++;
-        debug("Chunk %u block %u has %u/%u bits set, %u values.\n", bf_bp->chunks_complete,
-                block, bits_set, BLOOM_BLOCK_SIZE_BITS(bf), bf_bp->elements_inserted_per_block[block]);
-        /* reset for the next chunk */
-        bf_bp->elements_inserted_per_block[block] = 0;
+        for (block = 0; block < BLOOM_BLOCKS_PER_CHUNK(bf); block++)
+        {
+            bits_set = 0;
+            for (bit = 0; bit < BLOOM_BLOCK_SIZE_BITS(bf); bit++)
+                if (test_bit(bit + block * BLOOM_BLOCK_SIZE_BITS(bf),
+                            bf_bp->cur_chunk_buffer))
+                    bits_set++;
+            castle_printk(LOG_DEBUG, "%s: Chunk=%u block=%u has %u/%u bits set,"
+                    " %u values.\n",
+                    __FUNCTION__, bf_bp->chunks_complete, block, bits_set,
+                    BLOOM_BLOCK_SIZE_BITS(bf),
+                    bf_bp->elems_in_block[block]);
+
+            /* Reset elems_in_block for next chunk. */
+            bf_bp->elems_in_block[block] = 0;
+        }
     }
 #endif
 
@@ -300,21 +317,20 @@ static void castle_bloom_next_chunk(castle_bloom_t *bf)
     if (bf_bp->chunk_c2b != NULL)
         castle_bloom_complete_chunk(bf);
 
-    bf_bp->cur_chunk_num_blocks = BLOCKS_IN_CHUNK(bf, bf_bp->chunks_complete);
-
-    bf_bp->chunk_c2b = castle_cache_block_get(bf_bp->chunk_cep, bf_bp->cur_chunk_num_blocks * bf->block_size_pages);
-
-    castle_printk(LOG_DEBUG, "%s::new chunk at " cep_fmt_str" for bf %p "
-            "cur_chunk_num_blocks=%d chunks_complete=%d.\n",
-            __FUNCTION__, cep2str(bf_bp->chunk_c2b->cep), bf,
-            bf_bp->cur_chunk_num_blocks, bf_bp->chunks_complete);
-
+    bf_bp->chunk_c2b = castle_cache_block_get(bf_bp->chunk_cep,
+                                              BLOOM_BLOCKS_PER_CHUNK(bf)
+                                                    * bf->block_size_pages);
     write_lock_c2b(bf_bp->chunk_c2b);
     if (bf->num_chunks <= BLOOM_MAX_SOFTPIN_CHUNKS)
         castle_cache_block_softpin(bf_bp->chunk_c2b);
     update_c2b(bf_bp->chunk_c2b);
     bf_bp->cur_chunk_buffer = c2b_buffer(bf_bp->chunk_c2b);
-    memset(bf_bp->cur_chunk_buffer, 0, bf_bp->cur_chunk_num_blocks * BLOOM_BLOCK_SIZE(bf));
+    memset(bf_bp->cur_chunk_buffer, 0, BLOOM_CHUNK_SIZE);
+
+    castle_printk(LOG_DEBUG, "%s: New chunk at " cep_fmt_str" for bf=%p "
+            "BLOOM_BLOCKS_PER_CHUNK(bf)=%d chunks_complete=%d.\n",
+            __FUNCTION__, cep2str(bf_bp->chunk_c2b->cep), bf,
+            BLOOM_BLOCKS_PER_CHUNK(bf), bf_bp->chunks_complete);
 }
 
 typedef enum {
@@ -387,28 +403,16 @@ void castle_bloom_complete(castle_bloom_t *bf)
     castle_bloom_complete_chunk(bf);
 
 #ifdef DEBUG
-    castle_kfree(bf_bp->elements_inserted_per_block);
+    if (likely(bf_bp->elems_in_block))
+        castle_free(bf_bp->elems_in_block);
 #endif
-    castle_kfree(bf->private);
+    castle_free(bf->private);
     bf->private = NULL;
 
-    /* set number of chunks to actual number */
-    debug("%s: bf=%p actual num_chunks was %u, expected was %u.\n",
-            __FUNCTION__, bf, bf_bp->chunks_complete, bf->num_chunks);
-    if (bf->num_chunks != bf_bp->chunks_complete)
-    {
-        /* If we overestimated the number of chunks required, we truncate that
-         * estimate here, by settings num_chunks equal to the number of chunks
-         * actually used.  In this case the actual final chunk will have been
-         * built with BLOOM_BLOCKS_PER_CHUNK blocks, not num_blocks_last_chunk
-         * as per the bloom filter.  We handle this here by massaging
-         * num_blocks_last_chunk to be what we expect to see.
-         * @TODO Remove variable number of blocks in last chunk. */
-        bf->num_chunks = bf_bp->chunks_complete;
-        bf->num_blocks_last_chunk = BLOOM_BLOCKS_PER_CHUNK(bf);
-        debug("%s: bf=%p num_chunks=%d num_blocks_last_chunk=%d\n",
-                __FUNCTION__, bf, bf->num_chunks, bf->num_blocks_last_chunk);
-    }
+    /* Update num_chunks to the number of chunks used. */
+    castle_printk(LOG_DEBUG, "%s: bf=%p num_chunks=%u chunks_complete=%u\n",
+            __FUNCTION__, bf, bf->num_chunks, bf_bp->chunks_complete);
+    bf->num_chunks = bf_bp->chunks_complete;
 }
 
 /**
@@ -435,9 +439,10 @@ void castle_bloom_abort(castle_bloom_t *bf)
     }
 
 #ifdef DEBUG
-    castle_kfree(bf_bp->elements_inserted_per_block);
+    if (likely(bf_bp->elems_in_block))
+        castle_free(bf_bp->elems_in_block);
 #endif
-    castle_kfree(bf->private);
+    castle_free(bf->private);
     bf->private = NULL;
 }
 
@@ -491,10 +496,11 @@ static inline void castle_bloom_bits_set(castle_bloom_t *bf,
     block_id   = castle_bloom_get_block_id(bf,
                                            key,
                                            hash_type,
-                                           bf_bp->cur_chunk_num_blocks);
+                                           BLOOM_BLOCKS_PER_CHUNK(bf));
     bit_offset = block_id * BLOOM_BLOCK_SIZE_BITS(bf);
 #ifdef DEBUG
-    bf_bp->elements_inserted_per_block[block_id]++;
+    if (likely(bf_bp->elems_in_block))
+        bf_bp->elems_in_block[block_id]++;
 #endif
 
     for (i = 0; i < bf->num_hashes; i++)
@@ -775,7 +781,7 @@ static int castle_bloom_block_read(c_bloom_lookup_t *bl, int chunk_id)
     block_id   = castle_bloom_get_block_id(bf,
                                            bl->key,
                                            bl->hash_type,
-                                           BLOCKS_IN_CHUNK(bf, chunk_id));
+                                           BLOOM_BLOCKS_PER_CHUNK(bf));
     cep.ext_id = bf->ext_id;
     cep.offset = bf->chunks_offset
                     + chunk_id * BLOOM_CHUNK_SIZE
@@ -1055,7 +1061,6 @@ void castle_bloom_marshall(castle_bloom_t *bf, struct castle_clist_entry *ctm)
     ctm->bloom_num_hashes            = bf->num_hashes;
     ctm->bloom_block_size_pages      = bf->block_size_pages;
     ctm->bloom_num_chunks            = bf->num_chunks;
-    ctm->bloom_num_blocks_last_chunk = bf->num_blocks_last_chunk;
     ctm->bloom_chunks_offset         = bf->chunks_offset;
     ctm->bloom_num_btree_nodes       = atomic_read(&bf->num_btree_nodes);
     ctm->bloom_ext_id                = bf->ext_id;
@@ -1072,14 +1077,17 @@ void castle_bloom_unmarshall(castle_bloom_t *bf, struct castle_clist_entry *ctm)
     bf->num_hashes            = ctm->bloom_num_hashes;
     bf->block_size_pages      = ctm->bloom_block_size_pages;
     bf->num_chunks            = ctm->bloom_num_chunks;
-    bf->num_blocks_last_chunk = ctm->bloom_num_blocks_last_chunk;
     bf->chunks_offset         = ctm->bloom_chunks_offset;
     bf->btree                 = castle_btree_type_get(ctm->btree_type);
     bf->ext_id                = ctm->bloom_ext_id;
     atomic_set(&bf->num_btree_nodes, ctm->bloom_num_btree_nodes);
 
-    castle_printk(LOG_DEBUG, "castle_bloom_unmarshall ext_id=%llu num_chunks=%u num_blocks_last_chunk=%u chunks_offset=%llu num_btree_nodes=%u\n",
-                bf->ext_id, bf->num_chunks, bf->num_blocks_last_chunk, bf->chunks_offset, atomic_read(&bf->num_btree_nodes));
+    castle_printk(LOG_DEBUG, "%s: bf=%p ext_id=%llu num_chunks=%u "
+            "chunks_offset=%llu num_btree_nodes=%u "
+            "bf->num_chunks<=BLOOM_MAX_SOFTPIN_CHUNKS=%d\n",
+            __FUNCTION__, bf, bf->ext_id, bf->num_chunks,
+            bf->chunks_offset, atomic_read(&bf->num_btree_nodes),
+            bf->num_chunks <= BLOOM_MAX_SOFTPIN_CHUNKS);
 
     castle_extent_mark_live(bf->ext_id, ctm->da_id);
 
@@ -1112,7 +1120,6 @@ void castle_bloom_build_param_marshall(struct castle_bbp_entry *bbpm,
     bbpm->elements_inserted     = bf_bp->elements_inserted;
     bbpm->chunks_complete       = bf_bp->chunks_complete;
     bbpm->cur_node_cur_chunk_id = bf_bp->cur_node_cur_chunk_id;
-    bbpm->cur_chunk_num_blocks  = bf_bp->cur_chunk_num_blocks;
     bbpm->nodes_complete        = bf_bp->nodes_complete;
     bbpm->last_stripped_hash    = bf_bp->last_stripped_hash;
 
@@ -1166,7 +1173,6 @@ void castle_bloom_build_param_unmarshall(castle_bloom_t *bf, struct castle_bbp_e
     bf_bp->elements_inserted     = bbpm->elements_inserted;
     bf_bp->chunks_complete       = bbpm->chunks_complete;
     bf_bp->cur_node_cur_chunk_id = bbpm->cur_node_cur_chunk_id;
-    bf_bp->cur_chunk_num_blocks  = bbpm->cur_chunk_num_blocks;
     bf_bp->nodes_complete        = bbpm->nodes_complete;
     bf_bp->last_stripped_hash    = bbpm->last_stripped_hash;
 
@@ -1212,7 +1218,9 @@ void castle_bloom_build_param_unmarshall(castle_bloom_t *bf, struct castle_bbp_e
     if(bbpm->chunk_avail)
     {
         BUG_ON(EXT_POS_INVAL(bf_bp->chunk_cep));
-        bf_bp->chunk_c2b = castle_cache_block_get(bf_bp->chunk_cep, bf_bp->cur_chunk_num_blocks * bf->block_size_pages);
+        bf_bp->chunk_c2b = castle_cache_block_get(bf_bp->chunk_cep,
+                                                  BLOOM_BLOCKS_PER_CHUNK(bf)
+                                                        * bf->block_size_pages);
         write_lock_c2b(bf_bp->chunk_c2b);
         if(!c2b_uptodate(bf_bp->chunk_c2b))
             BUG_ON(submit_c2b_sync(READ, bf_bp->chunk_c2b));

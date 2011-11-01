@@ -22,14 +22,13 @@ struct castle_bloom_build_params
     void                       *cur_chunk_buffer;
     c2_block_t                 *chunk_c2b;
     c_ext_pos_t                 chunk_cep;
-    uint32_t                    cur_chunk_num_blocks;
     uint32_t                    nodes_complete;
 
-    uint32_t                    last_stripped_hash;         /**< Hash of last stripped key, see
-                                                                 @also castle_bloom_add().      */
-
+    uint32_t                    last_stripped_hash;     /**< Hash of last stripped key, see
+                                                             @also castle_bloom_add().          */
 #ifdef DEBUG
-    uint32_t                   *elements_inserted_per_block;
+    uint32_t                   *elems_in_block;         /**< Key hashes per block in the
+                                                             current chunk.                     */
 #endif
 };
 

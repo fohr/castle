@@ -982,19 +982,32 @@ struct castle_btree_type {
 #endif
 };
 
+/**
+ * Structure used during creation and query of bloom filter.
+ *
+ * Bloom filter extent is laid out such that the btree nodes are at the start
+ * of the extent and the bloom filter chunks (part that contains key hashes) are
+ * following the btree nodes (at chunks_offset).  Chunks and btree nodes are not
+ * guaranteed to be totally contiguous as during construction we may have
+ * overestimated the number of btree nodes required hence some extent space goes
+ * unused.
+ *
+ * @also castle_bloom_create()
+ * @also castle_bloom_add()
+ */
 typedef struct castle_bloom_filter {
-    uint8_t                   num_hashes;
-    uint32_t                  block_size_pages;
-    uint32_t                  num_chunks;
-    uint32_t                  num_blocks_last_chunk;
-    uint64_t                  chunks_offset;
-    atomic_t                  num_btree_nodes;
-    struct castle_btree_type *btree;
-    c_ext_id_t                ext_id;
-    void                     *private; /* used for builds */
+    uint8_t                   num_hashes;           /**< Hashes per key in the bloom block.     */
+    uint32_t                  block_size_pages;     /**< Pages per bloom block in bloom chunks. */
+    uint32_t                  num_chunks;           /**< Number of bloom chunks in filter.      */
+    uint64_t                  chunks_offset;        /**< Offset of first chunk in bloom extent. */
+    atomic_t                  num_btree_nodes;      /**< Non-empty btree nodes in bloom filter. */
+    struct castle_btree_type *btree;                /**< Bloom index btree type.                */
+    c_ext_id_t                ext_id;               /**< Bloom filter extent id.                */
+    void                     *private;              /**< Construction only; pointer to
+                                                         castle_bloom_build_params structure.   */
 #ifdef CASTLE_BLOOM_FP_STATS
-    atomic64_t                queries;
-    atomic64_t                false_positives;
+    atomic64_t                queries;              /**< Queries handled.                       */
+    atomic64_t                false_positives;      /**< False positive count.                  */
 #endif
 } castle_bloom_t;
 
@@ -1005,15 +1018,14 @@ struct castle_bbp_entry
     /*          8 */ uint64_t    elements_inserted;
     /*         16 */ uint32_t    chunks_complete;
     /*         20 */ uint32_t    cur_node_cur_chunk_id;
-    /*         24 */ uint32_t    cur_chunk_num_blocks;
-    /*         28 */ uint32_t    nodes_complete;
-    /*         32 */ c_ext_pos_t node_cep;
-    /*         48 */ c_ext_pos_t chunk_cep;
-    /*         64 */ uint32_t    node_used;   /* for entries_drop */
-    /*         68 */ uint8_t     node_avail;  /* flag to indicate if we should recover node */
-    /*         69 */ uint8_t     chunk_avail; /* flag to indicate if we should recover chunk */
-    /*         70 */ uint32_t    last_stripped_hash;
-    /*         74 */
+    /*         24 */ uint32_t    nodes_complete;
+    /*         28 */ c_ext_pos_t node_cep;
+    /*         44 */ c_ext_pos_t chunk_cep;
+    /*         60 */ uint32_t    node_used;   /* for entries_drop */
+    /*         64 */ uint8_t     node_avail;  /* flag to indicate if we should recover node */
+    /*         65 */ uint8_t     chunk_avail; /* flag to indicate if we should recover chunk */
+    /*         66 */ uint32_t    last_stripped_hash;
+    /*         70 */
 } PACKED;
 
 /* Component tree flags bits. */
@@ -1236,34 +1248,34 @@ struct castle_dmserlist_entry {
     /*        864 */
     /*        864 */ c_ext_pos_t                      last_leaf_node_cep;
     /*        880 */ struct castle_bbp_entry          out_tree_bbp;
-    /*        954 */ uint8_t                          have_bbp;
-    /*        955 */ btree_t                          btree_type;
-    /*        956 */ int32_t                          root_depth;
-    /*        960 */ int8_t                           completing;
-    /*        961 */ int8_t                           is_new_key;
-    /*        962 */ uint32_t                         skipped_count;
+    /*        950 */ uint8_t                          have_bbp;
+    /*        951 */ btree_t                          btree_type;
+    /*        952 */ int32_t                          root_depth;
+    /*        956 */ int8_t                           completing;
+    /*        957 */ int8_t                           is_new_key;
+    /*        958 */ uint32_t                         skipped_count;
                      /* Although the redirection partition is contained by the castle_double_array
                         struct, SERDES is left to merge because the partition is tighly linked to
                         merge SERDES state. */
-    /*        966 */ c_ext_pos_t                      redirection_partition_node_cep;
-    /*        982 */ int32_t                          redirection_partition_node_size;
-    /*        986 */ uint64_t                         growth_control_tree_ext_used_bytes;
-    /*        994 */ uint64_t                         growth_control_data_ext_used_bytes;
-    /*       1002 */ uint8_t                          pad_to_iters[6];  /**< beyond here entries are
+    /*        962 */ c_ext_pos_t                      redirection_partition_node_cep;
+    /*        978 */ int32_t                          redirection_partition_node_size;
+    /*        982 */ uint64_t                         growth_control_tree_ext_used_bytes;
+    /*        990 */ uint64_t                         growth_control_data_ext_used_bytes;
+    /*        998 */ uint8_t                          pad_to_iters[6];  /**< beyond here entries are
                                                                            frequently marshalled, so
                                                                            alignment is important */
     /*         */
 
     /**************** input ct seq and iters: iters potentially marshalled often *****************/
-    /*       1008 */ int32_t                          iter_err;
-    /*       1012 */ int64_t                          iter_non_empty_cnt;
-    /*       1020 */ uint64_t                         iter_src_items_completed;
-    /*       1028 */ c_merge_id_t                     merge_id;
-    /*       1032 */ uint32_t                         nr_drain_exts;
-    /*       1036 */ uint32_t                         pool_id;
-    /*       1040 */
+    /*       1004 */ int32_t                          iter_err;
+    /*       1008 */ int64_t                          iter_non_empty_cnt;
+    /*       1016 */ uint64_t                         iter_src_items_completed;
+    /*       1022 */ c_merge_id_t                     merge_id;
+    /*       1028 */ uint32_t                         nr_drain_exts;
+    /*       1032 */ uint32_t                         pool_id;
+    /*       1036 */
 } PACKED;
-#define SIZEOF_CASTLE_DMSERLIST_ENTRY (1040)
+#define SIZEOF_CASTLE_DMSERLIST_ENTRY (1036)
 
 /**
  * Ondisk Serialized structure for castle versions.
