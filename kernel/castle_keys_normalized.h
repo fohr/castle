@@ -66,6 +66,10 @@ enum {
 /* includes all the above */
 #define NORM_KEY_SPECIAL(key) ((key)->length == 0 || (key)->length > NORM_KEY_LENGTH_LARGE)
 
+/**
+ * Return the space (in bytes) that a normalized keys occupies in memory.
+ * @param key       the key in question
+ */
 inline static size_t castle_norm_key_size(const struct castle_norm_key *key)
 {
     return NORM_KEY_SPECIAL(key) ? 2 :

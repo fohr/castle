@@ -625,7 +625,7 @@ static struct castle_norm_key *castle_norm_key_dim_inc(struct castle_norm_key *k
 }
 
 /**
- * Create the "next" key of a given key.
+ * Create the "next" key of a given normalized key.
  * @param src       the key to use for creating the next one
  * @param dst       the destination buffer to operate on, if any
  * @param dst_len   the size of the destination buffer, if any
@@ -646,6 +646,17 @@ struct castle_norm_key *castle_norm_key_next(const struct castle_norm_key *src,
     return castle_norm_key_dim_inc(dst, n_dim-1);
 }
 
+/**
+ * Strip a few dimensions off a normalized key.
+ * @param src       the key to strip
+ * @param dst       the destination buffer to operate on, if any
+ * @param dst_len   the size of the destination buffer, if any
+ * @param n_keep    how many dimensions of the key to keep when stripping it
+ *
+ * The resulting key does not actually consist of fewer dimensions; instead what happens
+ * is that the "stripped" dimensions are replaced with minus infinities, so that the
+ * stripped key will compare less than the corresponding non-stripped ones.
+ */
 struct castle_norm_key *castle_norm_key_strip(const struct castle_norm_key *src,
                                               struct castle_norm_key *dst,
                                               size_t *dst_len,
@@ -677,6 +688,17 @@ struct castle_norm_key *castle_norm_key_strip(const struct castle_norm_key *src,
     return dst;
 }
 
+/**
+ * Meld two normalized keys into one.
+ * @param a         the key which will be used for the first part of the resulting key
+ * @param b         the key which will be used for the second part of the resulting key
+ * @param meld_point the number of dimensions to use from key a
+ *
+ * The resulting key is constructed by taking some dimensions from key a, up to
+ * meld_point, and then by taking the rest of its dimensions from b (by skipping its first
+ * meld_point ones). The resulting key is stored in a freshly-allocated buffer, which the
+ * caller is then responsible for freeing.
+ */
 static struct castle_norm_key *castle_norm_key_meld(const struct castle_norm_key *a,
                                                     const struct castle_norm_key *b,
                                                     unsigned int meld_point)
@@ -723,6 +745,18 @@ static struct castle_norm_key *castle_norm_key_meld(const struct castle_norm_key
     return result;
 }
 
+/**
+ * Produce a "next" key suitable for a hypercube-style range query.
+ * @param key       the key to use as the basis for the "next" key
+ * @param low       the lower bound of the hypercube
+ * @param high      the upper bound of the hypercube
+ *
+ * This function constructs a key which can be used as a basis for comparison to find the
+ * next keys which still fall within the hypercube defined by low and high. On the other
+ * hand, if key itself falls within the bounds of the hypercube, it simply returns that.
+ * Finally, if the provided key is beyond the upper bound of the hypercube, the function
+ * returns high to signify that.
+ */
 struct castle_norm_key *castle_norm_key_hypercube_next(const struct castle_norm_key *key,
                                                        const struct castle_norm_key *low,
                                                        const struct castle_norm_key *high)

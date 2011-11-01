@@ -19,26 +19,46 @@ static const struct castle_norm_key SLIM_MIN_KEY   = { .length = NORM_KEY_LENGTH
 static const struct castle_norm_key SLIM_MAX_KEY   = { .length = NORM_KEY_LENGTH_MAX_KEY };
 static const struct castle_norm_key SLIM_INVAL_KEY = { .length = NORM_KEY_LENGTH_INVAL_KEY };
 
+/**
+ * Construct a slim tree key.
+ * @see castle_norm_key_pack
+ */
 inline static void *castle_slim_key_pack(const c_vl_bkey_t *src, void *dst, size_t *dst_len)
 {
     return castle_norm_key_pack(src, dst, dst_len);
 }
 
+/**
+ * Deconstruct a slim tree key into the standard key structure.
+ * @see castle_norm_key_unpack
+ */
 inline static c_vl_bkey_t *castle_slim_key_unpack(const void *src, c_vl_bkey_t *dst, size_t *dst_len)
 {
     return castle_norm_key_unpack(src, dst, dst_len);
 }
 
+/**
+ * Compare two slim tree keys.
+ * @see castle_norm_key_compare
+ */
 inline static int castle_slim_key_compare(const void *a, const void *b)
 {
     return castle_norm_key_compare(a, b);
 }
 
+/**
+ * Return the space (in bytes) that a slim tree key occupies in memory.
+ * @see castle_norm_key_size
+ */
 inline static size_t castle_slim_key_size(const void *key)
 {
     return castle_norm_key_size(key);
 }
 
+/**
+ * Copy a slim tree key.
+ * @see castle_norm_key_copy
+ */
 static void* castle_slim_key_copy(const void *src, void *dst, size_t *dst_len)
 {
     const struct castle_norm_key *key = src;
@@ -60,6 +80,10 @@ static void* castle_slim_key_copy(const void *src, void *dst, size_t *dst_len)
     return castle_norm_key_copy(src, dst, dst_len);
 }
 
+/**
+ * Create the "next" key of a given slim tree key.
+ * @see castle_norm_key_next
+ */
 static void* castle_slim_key_next(const void *src, void *dst, size_t *dst_len)
 {
     const struct castle_norm_key *key = src;
@@ -76,11 +100,19 @@ static void* castle_slim_key_next(const void *src, void *dst, size_t *dst_len)
     return castle_norm_key_next(src, dst, dst_len);
 }
 
+/**
+ * Produce a "next" key suitable for a hypercube-style range query.
+ * @see castle_norm_key_hypercube_next
+ */
 inline static void *castle_slim_key_hc_next(const void *key, const void *low, const void *high)
 {
     return castle_norm_key_hypercube_next(key, low, high);
 }
 
+/**
+ * Deallocate a slim tree key.
+ * @see castle_norm_key_free
+ */
 static void castle_slim_key_dealloc(void *keyv)
 {
     struct castle_norm_key *key = keyv;
@@ -96,17 +128,29 @@ static void castle_slim_key_dealloc(void *keyv)
     castle_norm_key_free(key);
 }
 
+/**
+ * Return the number of dimensions of a slim tree key.
+ * @see castle_norm_key_nr_dims
+ */
 static int castle_slim_key_nr_dims(const void *keyv)
 {
     const struct castle_norm_key *key = keyv;
     return NORM_KEY_SPECIAL(key) ? 0 : castle_norm_key_nr_dims(key);
 }
 
+/**
+ * Strip a few dimensions off a slim tree key.
+ * @see castle_norm_key_strip
+ */
 static void *castle_slim_key_strip(const void *src, void *dst, size_t *dst_len, int nr_dims)
 {
     return castle_norm_key_strip(src, dst, dst_len, nr_dims);
 }
 
+/**
+ * Hash a slim tree key.
+ * @see castle_norm_key_hash
+ */
 inline static uint32_t castle_slim_key_hash(const void *key,
                                             c_btree_hash_enum_t type,
                                             uint32_t seed)
@@ -114,6 +158,10 @@ inline static uint32_t castle_slim_key_hash(const void *key,
     return castle_norm_key_hash(key, type, seed);
 }
 
+/**
+ * Print a slim tree key.
+ * @see castle_norm_key_print
+ */
 static void castle_slim_key_print(int level, const void *key)
 {
     castle_norm_key_print(level, key);
@@ -191,6 +239,10 @@ struct slim_extern_val {
 #define LEAF_ENTRY_EXTERN_VAL_END(val)   ((char *) (val) + sizeof(struct slim_extern_val))
 #define LEAF_ENTRY_HAS_TIMESTAMP(entry)  ((entry)->flags & LEAF_ENTRY_TIMESTAMP_FLAG)
 
+/**
+ * Calculate the size of a leaf entry of the slim tree.
+ * @param entry     the entry to calculate the size of
+ */
 static size_t leaf_entry_size(const struct slim_leaf_entry *entry)
 {
     size_t size = LEAF_ENTRY_BASE_SIZE(&entry->key);
@@ -209,6 +261,11 @@ static size_t leaf_entry_size(const struct slim_leaf_entry *entry)
     return size;
 }
 
+/**
+ * Read the value of the timestamp of a leaf entry.
+ * @param pos       the byte position where the timestamp starts; on return it points just
+ *                  after the timestamp
+ */
 inline static castle_user_timestamp_t leaf_entry_timestamp_get(const void **pos)
 {
     castle_user_timestamp_t timestamp = *((const castle_user_timestamp_t *) *pos);
@@ -216,6 +273,12 @@ inline static castle_user_timestamp_t leaf_entry_timestamp_get(const void **pos)
     return timestamp;
 }
 
+/**
+ * Write the value of the timestamp of a leaf entry.
+ * @param pos       the byte position where the timestamp starts; on return it points just
+ *                  after the timestamp
+ * @param timestamp the timestamp value to write
+ */
 inline static void leaf_entry_timestamp_put(void **pos, castle_user_timestamp_t timestamp)
 {
     *((castle_user_timestamp_t *) *pos) = timestamp;
@@ -243,6 +306,10 @@ struct slim_intern_entry {
 #define INTERN_ENTRY_BASE_SIZE(key)      (sizeof(struct slim_intern_entry) - sizeof *(key) + \
                                           castle_norm_key_size(key))
 
+/**
+ * Calculate the size of an internal (i.e., non-leaf) entry of the slim tree.
+ * @param entry     the entry to calculate the size of
+ */
 static size_t intern_entry_size(const struct slim_intern_entry *entry)
 {
     return INTERN_ENTRY_BASE_SIZE(&entry->key);
@@ -273,6 +340,10 @@ struct slim_header {
  * Extent array manipulation for internal nodes.
  */
 
+/**
+ * Initialize the extents array of internal nodes of the slim tree.
+ * @param header    pointer to the node's header structure
+ */
 static void intern_entry_extents_init(struct slim_header *header)
 {
     int i;
@@ -283,6 +354,11 @@ static void intern_entry_extents_init(struct slim_header *header)
     }
 }
 
+/**
+ * Locate the position of the extents array with the extent ID for the given index.
+ * @param header    pointer to the node's header structure
+ * @param idx       the index for which to locate the position
+ */
 static int intern_entry_extent_locate(struct slim_header *header, int idx)
 {
     int i, sum;
@@ -292,12 +368,23 @@ static int intern_entry_extent_locate(struct slim_header *header, int idx)
     return i;
 }
 
+/**
+ * Return the extent ID stored in the extents array for a given index.
+ * @param header    pointer to the node's header structure
+ * @param idx       the index for which to return the extent ID
+ */
 static c_ext_id_t intern_entry_extent_get(struct slim_header *header, int idx)
 {
     int i = intern_entry_extent_locate(header, idx);
     return header->extent_ids[i];
 }
 
+/**
+ * Add an extent ID to the extents array.
+ * @param header    pointer to the node's header structure
+ * @param idx       the index for which to store the extent ID
+ * @param id        the extent ID to store
+ */
 static void intern_entry_extent_add(struct slim_header *header, int idx, c_ext_id_t id)
 {
     int i = intern_entry_extent_locate(header, idx);
@@ -316,6 +403,12 @@ static void intern_entry_extent_add(struct slim_header *header, int idx, c_ext_i
     else ++header->extent_entries[i];
 }
 
+/**
+ * Drop the extent IDs from the extents array for a range of indexes.
+ * @param header    pointer to the node's header structure
+ * @param low       the lower bound of the indexes to drop (inclusive)
+ * @param high      the upper bound of the indexes to drop (inclusive)
+ */
 static void intern_entry_extents_drop(struct slim_header *header, int low, int high)
 {
     int i = intern_entry_extent_locate(header, low);
@@ -349,12 +442,21 @@ static void intern_entry_extents_drop(struct slim_header *header, int low, int h
 #define NODE_LEAF_ENTRY_PTR(node, i)     ((struct slim_leaf_entry *) NODE_ENTRY_PTR(node, i))
 #define NODE_INTERN_ENTRY_PTR(node, i)   ((struct slim_intern_entry *) NODE_ENTRY_PTR(node, i))
 
+/**
+ * Calculate a conservative estimate of the max number of entries which can fit in a node.
+ * @param size      the size of the node, in pages
+ */
 static size_t castle_slim_max_entries(size_t size)
 {
     return (size * C_BLK_SIZE - sizeof(struct castle_btree_node) - sizeof(struct slim_header))
         / LEAF_ENTRY_MAX_SIZE;
 }
 
+/**
+ * Decide whether a node of the slim tree needs to be split.
+ * @param node      pointer to the node
+ * @param split_type the type of split to check for
+ */
 static int castle_slim_need_split(struct castle_btree_node *node, int split_type)
 {
     struct slim_header *header = SLIM_HEADER_PTR(node);
@@ -376,6 +478,15 @@ static int castle_slim_need_split(struct castle_btree_node *node, int split_type
     }
 }
 
+/**
+ * Get an entry of a slim tree node.
+ * @param node      pointer to the node
+ * @param idx       the index of the entry to get
+ * @param key       pointer to the location where to store a pointer to the key, if any
+ * @param version   pointer to the location where to store the version, if any
+ * @param cvt       pointer to the location where to store the value, if any
+ * @return          whether the entry is disabled
+ */
 static int castle_slim_entry_get(struct castle_btree_node *node, int idx,
                                  void **key, c_ver_t *version, c_val_tup_t *cvt)
 {
@@ -439,6 +550,17 @@ static int castle_slim_entry_get(struct castle_btree_node *node, int idx,
     }
 }
 
+/**
+ * Predict the size of a slim tree entry.
+ * @param key       the key to be stored in the entry
+ * @param cvt       the value to be stored in the entry
+ * @param leaf      a flag stating whether this is a leaf entry
+ * @param timestamp a flag stating whether the entry has a timestamp
+ *
+ * This function calculates the space in bytes that a given entry will occupy inside a
+ * slim tree node by examining the data which will go into it; there is no need to
+ * construct the entry itself in order to do so.
+ */
 static size_t castle_slim_entry_size_predict(const struct castle_norm_key *key,
                                              c_val_tup_t cvt, int leaf, int timestamp)
 {
@@ -452,6 +574,13 @@ static size_t castle_slim_entry_size_predict(const struct castle_norm_key *key,
         return INTERN_ENTRY_BASE_SIZE(key);
 }
 
+/**
+ * Calculate the size of a slim tree entry.
+ * @param node      pointer to the node in which the entry resides
+ * @param idx       the index of the entry in question
+ *
+ * This merely calls the appropriate function for leaf or internal nodes.
+ */
 inline static size_t castle_slim_entry_size(const struct castle_btree_node *node, int idx)
 {
     void *entry = NODE_ENTRY_PTR(node, idx);
@@ -464,11 +593,20 @@ inline static size_t castle_slim_entry_size(const struct castle_btree_node *node
  * Node modification function definitions.
  */
 
+/* comparison function for sort() */
 static int offset_cmp(const void *a, const void *b)
 {
     return **((const uint32_t **) a) - **((const uint32_t **) b);
 }
 
+/**
+ * Perform compaction on a slim tree node.
+ * @param node      pointer to the node
+ *
+ * After this function has returned, all dead space in the node, caused either by deleting
+ * or replacing entries, has been eliminated. This is achieved by moving the entries to
+ * occupy that space, without changing their order within the node.
+ */
 static void castle_slim_compact(struct castle_btree_node *node)
 {
     uint32_t **offsets = castle_alloc(node->used * sizeof *offsets);
@@ -481,6 +619,7 @@ static void castle_slim_compact(struct castle_btree_node *node)
         offsets[i] = &NODE_INDEX(node, i);
     sort(offsets, node->used, sizeof *offsets, offset_cmp, NULL);
 
+    /* perform the compaction */
     for (i = 0; i < node->used; ++i)
     {
         char *entry = (char *) node + *offsets[i];
@@ -497,13 +636,23 @@ static void castle_slim_compact(struct castle_btree_node *node)
         base += size;
     }
 
+    /* clean up */
     header->free_bytes += header->dead_bytes;
     header->dead_bytes = 0;
     BUG_ON(base + header->free_bytes != NODE_INDEX_BOUND(node));
     castle_free(offsets);
 }
 
-/* req_space includes the index entry */
+/**
+ * Allocate space for an entry inside a slim tree node.
+ * @param node      pointer to the node
+ * @param idx       the index to use for the entry
+ * @param req_space the space required for the entry -- this includes the index slot
+ * @return          whether allocation was successful
+ *
+ * This assigns space for the entry, updates the index to point to it, and also updates
+ * the node's free space accounting information.
+ */
 static int castle_slim_entry_alloc(struct castle_btree_node *node, int idx, size_t req_space)
 {
     struct slim_header *header = SLIM_HEADER_PTR(node);
@@ -521,6 +670,15 @@ static int castle_slim_entry_alloc(struct castle_btree_node *node, int idx, size
     else return 0;
 }
 
+/**
+ * Drop entries from a slim tree node.
+ * @param node      pointer to the node
+ * @param low       the lower bound of the entries to drop (inclusive)
+ * @param high      the upper bound of the entries to drop (inclusive)
+ *
+ * This is the opposite of @see castle_slim_entry_alloc(); it reclaims the space used by
+ * the entries and eliminates them from the index.
+ */
 static void castle_slim_entries_drop(struct castle_btree_node *node, int low, int high)
 {
     struct slim_header *header = SLIM_HEADER_PTR(node);
@@ -537,6 +695,18 @@ static void castle_slim_entries_drop(struct castle_btree_node *node, int low, in
     node->used -= high-low+1;
 }
 
+/**
+ * Construct an entry inside a slim tree node.
+ * @param node      pointer to the node
+ * @param idx       the index of the entry to construct
+ * @param key       the key to use for the entry
+ * @param version   the version to use for the entry
+ * @param cvt       the value to use for the entry
+ *
+ * The entry is constructed in place from its constituent parts. This function and @see
+ * castle_slim_entry_get() are the only functions which manipulate slim tree entries
+ * directly.
+ */
 static void castle_slim_entry_construct(struct castle_btree_node *node,
 					int idx,
                                         const struct castle_norm_key *key,
@@ -599,6 +769,14 @@ static void castle_slim_entry_construct(struct castle_btree_node *node,
     }
 }
 
+/**
+ * Add an entry to a slim tree node.
+ * @param node      pointer to the node
+ * @param idx       the index of the entry to add
+ * @param key       the key to use for the entry
+ * @param version   the version to use for the entry
+ * @param cvt       the value to use for the entry
+ */
 static void castle_slim_entry_add(struct castle_btree_node *node, int idx,
                                   void *key, c_ver_t version, c_val_tup_t cvt)
 {
@@ -631,6 +809,17 @@ static void castle_slim_entry_add(struct castle_btree_node *node, int idx,
     castle_slim_entry_construct(node, idx, norm_key, version, cvt);
 }
 
+/**
+ * Replace an entry of a slim tree node.
+ * @param node      pointer to the node
+ * @param idx       the index of the entry to add
+ * @param key       the key to use for the entry
+ * @param version   the version to use for the entry
+ * @param cvt       the value to use for the entry
+ *
+ * If possible, the entry is replaced in place, to avoid wasting space and messing up the
+ * ordering of the entries inside the node.
+ */
 static void castle_slim_entry_replace(struct castle_btree_node *node, int idx,
                                       void *key, c_ver_t version, c_val_tup_t cvt)
 {
@@ -661,6 +850,11 @@ static void castle_slim_entry_replace(struct castle_btree_node *node, int idx,
     }
 }
 
+/**
+ * Disable an entry in a slim tree node.
+ * @param node      pointer to the node
+ * @param idx       the index of the entry to disable
+ */
 static void castle_slim_entry_disable(struct castle_btree_node *node, int idx)
 {
     if (BTREE_NODE_IS_LEAF(node))
@@ -675,6 +869,10 @@ static void castle_slim_entry_disable(struct castle_btree_node *node, int idx)
     }
 }
 
+/**
+ * Print the contents of a slim tree node.
+ * @param node      pointer to the node
+ */
 static void castle_slim_node_print(struct castle_btree_node *node)
 {
     struct slim_header *header = SLIM_HEADER_PTR(node);
@@ -732,6 +930,10 @@ static void castle_slim_node_print(struct castle_btree_node *node)
 }
 
 #ifdef CASTLE_DEBUG
+/**
+ * Validate the contents of a slim tree node.
+ * @param node      pointer to the node
+ */
 static void castle_slim_node_validate(struct castle_btree_node *node)
 {
     struct slim_header *header = SLIM_HEADER_PTR(node);
