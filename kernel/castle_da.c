@@ -8847,16 +8847,16 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
     if ((ct->level == 0) && !castle_da_exiting)
         return 0;
 
-    /* Commit Data extent stats for T0s. */
-    if (ct->level == 0)
-        castle_ct_stats_commit(ct);
-
     being_written = atomic_read(&ct->write_ref_count) > 0;
     /* There should be no ongoing writes when exiting. */
     BUG_ON(castle_da_exiting && being_written);
     /* Don't write back trees with outstanding writes. */
     if (being_written)
         return 0;
+
+    /* Commit stats for T0s. There are no more writes at this stage. */
+    if (ct->level <= 1)
+        castle_ct_stats_commit(ct);
 
     /* Schedule flush of the CT onto disk. */
     if(!EXT_ID_INVAL(ct->internal_ext_free.ext_id))
