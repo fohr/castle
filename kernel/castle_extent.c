@@ -5223,6 +5223,12 @@ retry:
         }
     }
 
+    if (k_factor == 2 && (ext->shadow_map[(chunkno*k_factor)].slave_id == ext->shadow_map[(chunkno*k_factor)+1].slave_id))
+    {
+        castle_printk(LOG_ERROR, "Alloc: duplicate slave_id for extent %llu in shadow_map %p chunk %d: 0x%x\n", ext->ext_id, ext->shadow_map, chunkno, ext->shadow_map[(chunkno*k_factor)].slave_id);
+        BUG();
+    }
+
     FAULT(REBUILD_FAULT2);
 
    /*
@@ -5606,6 +5612,11 @@ static void writeback_rebuild_chunk(writeback_info_t *writeback_info)
 
     for (chunkno = writeback_info->start_chunk; chunkno<=writeback_info->end_chunk; chunkno++)
     {
+        if (k_factor == 2 && (ext->shadow_map[(chunkno*k_factor)].slave_id == ext->shadow_map[(chunkno*k_factor)+1].slave_id))
+        {
+            castle_printk(LOG_ERROR, "Writeback: duplicate slave_id for extent %llu in shadow_map %p chunk %d: 0x%x\n", ext->ext_id, ext->shadow_map, chunkno, ext->shadow_map[(chunkno*k_factor)].slave_id);
+            BUG();
+        }
         BUG_ON((chunkno >= ext->shadow_map_range.end) || (chunkno < ext->shadow_map_range.start));
         if (!map_c2b)
         {
