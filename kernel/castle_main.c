@@ -912,6 +912,11 @@ int castle_fs_init(void)
 
     FAULT(FS_RESTORE_FAULT);
 
+    castle_events_init();
+
+    castle_printk(LOG_INIT, "Castle FS started.\n");
+    castle_fs_inited = 1;
+
     if(sync_checkpoint)
     {
         /* Checkpoint should never be requested on the first startup.
@@ -941,11 +946,6 @@ int castle_fs_init(void)
         castle_printk(LOG_ERROR, "Failed to start Doubling Arrays\n");
         return C_ERR_INTERNAL;
     }
-
-    castle_events_init();
-
-    castle_printk(LOG_INIT, "Castle FS started.\n");
-    castle_fs_inited = 1;
 
     castle_extents_rebuild_startup_check(need_rebuild);
 
