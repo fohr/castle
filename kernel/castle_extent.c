@@ -5879,6 +5879,18 @@ unsigned long delta_time;
 int castle_extents_process_ratelimit = RATELIMIT_DEFAULT;
 
 /*
+ * Disable synchronisation between extent processing and checkpoint thread.
+ */
+static void disable_checkpoint_sync(void)
+{
+    castle_checkpoint_syncing = 0;
+    atomic_set(&castle_extents_presyncvar, 0);
+    atomic_set(&castle_extents_postsyncvar, 0);
+    /* In case checkpoint was already waiting ... */
+    wake_up(&process_syncpoint_waitq);
+}
+
+/*
  * Main extent processing kthread.
  */
 static int castle_extents_process(void *unused)
@@ -6051,6 +6063,12 @@ retry:
                         if (kthread_should_stop())
                             break;
 
+                        /*
+                         * Checkpoint syncing will have been disabled if we were waiting for
+                         * freespace or free work items. Re-enable it here.
+                         */
+                        castle_checkpoint_syncing = 1;
+
                         if (io_error < 0)
                         {
                             switch (io_error) {
@@ -6074,6 +6092,12 @@ retry:
                                 case -ENOSPC:
                                     out_of_freespace = 1;
                                     init_lfs_handler();
+                                    /*
+                                     * We're going to park, waiting for freespace.  Disable
+                                     * checkpoint sync in the meantime (otherwise checkpoint will
+                                     * hang until we get freespace).
+                                     */
+                                    disable_checkpoint_sync();
                                 case -ENOENT:
                                     goto retry;
                                     break;
@@ -6222,10 +6246,7 @@ skip_extent:
         }
 
 finished:
-        castle_checkpoint_syncing = 0;
-        atomic_set(&castle_extents_presyncvar, 0);
-        atomic_set(&castle_extents_postsyncvar, 0);
-        wake_up(&process_syncpoint_waitq);
+        disable_checkpoint_sync();
 
         /* Per-state cleanup, includes rebuild setting slave state bits. */
         procstate->finish(process_interrupted||extent_interrupted);
