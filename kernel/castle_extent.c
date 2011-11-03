@@ -6060,14 +6060,14 @@ retry:
                         wait_event_interruptible(process_io_waitq,
                                         ((io_error = work_io_check()) && freespace_available()) ||
                                          kthread_should_stop());
-                        if (kthread_should_stop())
-                            break;
-
                         /*
                          * Checkpoint syncing will have been disabled if we were waiting for
-                         * freespace or free work items. Re-enable it here.
+                         * freespace. Re-enable it here.
                          */
                         castle_checkpoint_syncing = 1;
+
+                        if (kthread_should_stop())
+                            break;
 
                         if (io_error < 0)
                         {
