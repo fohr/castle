@@ -4782,6 +4782,7 @@ retry:
             continue;
         }
 
+        already_used = 0;
         /* Don't use a slave already represented in this logical chunk. */
         for (chunk_idx=0; chunk_idx<ext->k_factor; chunk_idx++)
         {
