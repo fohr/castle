@@ -1036,8 +1036,8 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             break;
 
         case CASTLE_CTRL_VERTREE_COMPACT:
-            ioctl.vertree_compact.ret = castle_da_vertree_compact(ioctl.vertree_compact.vertree_id);
-            break;
+            err = -EINVAL;
+            goto err;
 
         case CASTLE_CTRL_CLONE:
             castle_control_clone( ioctl.clone.version,

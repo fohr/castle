@@ -233,7 +233,6 @@ int  castle_merge_do_work               (c_merge_id_t   merge_id,
 int  castle_merge_stop                  (c_merge_id_t merge_id);
 
 int  castle_da_vertree_tdp_set          (c_da_t da_id, uint64_t seconds);
-int  castle_da_vertree_compact          (c_da_t da_id);
 int  castle_da_insert_rate_set          (c_da_t da_id, uint32_t insert_rate);
 int  castle_da_read_rate_set            (c_da_t da_id, uint32_t read_rate);
 void castle_da_write_rate_check         (struct castle_double_array *da, uint32_t length);

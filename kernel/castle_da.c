@@ -4604,15 +4604,6 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         castle_sysfs_merge_del(merge);
     castle_merges_hash_remove(merge);
 
-    /* This is a hacked implementation to make compaction work with in-kernel merges.
-     * Will remove this soon. */
-    if (test_bit(CASTLE_DA_COMPACTING_BIT, &merge->da->flags) && castle_golden_nugget)
-    {
-        clear_bit(CASTLE_DA_COMPACTING_BIT, &merge->da->flags);
-        castle_golden_nugget = 0;
-        wmb();
-    }
-
     if (castle_version_states_free(&merge->version_states) != EXIT_SUCCESS)
     {
         castle_printk(LOG_ERROR, "%s::[da %d level %d] version_states not fully"
@@ -7012,9 +7003,6 @@ static int castle_da_merge_trigger(struct castle_double_array *da, int level)
         return 0;
 
     read_lock(&da->lock);
-
-    if (test_bit(CASTLE_DA_COMPACTING_BIT, &da->flags))
-        goto out;
 
     if (castle_golden_nugget && level != 1)
         goto out;
@@ -11590,14 +11578,6 @@ err0:
     return ret;
 }
 
-static int castle_da_wait_for_compaction(struct castle_double_array *da, void *unused)
-{
-    while (test_bit(CASTLE_DA_COMPACTING_BIT, &da->flags))
-        msleep(1000);
-
-    return 0;
-}
-
 void castle_double_array_merges_fini(void)
 {
     castle_da_exiting = 1;
@@ -11605,9 +11585,7 @@ void castle_double_array_merges_fini(void)
     /* Write memory barried to make sure all threads see castle_da_exiting. */
     wmb();
 
-    __castle_da_hash_iterate(castle_da_wait_for_compaction, NULL);
-
-   castle_merge_threads_hash_iterate(castle_da_merge_thread_wakeup, NULL);
+    castle_merge_threads_hash_iterate(castle_da_merge_thread_wakeup, NULL);
 
     /* Wait for all merge threads to complete. */
     while (atomic_read(&castle_da_merge_thread_count))
@@ -12440,121 +12418,6 @@ int castle_da_vertree_tdp_set(c_da_t da_id, uint64_t seconds)
     castle_printk(LOG_USERINFO, "Set tombstone discard period on da %u to %llu seconds\n",
             da_id, seconds);
     return 0;
-}
-
-int castle_da_vertree_compact(c_da_t da_id)
-{
-    struct castle_double_array *da = castle_da_hash_get(da_id);
-    struct list_head *pos, *tmp;
-    c_merge_id_t merge_id = INVAL_MERGE_ID;
-    c_work_id_t work_id;
-    c_merge_cfg_t merge_cfg;
-    c_array_id_t *arrays = NULL;
-    int i, j;
-
-    if (castle_golden_nugget == 1)
-    {
-        castle_printk(LOG_USERINFO, "Version tree compact can't be done from kernel with"
-                                    "golden nugget\n");
-        return -ENOSYS;
-    }
-
-    if (da == NULL)
-    {
-        castle_printk(LOG_WARN, "Compaction can't be done on invalid da: %u\n", da_id);
-        return -EINVAL;
-    }
-
-    if (test_and_set_bit(CASTLE_DA_COMPACTING_BIT, &da->flags))
-    {
-        castle_printk(LOG_WARN, "Compaction is already going on\n");
-        return -EBUSY;
-    }
-
-    CASTLE_TRANSACTION_END;
-
-    castle_printk(LOG_DEBUG, "waiting for merges to compelte\n");
-    while (atomic_read(&da->ongoing_merges))
-        msleep(1000);
-
-    castle_printk(LOG_DEBUG, "Stoppped all the merges\n");
-
-    CASTLE_TRANSACTION_BEGIN;
-
-    arrays = castle_zalloc(sizeof(c_array_id_t) * (da->nr_trees + 10), GFP_KERNEL);
-    BUG_ON(!arrays);
-
-    write_lock(&da->lock);
-
-    /* Bring all trees down to level-2. */
-    for (i=3; i<MAX_DA_LEVEL; i++)
-    {
-        list_for_each_safe(pos, tmp, &da->levels[i].trees)
-        {
-            struct castle_component_tree *ct = list_entry(pos, struct castle_component_tree, da_list);
-
-            BUG_ON(ct->merge);
-            BUG_ON(test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags));
-
-            list_del(&ct->da_list);
-            list_add_tail(&ct->da_list, &da->levels[2].trees);
-
-            ct->level = 2;
-
-            da->levels[i].nr_trees--;
-            da->levels[2].nr_trees++;
-        }
-    }
-
-    j=0;
-    list_for_each(pos, &da->levels[2].trees)
-    {
-        struct castle_component_tree *ct = list_entry(pos, struct castle_component_tree, da_list);
-
-        arrays[j++] = ct->seq;
-        BUG_ON(ct->merge);
-    }
-
-    write_unlock(&da->lock);
-
-    BUG_ON(j != da->levels[2].nr_trees);
-
-    merge_cfg.nr_arrays     = j;
-    merge_cfg.arrays        = &arrays[0];
-    merge_cfg.nr_data_exts  = MERGE_ALL_DATA_EXTS;
-    merge_cfg.data_exts     = NULL;
-
-#if 0
-    /* No need of compaction. */
-    if (j < 2)
-    {
-        castle_check_kfree(arrays);
-        clear_bit(CASTLE_DA_COMPACTING_BIT, &da->flags);
-
-        return 0;
-    }
-#endif
-
-    castle_golden_nugget = 1;
-    if (castle_merge_start(&merge_cfg, &merge_id, 0))
-    {
-        castle_printk(LOG_WARN, "Failed to create merge for compaction\n");
-        goto err_out;
-    }
-
-    BUG_ON(castle_merge_do_work(merge_id, 0, &work_id));
-
-    castle_kfree(arrays);
-
-    return 0;
-
-err_out:
-    BUG_ON(!MERGE_ID_INVAL(merge_id));
-
-    castle_check_kfree(arrays);
-    clear_bit(CASTLE_DA_COMPACTING_BIT, &da->flags);
-
-    return -EINVAL;
 }
 
 /**
