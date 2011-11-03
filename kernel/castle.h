@@ -2344,8 +2344,6 @@ struct castle_double_array {
     int                         nr_trees;           /**< Total number of CTs in the DA, including
                                                          input, output, not-merging, queriable
                                                          and non-queriable CTs.                 */
-    atomic_t            queriable_merge_trees_cnt;  /**< Subset of nr_trees that are queriable
-                                                         merge output trees.                    */
     struct {
         int                     nr_trees;           /**< Number of queriable CTs at level.      */
         int                     nr_output_trees;    /**< Number of output trees at level.       */
