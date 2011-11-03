@@ -10573,12 +10573,46 @@ retry:
 }
 
 /**
+ * Release CTs proxy extent references and free proxy.
+ *
+ * @param   data    castle_da_cts_proxy pointer
+ */
+static void __castle_da_cts_proxy_put(void *data)
+{
+    struct castle_da_cts_proxy *proxy = data;
+    int ct;
+
+    BUG_ON(atomic_read(&proxy->ref_cnt) != 0);
+//    BUG_ON(proxy->da->cts_proxy == proxy);
+    castle_printk(LOG_DEBUG, "%s: ref_cnt==0, proxy=%p, da=%p\n",
+            __FUNCTION__, proxy, proxy->da);
+
+    for (ct = 0; ct < proxy->nr_cts; ct++)
+    {
+        if (proxy->cts[ct].state != NO_REDIR)
+            BUG_ON(!proxy->cts[ct].pk);
+        else
+            BUG_ON(proxy->cts[ct].pk);
+        castle_ct_put(proxy->cts[ct].ct, 0 /*write*/, proxy->cts[ct].ext_refs);
+    }
+
+    castle_free(proxy->ext_refs);
+    castle_free(proxy->keys);
+    castle_free(proxy->cts);
+    castle_free(proxy);
+}
+
+/**
  * Put a reference on the DA CTs proxy, freeing it, if necessary.
+ *
+ * @param   proxy       CTs proxy to release reference on
+ * @param   async_free  Whether to asynchronously free the proxy if we put
+ *                      the last reference
  *
  * NOTE: See castle_da_cts_proxy{} for description of why we do not need to
  *       update da->cts_proxy pointer if dropping the last reference.
  */
-void castle_da_cts_proxy_put(struct castle_da_cts_proxy *proxy)
+static void _castle_da_cts_proxy_put(struct castle_da_cts_proxy *proxy, int async_free)
 {
     int ref_cnt;
 
@@ -10587,34 +10621,36 @@ void castle_da_cts_proxy_put(struct castle_da_cts_proxy *proxy)
     /* Drop CT references and free proxy if we put the last reference. */
     if (ref_cnt == 0)
     {
-        int ct;
-
-        BUG_ON(proxy->da->cts_proxy == proxy);
-        castle_printk(LOG_DEBUG, "%s: ref_cnt==0, proxy=%p, da=%p\n",
-                __FUNCTION__, proxy, proxy->da);
-
-        for (ct = 0; ct < proxy->nr_cts; ct++)
-        {
-            if (proxy->cts[ct].state != NO_REDIR)
-                BUG_ON(!proxy->cts[ct].pk);
-            else
-                BUG_ON(proxy->cts[ct].pk);
-            castle_ct_put(proxy->cts[ct].ct, 0 /*write*/, proxy->cts[ct].ext_refs);
-        }
-
-        castle_free(proxy->ext_refs);
-        castle_free(proxy->keys);
-        castle_free(proxy->cts);
-        castle_free(proxy);
+        INIT_WORK(&proxy->work, __castle_da_cts_proxy_put, proxy);
+        if (async_free)
+            /* Drop asynchronously. */
+            queue_work(castle_wqs[0], &proxy->work);
+        else
+            /* Drop synchronously. */
+            __castle_da_cts_proxy_put(proxy);
     }
     else
         BUG_ON(ref_cnt < 0);
 }
 
 /**
+ * Put a reference on the DA CTs proxy, freeing it, if necessary.
+ *
+ * @param   proxy   CTs proxy to release reference on
+ */
+void castle_da_cts_proxy_put(struct castle_da_cts_proxy *proxy)
+{
+    _castle_da_cts_proxy_put(proxy, 0 /*async_free*/);
+}
+
+/**
  * Invalidate an existing DA CTs proxy, if one exists.
  *
  * @param   da_locked   Whether the DA is write-locked
+ *
+ * NOTE: We call _castle_da_cts_proxy_put() with the async_free option as we may
+ *       have been called from castle_da_cts_proxy_timeout() and hence the DA
+ *       hash lock may be held.
  */
 static int castle_da_cts_proxy_invalidate(struct castle_double_array *da, void *da_locked)
 {
@@ -10630,7 +10666,7 @@ static int castle_da_cts_proxy_invalidate(struct castle_double_array *da, void *
 
         proxy = da->cts_proxy;
         da->cts_proxy = NULL;
-        castle_da_cts_proxy_put(proxy);
+        _castle_da_cts_proxy_put(proxy, 1 /*async_free*/);
     }
 
     if (!da_locked)

@@ -2280,12 +2280,13 @@ struct castle_da_cts_proxy {
                                                          Set for REDIR_INTREE only.             */
         c_ct_redir_state_enum_t         state;      /**< Redirection state.                     */
     } *cts;
-    int                         nr_cts;     /**< Number of CTs in cts[].                */
-    void                       *keys;       /**< Buffer of partition keys.              */
-    void                       *ext_refs;   /**< Buffer of per-CT extent references.    */
-    btree_t                     btree_type; /**< Tree type used for the CTs.            */
-    atomic_t                    ref_cnt;    /**< References held on proxy structure.    */
-    struct castle_double_array *da;         /**< Backpointer to DA (for DEBUG).         */
+    int                         nr_cts;     /**< Number of CTs in cts[].                        */
+    void                       *keys;       /**< Buffer of partition keys.                      */
+    void                       *ext_refs;   /**< Buffer of per-CT extent references.            */
+    btree_t                     btree_type; /**< Tree type used for the CTs.                    */
+    atomic_t                    ref_cnt;    /**< References held on proxy structure.            */
+    struct castle_double_array *da;         /**< Backpointer to DA (for DEBUG).                 */
+    struct work_struct          work;       /**< For asynchronous castle_da_cts_proxy_drop().   */
 };
 
 /* Low free space structure being used by each merge in DA. */
