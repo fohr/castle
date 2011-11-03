@@ -1,6 +1,7 @@
 #include "castle_timestamps.h"
 #include "castle_versions.h"
 #include "castle_da.h"
+#include "castle_btree.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -41,7 +42,11 @@ int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da
         ret = -ENOMEM;
         goto error;
     }
-    castle_da_node_buffer_init(merge->out_btree, dfs_resolver->buffer_node, new_node_size);
+    castle_btree_node_buffer_init(merge->out_btree->magic,
+                                  dfs_resolver->buffer_node,
+                                  new_node_size,
+                                  BTREE_NODE_IS_LEAF_FLAG | BTREE_NODE_HAS_TIMESTAMPS_FLAG,
+                                  0);
 
     /* Allocate the inclusion flag buffer */
     BUG_ON(!merge->out_btree);

@@ -1146,7 +1146,7 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
 
             /* Get a new node. */
             node = castle_ct_modlist_iter_buffer_get(iter, node_idx);
-            castle_da_node_buffer_init(btree, node, iter->tree->node_sizes[0]);
+            castle_btree_node_init(iter->tree, node, 0, iter->tree->node_sizes[0], 0);
 
             /* We've advance, initialise a good state. */
             iter->enum_advanced = 0;
@@ -3946,7 +3946,6 @@ static c_val_tup_t* _castle_da_entry_add(struct castle_da_merge *merge,
         BUG_ON(level->valid_end_idx >= 0);
 
         debug("Allocating a new node at depth: %d\n", depth);
-        BUG_ON(new_node_size != merge->out_tree->node_sizes[depth]);
 
         /* If this is a checkpointable merge and we are trying to add leaf node, make sure
          * we got space for it and update counters. */
@@ -3968,7 +3967,7 @@ static c_val_tup_t* _castle_da_entry_add(struct castle_da_merge *merge,
         update_c2b(level->node_c2b);
         /* Init the node properly */
         node = c2b_bnode(level->node_c2b);
-        castle_da_node_buffer_init(btree, node, new_node_size);
+        castle_btree_node_init(merge->out_tree, node, 0, new_node_size, depth);
         if (depth > 0)
             node->flags &= ~BTREE_NODE_IS_LEAF_FLAG;
         debug("%s::Allocating a new node at depth: %d for merge %p (da %d level %d)\n",

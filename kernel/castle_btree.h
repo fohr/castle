@@ -41,5 +41,17 @@ extern struct castle_iterator_type castle_btree_enum;
 
 int         castle_btree_init         (void);
 void        castle_btree_free         (void);
+void castle_btree_node_init(struct castle_component_tree *ct,
+                            struct castle_btree_node *node,
+                            int version,
+                            uint16_t node_size,
+                            uint8_t rev_level);
+void castle_btree_node_buffer_init(btree_t type,
+                                   struct castle_btree_node *buffer,
+                                   uint16_t node_size,
+                                   uint8_t flags,
+                                   int version);
+
+
 
 #endif /* __CASTLE_BTREE_H__ */

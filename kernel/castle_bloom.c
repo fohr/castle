@@ -191,19 +191,6 @@ alloc_fail:
     return ret;
 }
 
-static void castle_bloom_node_buffer_init(struct castle_btree_type *btree,
-                                          struct castle_btree_node *buffer)
-{
-    /* Buffers are proper btree nodes understood by castle_btree_node_type function sets.
-     Initialise the required bits of the node, so that the types don't complain. */
-    buffer->magic   = BTREE_NODE_MAGIC;
-    buffer->type    = btree->magic;
-    buffer->version = 0;
-    buffer->used    = 0;
-    buffer->flags   = BTREE_NODE_IS_LEAF_FLAG | BTREE_NODE_HAS_TIMESTAMPS_FLAG;
-    buffer->size    = BLOOM_INDEX_NODE_SIZE_PAGES;
-}
-
 /**
  * Called when a btree node is full
  */
@@ -253,7 +240,11 @@ static void castle_bloom_next_btree_node(castle_bloom_t *bf)
     update_c2b(bf_bp->node_c2b);
     /* Init the node properly */
     bf_bp->cur_node = c2b_bnode(bf_bp->node_c2b);
-    castle_bloom_node_buffer_init(bf->btree, bf_bp->cur_node);
+    castle_btree_node_buffer_init(bf->btree->magic,
+                                  bf_bp->cur_node,
+                                  BLOOM_INDEX_NODE_SIZE_PAGES,
+                                  BTREE_NODE_IS_LEAF_FLAG,
+                                  0);
     write_unlock_c2b(bf_bp->node_c2b);
 
     /* don't forget to inc bf->num_btree_nodes once you've put something in the node! */

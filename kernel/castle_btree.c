@@ -294,7 +294,8 @@ void castle_btree_lub_find(struct castle_btree_node *node,
 }
 
 /**
- * Initialises btree node header.
+ * Initialises btree node header. This is a convenience function that calls
+ * castle_btree_node_buffer_init().
  *
  * @param ct          Component tree this node will belong to.
  * @param node        Pointer to where the node lives in memory.
@@ -302,28 +303,28 @@ void castle_btree_lub_find(struct castle_btree_node *node,
  * @param rev_level   Level at which this node will be used. Important: counted from the leaves,
  *                    same as for btree_type->node_size().
  */
-static void castle_btree_node_init(struct castle_component_tree *ct,
-                                   struct castle_btree_node *node,
-                                   int version,
-                                   uint8_t rev_level)
+void castle_btree_node_init(struct castle_component_tree *ct,
+                            struct castle_btree_node *node,
+                            int version,
+                            uint16_t node_size,
+                            uint8_t rev_level)
 {
-    uint16_t node_size;
+    uint8_t  node_flags;
 
-    /* This function should only be called for RW vlba trees. */
-    node_size = ct->node_sizes[rev_level];
     /* memset the node, so that ftree nodes are easily recognisable in hexdump. */
     memset(node, 0x77, node_size * C_BLK_SIZE);
-    node->magic     = BTREE_NODE_MAGIC;
-    node->type      = ct->btree_type;
-    node->version   = version;
-    node->used      = 0;
     /* node leaf flag */
-    node->flags     = (rev_level == 0 ? BTREE_NODE_IS_LEAF_FLAG : 0);
+    node_flags     = (rev_level == 0 ? BTREE_NODE_IS_LEAF_FLAG : 0);
     /* node timestamped flag */
     if( !TREE_GLOBAL(ct->seq) &&
         castle_da_user_timestamping_check(ct->da) )
-        node->flags |= BTREE_NODE_HAS_TIMESTAMPS_FLAG;
-    node->size      = node_size;
+        node_flags |= BTREE_NODE_HAS_TIMESTAMPS_FLAG;
+
+    castle_btree_node_buffer_init(ct->btree_type,
+                                  node,
+                                  node_size,
+                                  node_flags,
+                                  version);
 }
 
 static int castle_btree_node_space_get(struct castle_component_tree *ct,
@@ -415,7 +416,7 @@ c2_block_t* castle_btree_node_create(struct castle_component_tree *ct,
     node = c2b_buffer(c2b);
 
     /* Initialise it. */
-    castle_btree_node_init(ct, node, version, rev_level);
+    castle_btree_node_init(ct, node, version, node_size, rev_level);
 
     return c2b;
 }
@@ -447,7 +448,7 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
     eff_node = castle_alloc(node_size * C_BLK_SIZE);
     /* rev_level == 0 should be equivalent to the IS_LEAF flag */
     BUG_ON((rev_level == 0) ^ (BTREE_NODE_IS_LEAF(node) != 0));
-    castle_btree_node_init(ct, eff_node, version, rev_level);
+    castle_btree_node_init(ct, eff_node, version, node_size, rev_level);
 
     last_eff_key = btree->inv_key;
     BUG_ON(eff_node->used != 0);
@@ -2723,20 +2724,20 @@ int castle_btree_enum_has_next(c_enum_t *c_enum)
     return ret;
 }
 
-static void castle_btree_node_buffer_init(struct castle_component_tree *tree,
-                                          struct castle_btree_node *buffer,
-                                          uint16_t node_size)
+void castle_btree_node_buffer_init(btree_t type,
+                                   struct castle_btree_node *buffer,
+                                   uint16_t node_size,
+                                   uint8_t flags,
+                                   int version)
 {
+    debug("Resetting btree node buffer.\n");
     /* Buffers are proper btree nodes understood by castle_btree_node_type function sets.
        Initialise the required bits of the node, so that the types don't complain. */
-#ifdef CASTLE_DEBUG
-    memset(buffer, 0x88, node_size * C_BLK_SIZE);
-#endif
     buffer->magic   = BTREE_NODE_MAGIC;
-    buffer->type    = tree->btree_type;
-    buffer->version = 0;
+    buffer->type    = type;
+    buffer->version = version;
     buffer->used    = 0;
-    buffer->flags   = BTREE_NODE_IS_LEAF_FLAG | BTREE_NODE_HAS_TIMESTAMPS_FLAG;
+    buffer->flags   = flags;
     buffer->size    = node_size;
 }
 
@@ -2768,7 +2769,8 @@ void castle_btree_enum_next(c_enum_t *c_enum,
         enum_debug("Switching buffer from %p ...\n", c_enum->buffer);
         c_enum->buffer = (c_enum->buffer == c_enum->buffer1 ? c_enum->buffer2 : c_enum->buffer1);
         enum_debug("                   to %p.\n", c_enum->buffer);
-        castle_btree_node_buffer_init(c_enum->tree, c_enum->buffer, c_enum->buffer->size);
+        castle_btree_node_init(c_enum->tree, c_enum->buffer, 0, c_enum->buffer->size, 0);
+
         /* Run the iterator again to get the next nodes worth of stuff */
         castle_btree_iter_start(&c_enum->iterator);
     }
@@ -2814,7 +2816,8 @@ void castle_btree_enum_init(c_enum_t *c_enum)
     c_enum->buffer = c_enum->buffer1;
     if(!c_enum->buffer1 || !c_enum->buffer2)
         goto no_mem;
-    castle_btree_node_buffer_init(ct, c_enum->buffer, leaf_node_size);
+
+    castle_btree_node_init(ct, c_enum->buffer, 0, leaf_node_size, 0);
 
     iter = &c_enum->iterator;
     iter->tree       = ct;
@@ -2859,7 +2862,8 @@ static struct node_buf_t* node_buf_alloc(c_rq_iter_t *rq_iter)
         leaf_node_size = MAX_KMALLOC_SIZE / C_BLK_SIZE;
     node_buf->node = castle_alloc(leaf_node_size * C_BLK_SIZE);
     BUG_ON(!node_buf->node);
-    castle_btree_node_buffer_init(rq_iter->tree, node_buf->node, leaf_node_size);
+
+    castle_btree_node_init(rq_iter->tree, node_buf->node, 0, leaf_node_size, 0);
     rq_iter->buf_count++;
 
     return node_buf;
@@ -3056,9 +3060,11 @@ static int castle_rq_iter_each(c_iter_t *c_iter,
         {
             rq_iter->prod_buf = list_entry(prod_buf->list.next,
                                            struct node_buf_t, list);
-            castle_btree_node_buffer_init(rq_iter->tree,
-                                          rq_iter->prod_buf->node,
-                                          rq_iter->prod_buf->node->size);
+            castle_btree_node_init(rq_iter->tree,
+                                   rq_iter->prod_buf->node,
+                                   0,
+                                   rq_iter->prod_buf->node->size,
+                                   0);
             debug("Moving prod_buf to next node_buf: %p\n", rq_iter->prod_buf);
         }
         rq_iter->prod_idx = 0;
@@ -3287,9 +3293,11 @@ static void castle_rq_iter_buffer_switch(c_rq_iter_t *rq_iter)
     rq_iter->cons_idx = 0;
     rq_iter->prod_idx = 0;
 
-    castle_btree_node_buffer_init(rq_iter->tree,
-                                  rq_iter->prod_buf->node,
-                                  rq_iter->prod_buf->node->size);
+    castle_btree_node_init(rq_iter->tree,
+                           rq_iter->prod_buf->node,
+                           0,
+                           rq_iter->prod_buf->node->size,
+                           0);
 }
 
 int cons_idx_prod_idx_compare(c_rq_iter_t *rq_iter)
