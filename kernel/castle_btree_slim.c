@@ -784,7 +784,8 @@ static void castle_slim_entry_add(struct castle_btree_node *node, int idx,
     const struct castle_norm_key *norm_key = key;
     size_t req_space = castle_slim_entry_size_predict(norm_key, cvt,
                                                       BTREE_NODE_IS_LEAF(node),
-                                                      BTREE_NODE_HAS_TIMESTAMPS(node)) + 4;
+                                                      BTREE_NODE_HAS_TIMESTAMPS(node))
+        + 4 /* for the index entry */;
 
     BUG_ON(idx < 0 || idx > node->used);
 
@@ -986,7 +987,7 @@ static void castle_slim_node_validate(struct castle_btree_node *node)
             else
                 free_bytes = boundary - (entry + size);
         }
-        used_bytes += size;
+        used_bytes += size + 4 /* for the index entry */;
     }
     castle_free(offsets);
 
