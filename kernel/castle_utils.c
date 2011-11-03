@@ -23,7 +23,8 @@ void ATTRIB_NORET bug_fn(char *file, unsigned long line)
 {
     void castle_dmesg(void);
 
-    WARN_ON(1);
+    printk(KERN_WARNING "Castle BUG, from %s:%lu\n", file, line);
+    dump_stack();
 
     /* Dump Castle dmesg output before panicking. */
     castle_dmesg();
@@ -32,7 +33,7 @@ void ATTRIB_NORET bug_fn(char *file, unsigned long line)
     dump_stack();
 
     /* Generate a crashdump. */
-    panic("Castle BUG, from: %s:%ld\n", file, line);
+    panic("Castle BUG, from: %s:%lu\n", file, line);
 }
 
 void castle_atomic64_min(uint64_t new_val, atomic64_t *v)
