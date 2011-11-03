@@ -23,14 +23,12 @@ void ATTRIB_NORET bug_fn(char *file, unsigned long line)
 {
     void castle_dmesg(void);
 
-    printk(KERN_WARNING "Castle BUG, from %s:%lu\n", file, line);
+    /* Print a stack backtrace. */
     dump_stack();
+    castle_printk(LOG_ERROR, "Castle BUG, from %s:%lu\n", file, line);
 
     /* Dump Castle dmesg output before panicking. */
     castle_dmesg();
-
-    /* Print a stack backtrace. */
-    dump_stack();
 
     /* Generate a crashdump. */
     panic("Castle BUG, from: %s:%lu\n", file, line);
