@@ -4753,7 +4753,7 @@ static int castle_extent_slave_get_by_freespace(c_ext_t *ext,
 {
     int         chunk_idx, idx, chosen_slave=MAX_NR_SLAVES, potential_slaves;
     int         avg_freespace, max_freespace, slave_freespace;
-    int         is_ssd=0;
+    int         is_ssd=0, already_used;
     struct castle_slave *cs;
 
     /* For each slave in process_state.live_slaves (the list of potential remap slaves). */
@@ -4784,31 +4784,39 @@ retry:
 
         /* Don't use a slave already represented in this logical chunk. */
         for (chunk_idx=0; chunk_idx<ext->k_factor; chunk_idx++)
+        {
             if (ext->shadow_map[(chunkno*ext->k_factor)+chunk_idx].slave_id ==
                 process_state.live_slaves[idx]->uuid)
+            {
                 /* This slave is already used in this logical chunk. */
-                continue;
-
-        potential_slaves++;
-
-        cs = castle_slave_find_by_uuid(process_state.live_slaves[idx]->uuid);
-        BUG_ON(!cs);
-
-        castle_extent_transaction_start();
-        /* Work out how many free superchunks there are ATM. */
-        slave_freespace = castle_freespace_free_superchunks(cs);
-        castle_extent_transaction_end();
-
-        if (slave_freespace > max_freespace)
-        {
-            /* This slave has more freespace. */
-            chosen_slave = idx;
-            max_freespace = slave_freespace;
+                already_used = 1;
+                break;
+            }
         }
 
-        /* Re-compute average. */
-        avg_freespace = ((avg_freespace * (potential_slaves - 1)) + slave_freespace)
+        if (!already_used)
+        {
+            potential_slaves++;
+
+            cs = castle_slave_find_by_uuid(process_state.live_slaves[idx]->uuid);
+            BUG_ON(!cs);
+
+            castle_extent_transaction_start();
+            /* Work out how many free superchunks there are ATM. */
+            slave_freespace = castle_freespace_free_superchunks(cs);
+            castle_extent_transaction_end();
+
+            if (slave_freespace > max_freespace)
+            {
+                /* This slave has more freespace. */
+                chosen_slave = idx;
+                max_freespace = slave_freespace;
+            }
+
+            /* Re-compute average. */
+            avg_freespace = ((avg_freespace * (potential_slaves - 1)) + slave_freespace)
                             / potential_slaves;
+        }
     }
 
     if (max_freespace <=
