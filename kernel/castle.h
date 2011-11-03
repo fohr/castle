@@ -2318,6 +2318,7 @@ typedef enum {
 #define DOUBLE_ARRAY_DELETED_BIT            (1)
 #define CASTLE_DA_CTS_PROXY_CREATE_BIT      (2)     /**< Serialises creation of da->cts_proxy.  */
 #define CASTLE_DA_INSERTS_DISABLED          (3)     /**< Set when inserts are disabled.         */
+#define CASTLE_DA_INSERTS_BLOCKED_ON_MERGE  (4)
 #define CASTLE_TOMBSTONE_DISCARD_TD_DEFAULT (10*24*60*60) /**< Default tombstone discard threshold;
                                                                10 days, in seconds. */
 

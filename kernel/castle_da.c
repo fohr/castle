@@ -4669,6 +4669,7 @@ static void castle_da_merge_cts_release(struct castle_da_merge *merge, int err)
     merge->out_tree = NULL;
 }
 
+static void castle_da_inserts_enable(unsigned long data);
 static void castle_da_merge_trees_cleanup(struct castle_da_merge *merge, int err)
 {
     struct castle_component_tree *out_tree = merge->out_tree;
@@ -4739,6 +4740,16 @@ static void castle_da_merge_trees_cleanup(struct castle_da_merge *merge, int err
 
     if (merge->nr_entries && merge->level == 1)
         castle_events_new_tree_added(out_tree->seq, out_tree->da->id);
+
+    /* FIXME: This again looks hacky. Need to fix rate control in clean way - BM. */
+    /* If this is a level 1 merge, check if this is time to restart inserts. */
+    if ((merge->level == 1) &&
+        (castle_da_exiting || (merge->da->levels[1].nr_trees < 4 * castle_double_array_request_cpus())) &&
+        test_bit(CASTLE_DA_INSERTS_BLOCKED_ON_MERGE, &merge->da->flags))
+    {
+        clear_bit(CASTLE_DA_INSERTS_BLOCKED_ON_MERGE, &merge->da->flags);
+        castle_da_inserts_enable((unsigned long)merge->da);
+    }
 
     castle_da_merge_restart(merge->da, NULL);
 
@@ -7471,8 +7482,9 @@ void castle_da_write_rate_check(struct castle_double_array *da, uint32_t nr_byte
     /* If the number of trees in level 1 are more than 4 - disable inserts. */
     if (da->levels[1].nr_trees >= 4 * castle_double_array_request_cpus())
     {
+        set_bit(CASTLE_DA_INSERTS_BLOCKED_ON_MERGE, &da->flags);
         /* Note: This could be starving ios, unncessary long time. Fix it. */
-        throttle_time = 1000; /* in micro seconds. */
+        throttle_time = 0; /* in micro seconds. */
         goto throttle_ios;
     }
 
