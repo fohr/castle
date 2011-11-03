@@ -168,7 +168,7 @@ static void castle_btree_io_end(c_bvec_t    *c_bvec,
     /* If DA timestamped, and successful write, update ct->max_user_timestamp */
     if( (c_bvec->tree) &&
             (!TREE_GLOBAL(c_bvec->tree->seq)) &&
-            (c_bvec->tree->da->user_timestamping)  &&
+            (castle_da_user_timestamping_check(c_bvec->tree->da))  &&
             (c_bvec_data_dir(c_bvec) == WRITE) &&
             (!err) )
     {
@@ -317,7 +317,12 @@ static void castle_btree_node_init(struct castle_component_tree *ct,
     node->type      = ct->btree_type;
     node->version   = version;
     node->used      = 0;
-    node->flags     = (rev_level == 0 ? BTREE_NODE_IS_LEAF_FLAG : 0) | BTREE_NODE_HAS_TIMESTAMPS_FLAG;
+    /* node leaf flag */
+    node->flags     = (rev_level == 0 ? BTREE_NODE_IS_LEAF_FLAG : 0);
+    /* node timestamped flag */
+    if( !TREE_GLOBAL(ct->seq) &&
+        castle_da_user_timestamping_check(ct->da) )
+        node->flags |= BTREE_NODE_HAS_TIMESTAMPS_FLAG;
     node->size      = node_size;
 }
 

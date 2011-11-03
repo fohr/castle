@@ -120,6 +120,10 @@ void castle_control_detach(uint32_t dev, int *ret)
  */
 void castle_control_create(uint64_t size, int *ret, c_ver_t *id)
 {
+    castle_control_create_with_opts(size, CASTLE_DA_OPTS_NONE, ret, id);
+}
+void castle_control_create_with_opts(uint64_t size, c_da_opts_t opts, int *ret, c_ver_t *id)
+{
     int collection_tree = (size == 0);
     c_da_t da_id = INVAL_DA;
     c_ver_t version;
@@ -146,7 +150,7 @@ void castle_control_create(uint64_t size, int *ret, c_ver_t *id)
                                  size);
 
     /* We use doubling arrays for collection trees */
-    if (collection_tree && (*ret = castle_double_array_make(da_id, version)))
+    if (collection_tree && (*ret = castle_double_array_make(da_id, version, opts)))
     {
         /* Free the created version. */
         BUG_ON(castle_version_free(version));
@@ -1010,6 +1014,12 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                                     &ioctl.collection_snapshot.ret,
                                     &ioctl.collection_snapshot.version);
             break;
+        case CASTLE_CTRL_CREATE_WITH_OPTS:
+            castle_control_create_with_opts( ioctl.create_with_opts.size,
+                                            ioctl.create_with_opts.opts,
+                                            &ioctl.create_with_opts.ret,
+                                            &ioctl.create_with_opts.id);
+            break;
         case CASTLE_CTRL_CREATE:
             castle_control_create( ioctl.create.size,
                                   &ioctl.create.ret,
@@ -1098,6 +1108,11 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             castle_control_thread_priority(ioctl.thread_priority.nice_value,
                                           &ioctl.thread_priority.ret);
             break;
+        case CASTLE_CTRL_VERTREE_TDP_SET:
+            ioctl.vertree_tdp_set.ret = castle_da_vertree_tdp_set(ioctl.vertree_tdp_set.vertree_id,
+                                                                  ioctl.vertree_tdp_set.seconds);
+            break;
+
 
         /* Golden Nugget. */
         case CASTLE_CTRL_MERGE_THREAD_CREATE:

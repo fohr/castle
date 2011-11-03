@@ -10,7 +10,7 @@
 #include <linux/time.h>
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 28 /* last updated by RL */
+#define CASTLE_PROTOCOL_VERSION 29 /* last updated by TR */
 
 #define PACKED               __attribute__((packed))
 
@@ -174,6 +174,13 @@ typedef uint32_t c_da_t;
 #define INVAL_VERSION       ((c_ver_t)-1)
 #define VERSION_INVAL(_v)   ((_v) == INVAL_VERSION)
 
+typedef uint64_t c_da_opts_t;       /**< Options bitmask for DA options that must be set at
+                                         creation time. */
+enum {
+    CASTLE_DA_OPTS_NONE               = (0),             /**< No options (all defaults). */
+    CASTLE_DA_OPTS_USER_TIMESTAMPING  = (1 << 0),        /**< Enable user timestamping. */
+};
+
 /* Golden Nugget - Types */
 typedef uint32_t c_array_id_t;
 typedef uint32_t c_merge_id_t;
@@ -248,7 +255,6 @@ typedef struct castle_merge_config {
 #define CASTLE_CTRL_VERTREE_COMPACT          32
 #define CASTLE_CTRL_COLLECTION_REATTACH      33
 
-/* Golden Nugget - Interface(IOCTL). */
 #define CASTLE_CTRL_MERGE_THREAD_CREATE      34
 #define CASTLE_CTRL_MERGE_THREAD_DESTROY     35
 #define CASTLE_CTRL_MERGE_START              36
@@ -260,6 +266,11 @@ typedef struct castle_merge_config {
 #define CASTLE_CTRL_PROG_REGISTER            42
 #define CASTLE_CTRL_PROG_DEREGISTER          43
 #define CASTLE_CTRL_PROG_HEARTBEAT           44
+
+#define CASTLE_CTRL_CREATE_WITH_OPTS         45
+#define CASTLE_CTRL_VERTREE_TDP_SET          46
+
+
 
 typedef struct castle_control_cmd_claim {
     uint32_t       dev;          /* IN  */
@@ -319,6 +330,13 @@ typedef struct castle_control_cmd_create {
     int      ret;             /* OUT */
     c_ver_t  id;              /* OUT */
 } cctrl_cmd_create_t;
+
+typedef struct castle_control_cmd_create_with_opts {
+    uint64_t    size;         /* IN  */
+    c_da_opts_t opts;         /* IN */
+    int         ret;          /* OUT */
+    c_ver_t     id;           /* OUT */
+} cctrl_cmd_create_with_opts_t;
 
 typedef struct castle_control_cmd_destroy_vertree {
     c_da_t vertree_id;      /* IN */
@@ -470,6 +488,12 @@ typedef struct castle_control_cmd_prog_heartbeat {
     int             ret;            /* OUT */
 } cctrl_cmd_prog_heartbeat_t;
 
+typedef struct castle_control_cmd_vertree_tdp_set {
+    c_da_t   vertree_id;      /* IN */
+    uint64_t seconds;         /* IN */
+    int      ret;             /* OUT */
+} cctrl_cmd_vertree_tdp_set_t;
+
 typedef struct castle_control_ioctl {
     uint16_t cmd;
     union {
@@ -487,6 +511,7 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_collection_snapshot_t collection_snapshot;
 
         cctrl_cmd_create_t              create;
+        cctrl_cmd_create_with_opts_t    create_with_opts;
         cctrl_cmd_destroy_vertree_t     destroy_vertree;
         cctrl_cmd_delete_version_t      delete_version;
         cctrl_cmd_vertree_compact_t     vertree_compact;
@@ -520,6 +545,8 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_prog_register_t       ctrl_prog_register;
         cctrl_cmd_prog_deregister_t     ctrl_prog_deregister;
         cctrl_cmd_prog_heartbeat_t      ctrl_prog_heartbeat;
+
+        cctrl_cmd_vertree_tdp_set_t     vertree_tdp_set;
     };
 } cctrl_ioctl_t;
 
@@ -533,6 +560,8 @@ enum {
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_DETACH, cctrl_ioctl_t),
     CASTLE_CTRL_CREATE_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_CREATE, cctrl_ioctl_t),
+    CASTLE_CTRL_CREATE_WITH_OPTS_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_CREATE_WITH_OPTS, cctrl_ioctl_t),
     CASTLE_CTRL_CLONE_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_CLONE, cctrl_ioctl_t),
     CASTLE_CTRL_SNAPSHOT_IOCTL =
@@ -599,6 +628,8 @@ enum {
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_PROG_DEREGISTER, cctrl_ioctl_t),
     CASTLE_CTRL_PROG_HEARTBEAT_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_PROG_HEARTBEAT, cctrl_ioctl_t),
+    CASTLE_CTRL_VERTREE_TDP_SET_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_VERTREE_TDP_SET, cctrl_ioctl_t),
 };
 
 /*

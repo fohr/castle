@@ -190,12 +190,14 @@ int  castle_double_array_request_cpus  (void);
 struct castle_btree_type
     *castle_double_array_btree_type_get(struct castle_attachment *att);
 uint8_t
-    castle_double_array_user_timestamping_get(struct castle_attachment *att);
+    castle_da_user_timestamping_check(struct castle_double_array *da);
+uint8_t
+    castle_attachment_user_timestamping_check(struct castle_attachment *att);
 void castle_double_array_queue    (c_bvec_t *c_bvec);
 void castle_double_array_unreserve(c_bvec_t *c_bvec);
 void castle_double_array_submit   (c_bvec_t *c_bvec);
 
-int  castle_double_array_make     (c_da_t da_id, c_ver_t root_version);
+int  castle_double_array_make     (c_da_t da_id, c_ver_t root_version, c_da_opts_t opts);
 
 int  castle_double_array_read  (void);
 int  castle_double_array_create(void);
@@ -230,6 +232,7 @@ int  castle_merge_do_work               (c_merge_id_t   merge_id,
                                          c_work_id_t   *work_id);
 int  castle_merge_stop                  (c_merge_id_t merge_id);
 
+int  castle_da_vertree_tdp_set          (c_da_t da_id, uint64_t seconds);
 int  castle_da_vertree_compact          (c_da_t da_id);
 int  castle_da_insert_rate_set          (c_da_t da_id, uint32_t insert_rate);
 int  castle_da_read_rate_set            (c_da_t da_id, uint32_t read_rate);

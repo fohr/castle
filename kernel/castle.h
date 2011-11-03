@@ -1141,9 +1141,9 @@ struct castle_dlist_entry {
     /* offset:  0 */ c_da_t      id;
     /*          4 */ c_ver_t     root_version;
     /*          8 */ btree_t     btree_type;
-    /*          9 */ uint8_t     user_timestamping;
-    /*         10 */ uint64_t    tombstone_discard_threshold_time_s;
-    /*         18 */ uint8_t     _unused[238];
+    /*          9 */ uint64_t    creation_opts;
+    /*         17 */ uint64_t    tombstone_discard_threshold_time_s;
+    /*         25 */ uint8_t     _unused[231];
     /*        256 */
 } PACKED;
 
@@ -2319,7 +2319,8 @@ typedef enum {
 #define CASTLE_DA_CTS_PROXY_CREATE_BIT      (3)     /**< Serialises creation of da->cts_proxy.  */
 #define CASTLE_DA_INSERTS_DISABLED          (4)     /**< Set when inserts are disabled.         */
 #define CASTLE_DA_RATE_CHECK_ONGOING        (5)     /**< Rate check is going on this DA.        */
-#define CASTLE_TOMBSTONE_DISCARD_TD_DEFAULT (3600) /**< Tombstone discard threshold in seconds */
+#define CASTLE_TOMBSTONE_DISCARD_TD_DEFAULT (10*24*60*60) /**< Default tombstone discard threshold;
+                                                               10 days, in seconds. */
 
 #define PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL (0)
 #if PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL > MAX_BTREE_DEPTH
@@ -2404,7 +2405,7 @@ struct castle_double_array {
     uint64_t                    sample_rate;
     uint64_t                    sample_data_bytes;
     spinlock_t                  rate_ctrl_lock;
-    uint8_t                     user_timestamping;  /**< User timestamping (init 1/0)           */
+    c_da_opts_t                 creation_opts;
     atomic64_t                  tombstone_discard_threshold_time_s;
 
     struct {

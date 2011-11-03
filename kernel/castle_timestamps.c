@@ -23,7 +23,7 @@ int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da
 
     /* Set resolver functions */
     dfs_resolver->functions = 0;
-    if( merge->da->user_timestamping )
+    if( castle_da_user_timestamping_check(merge->da) )
         dfs_resolver->functions |= DFS_RESOLVE_TIMESTAMPS;
     if( merge->out_tree->data_age == 1)
         dfs_resolver->functions |= DFS_RESOLVE_TOMBSTONES;
@@ -334,7 +334,7 @@ static int castle_timestamped_tombstone_discardable_check(c_dfs_resolver *dfs_re
     struct timeval tombstone_realtime;
     BUG_ON(!dfs_resolver);
     /* We only call this check if it's a timestamped DA */
-    BUG_ON(!dfs_resolver->merge->da->user_timestamping);
+    BUG_ON(!castle_da_user_timestamping_check(dfs_resolver->merge->da));
 
     /* Requirement: this tombstone's REAL timestamp is > now()-T_d */
     /* (we guesstimate the tombstone's real timestsamp as the immute timestamp of

@@ -1886,7 +1886,7 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
        NOTE: this destroys same_kv list. Don't use it after this point. */
     if(CVT_ANY_COUNTER(comp_iter->cached_entry.cvt))
         cvt = castle_ct_merged_iter_counter_reduce(comp_iter);
-    else if (iter->da->user_timestamping) /* it's not a counter, and we are timestamping */
+    else if (castle_da_user_timestamping_check(iter->da)) /* it's not a counter, and we are timestamping */
         cvt = castle_ct_merged_iter_timestamp_select(comp_iter);
     else /* this DA not timestamped */
         cvt = comp_iter->cached_entry.cvt;
@@ -5267,7 +5267,7 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
      * - Update the bloom filter */
     castle_da_entry_add(merge, 0, key, version, cvt, 0);
 
-    if (merge->da->user_timestamping)
+    if (castle_da_user_timestamping_check(merge->da))
     {
         castle_atomic64_max(cvt.user_timestamp,
                             &merge->out_tree->max_user_timestamp);
@@ -5773,7 +5773,7 @@ deser_done:
 
     /* We need a DFS resolver if we are timestamping, of if this is the top-level merge and we need
        to discard non-queriable tombstones, or both. */
-    if( merge->da->user_timestamping || (merge->out_tree->data_age == 1) )
+    if( castle_da_user_timestamping_check(merge->da) || (merge->out_tree->data_age == 1) )
     {
         //TODO@tr make sure error_out dealloc's things properly!
         merge->tv_resolver = castle_zalloc(sizeof(c_dfs_resolver), GFP_KERNEL);
@@ -7644,7 +7644,7 @@ static void castle_da_dealloc(struct castle_double_array *da)
 
 atomic_t ct_get_count;
 atomic_t ct_put_count;
-static struct castle_double_array* castle_da_alloc(c_da_t da_id)
+static struct castle_double_array* castle_da_alloc(c_da_t da_id, c_da_opts_t opts)
 {
     struct castle_double_array *da;
     int i = 0;
@@ -7733,8 +7733,8 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
     /* Setup rate control timer. */
     setup_timer(&da->write_throttle_timer, castle_da_inserts_enable, (unsigned long)da);
 
-    //TODO@tr make this a creation-time option
-    da->user_timestamping = 1;
+    /* set up creation-time DA options */
+    da->creation_opts = opts;
 
     /* Set default tombstone discard realtime threshold */
     atomic64_set(&da->tombstone_discard_threshold_time_s,
@@ -7750,7 +7750,8 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id)
     atomic64_set(&da->stats.user_timestamps.ct_max_uts_negatives, 0);
     atomic64_set(&da->stats.user_timestamps.ct_max_uts_false_positives, 0);
 
-    castle_printk(LOG_USERINFO, "Allocated DA=%d successfully.\n", da_id);
+    castle_printk(LOG_USERINFO, "Allocated DA=%d successfully with creation opts 0x%llx.\n",
+            da_id, opts);
 
     return da;
 
@@ -7774,7 +7775,7 @@ void castle_da_marshall(struct castle_dlist_entry *dam,
     dam->id                = da->id;
     dam->root_version      = da->root_version;
     dam->btree_type        = da->btree_type;
-    dam->user_timestamping = da->user_timestamping;
+    dam->creation_opts     = da->creation_opts;
 
     dam->tombstone_discard_threshold_time_s =
             atomic64_read(&da->tombstone_discard_threshold_time_s);
@@ -7787,7 +7788,7 @@ static void castle_da_unmarshall(struct castle_double_array *da,
     da->id                = dam->id;
     da->root_version      = dam->root_version;
     da->btree_type        = dam->btree_type;
-    da->user_timestamping = dam->user_timestamping;
+    da->creation_opts     = dam->creation_opts;
 
     atomic64_set(&da->tombstone_discard_threshold_time_s,
             dam->tombstone_discard_threshold_time_s);
@@ -9683,7 +9684,10 @@ int castle_double_array_read(void)
     while(castle_mstore_iterator_has_next(iterator))
     {
         castle_mstore_iterator_next(iterator, &mstore_dentry, &key);
-        da = castle_da_alloc(mstore_dentry.id);
+        //TODO@tr clarify that it's okay that some things are pre-unmarshalled
+        //        with this da_alloc call, and some things are done with
+        //        the ensuing da_unmarshall call.
+        da = castle_da_alloc(mstore_dentry.id, mstore_dentry.creation_opts);
         if(!da)
             goto error_out;
         castle_da_unmarshall(da, &mstore_dentry);
@@ -10137,13 +10141,13 @@ static int castle_da_rwct_create(struct castle_double_array *da, int cpu_index, 
  * @also castle_control_create()
  * @also castle_da_all_rwcts_create()
  */
-int castle_double_array_make(c_da_t da_id, c_ver_t root_version)
+int castle_double_array_make(c_da_t da_id, c_ver_t root_version, c_da_opts_t opts)
 {
     struct castle_double_array *da;
     int ret;
 
     debug("Creating doubling array for da_id=%d, version=%d\n", da_id, root_version);
-    da = castle_da_alloc(da_id);
+    da = castle_da_alloc(da_id, opts);
     if(!da)
         return -ENOMEM;
     /* Write out the id, root version and tree type. */
@@ -10813,7 +10817,7 @@ static int64_t castle_da_ct_timestamp_compare(struct castle_component_tree *ct,
 
     /* not sure what to return if any of the following conditions are true, so we leave it to the
        caller to make sure it never happens */
-    BUG_ON(!ct->da->user_timestamping);
+    BUG_ON(!castle_da_user_timestamping_check(ct->da));
     BUG_ON(CVT_INVALID(*cvt_p));
     BUG_ON(CVT_ANY_COUNTER(*cvt_p));
 
@@ -10940,7 +10944,7 @@ void castle_da_next_ct_read(c_bvec_t *c_bvec)
 
             return; /* no trees left */
         }
-        else if (c_bvec->tree->da->user_timestamping)
+        else if (castle_da_user_timestamping_check(c_bvec->tree->da))
         {
             struct castle_object_get *get = c_bvec->c_bio->get;
             if(CVT_INVALID(get->cvt) || (CVT_ANY_COUNTER(get->cvt)))
@@ -11095,7 +11099,7 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
     else if (!err &&                                /* no error */
              get->resolve_timestamps &&             /* we are re still able to resolve timestamps */
              !CVT_INVALID(cvt) &&                   /* this cvt is valid */
-             c_bvec->tree->da->user_timestamping && /* this DA is timestamped */
+             castle_da_user_timestamping_check(c_bvec->tree->da) && /* this DA is timestamped */
              !CVT_ANY_COUNTER(cvt) &&               /* not dealing with a counter */
              !CVT_ANY_COUNTER(get->cvt))            /* not already accumulating a counter. */
     {
@@ -11321,9 +11325,14 @@ struct castle_btree_type *castle_double_array_btree_type_get(struct castle_attac
 /**
  * Return the user_timestamping flag associated with a particular DA.
  */
-uint8_t castle_double_array_user_timestamping_get(struct castle_attachment *att)
+uint8_t castle_da_user_timestamping_check(struct castle_double_array *da)
 {
-    return castle_da_ptr_get(att)->user_timestamping;
+    BUG_ON(!da);
+    return (da->creation_opts & CASTLE_DA_OPTS_USER_TIMESTAMPING);
+}
+uint8_t castle_attachment_user_timestamping_check(struct castle_attachment *att)
+{
+    return castle_da_user_timestamping_check(castle_da_ptr_get(att));
 }
 
 /**
@@ -12417,6 +12426,20 @@ static int castle_merge_thread_attach(c_merge_id_t merge_id, c_thread_id_t threa
 
 err_out:
     return ret;
+}
+
+int castle_da_vertree_tdp_set(c_da_t da_id, uint64_t seconds)
+{
+    struct castle_double_array *da = castle_da_hash_get(da_id);
+    if (da == NULL)
+    {
+        castle_printk(LOG_WARN, "Cannot set tombstone discard period on invalid da: %u\n", da_id);
+        return -EINVAL;
+    }
+    atomic64_set(&da->tombstone_discard_threshold_time_s, seconds);
+    castle_printk(LOG_USERINFO, "Set tombstone discard period on da %u to %llu seconds\n",
+            da_id, seconds);
+    return 0;
 }
 
 int castle_da_vertree_compact(c_da_t da_id)

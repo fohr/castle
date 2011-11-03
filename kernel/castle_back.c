@@ -1768,9 +1768,9 @@ static void castle_back_get(void *data)
     op->get.resolve_counters   = 1;
     op->get.resolve_timestamps = 1;
 
-    if(CASTLE_RING_FLAG_RET_TIMESTAMP && op->get.flags)
+    if(CASTLE_RING_FLAG_RET_TIMESTAMP & op->get.flags)
     {
-        if(!castle_double_array_user_timestamping_get(op->attachment))
+        if(!castle_attachment_user_timestamping_check(op->attachment))
         {
             error("User requested timestamp return on a non-timestamped collection, id=0x%x\n",
                     op->req.get.collection_id);
@@ -2023,7 +2023,7 @@ void _castle_back_iter_start(void *private, int err)
 
     if (CASTLE_RING_FLAG_RET_TIMESTAMP & stateful_op->get.flags)
     {
-        if (!castle_double_array_user_timestamping_get(stateful_op->attachment))
+        if (!castle_attachment_user_timestamping_check(stateful_op->attachment))
         {
             error("User requested timestamp return on a non-timestamped collection, id=0x%x\n",
                     op->req.get.collection_id);
