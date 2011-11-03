@@ -1765,10 +1765,7 @@ retry:
          * returned buffers.
          */
         if (ret)
-        {
-            castle_printk(LOG_ERROR, "c_io_array_submit found no slave to read\n");
             return ret;
-        }
 
         slave = castle_slave_find_by_uuid(chunks[read_idx].slave_id);
         BUG_ON(!slave);
@@ -2052,10 +2049,7 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
 
     io_array = kmem_cache_alloc(castle_io_array_cache, GFP_KERNEL);
     if (!io_array)
-    {
-        castle_printk(LOG_ERROR, "submit_c2b_rda failed to allocate io_array\n");
         return -1;
-    }
 
     /* c2b->remaining is effectively a reference count. Get one ref before we start. */
     BUG_ON(atomic_read(&c2b->remaining) != 0);
