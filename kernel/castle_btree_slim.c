@@ -1098,7 +1098,7 @@ static void castle_slim_node_validate(struct castle_btree_node *node)
             int cmp = castle_norm_key_compare(save_key, key);
             if (cmp > 0 && (failed = 1))
                 castle_printk(LOG_ERROR, "error: found a wrong key ordering at position %u\n", i);
-            else if (cmp == 0 && castle_version_is_ancestor(version, save_version) && (failed = 1))
+            else if (cmp == 0 && castle_version_is_ancestor(save_version, version) && (failed = 1))
                 castle_printk(LOG_ERROR, "error: found a wrong version ordering at position %u\n", i);
         }
         save_version = version;

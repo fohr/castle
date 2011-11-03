@@ -893,7 +893,7 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
         if ((prev_offset != -1) &&
             (ret == 1 ||
              (!ret &&
-              castle_version_is_ancestor(entry->version, prev_entry->version))))
+              castle_version_is_ancestor(prev_entry->version, entry->version))))
         {
             int j;
 
