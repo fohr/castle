@@ -7947,6 +7947,7 @@ void castle_data_extent_update(c_ext_id_t ext_id, uint64_t length, int op)
     struct castle_data_extent *data_ext = castle_data_exts_hash_get(ext_id);
 
     BUG_ON(data_ext == NULL);
+    BUG_ON(atomic64_read(&data_ext->nr_entries) < 0);
 
     switch (op)
     {
@@ -7959,8 +7960,15 @@ void castle_data_extent_update(c_ext_id_t ext_id, uint64_t length, int op)
             atomic64_dec(&data_ext->nr_entries);
             break;
         case  0:     /* Drain.   */
-            atomic64_add(length, &data_ext->nr_drain_bytes);
-            atomic64_dec(&data_ext->nr_entries);
+            /* Stats could be out-of-sync in case of merge aborts. Make sure we don't overflow
+             * stats. Don't worry about synchronization, draining is serialized. */
+            if ((length + atomic64_read(&data_ext->nr_drain_bytes) <=
+                                                    atomic64_read(&data_ext->nr_bytes)) &&
+                atomic64_read(&data_ext->nr_entries))
+            {
+                atomic64_add(length, &data_ext->nr_drain_bytes);
+                atomic64_dec(&data_ext->nr_entries);
+            }
             break;
         default:
             BUG();
