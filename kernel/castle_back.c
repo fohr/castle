@@ -1768,7 +1768,7 @@ static void castle_back_get(void *data)
     op->get.resolve_counters   = 1;
     op->get.resolve_timestamps = 1;
 
-    if(CASTLE_RING_FLAG_RET_TIMESTAMP & op->get.flags)
+    if(CASTLE_RING_FLAG_RET_TIMESTAMP & op->req.flags)
     {
         if(!castle_attachment_user_timestamping_check(op->attachment))
         {
@@ -2021,7 +2021,7 @@ void _castle_back_iter_start(void *private, int err)
     if (err)
         goto err;
 
-    if (CASTLE_RING_FLAG_RET_TIMESTAMP & stateful_op->get.flags)
+    if ( CASTLE_RING_FLAG_RET_TIMESTAMP & stateful_op->flags )
     {
         if (!castle_attachment_user_timestamping_check(stateful_op->attachment))
         {
