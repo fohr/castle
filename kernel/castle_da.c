@@ -7232,7 +7232,7 @@ static void castle_da_merges_print(struct castle_double_array *da)
  *
  * @return  Offset into request_cpus.cpus[]
  */
-int castle_double_array_key_cpu_index(c_vl_bkey_t *key, uint32_t key_len)
+int castle_double_array_key_cpu_index(c_vl_bkey_t *key)
 {
     uint32_t seed = 0;
 

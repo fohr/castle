@@ -119,7 +119,10 @@ struct castle_back_op
     struct castle_back_buffer       *buf;
     struct castle_attachment        *attachment;
 
-    /* use for assembling a get and partial writes in puts */
+    /* used by castle_back_request_process() to pass the key to the ops */
+    c_vl_bkey_t                     *key;
+
+    /* used for assembling a get and partial writes in puts */
     uint64_t value_length;
     uint32_t buffer_offset;
 
@@ -1303,7 +1306,6 @@ static void castle_back_replace(void *data)
     struct castle_back_op *op = data;
     struct castle_back_conn *conn = op->conn;
     int err;
-    c_vl_bkey_t *key;
 
     op->attachment = castle_attachment_get(op->req.replace.collection_id, WRITE);
     if (op->attachment == NULL)
@@ -1312,10 +1314,6 @@ static void castle_back_replace(void *data)
         err = -ENOTCONN;
         goto err0;
     }
-
-    err = castle_back_key_copy_get(conn, op->req.replace.key_ptr, op->req.replace.key_len, &key);
-    if (err)
-        goto err1;
 
     /*
      * Get buffer with value in it and save it
@@ -1334,13 +1332,12 @@ static void castle_back_replace(void *data)
                     op->req.replace.value_ptr + op->req.replace.value_len - 1))
         {
             error("Invalid value length %u (ptr=%p)\n",
-                    op->req.replace.value_len, op->req.replace.value_ptr);
+                  op->req.replace.value_len, op->req.replace.value_ptr);
             err = -EINVAL;
             goto err3;
         }
     }
-    else
-        op->buf = NULL;
+    else op->buf = NULL;
 
     op->buffer_offset = 0;
 
@@ -1351,7 +1348,7 @@ static void castle_back_replace(void *data)
     op->replace.data_copy = castle_back_replace_data_copy;
     op->replace.counter_type = CASTLE_OBJECT_NOT_COUNTER;
     op->replace.has_user_timestamp = 0;
-    op->replace.key = key;      /* Key would be freed by replace_complete. */
+    op->replace.key = op->key;  /* key will be freed by replace_complete() */
 
     err = castle_object_replace(&op->replace, op->attachment, op->cpu_index, 0);
     if (err)
@@ -1360,9 +1357,9 @@ static void castle_back_replace(void *data)
     return;
 
 err3: if (op->buf) castle_back_buffer_put(conn, op->buf);
-err2: castle_free(key);
-err1: castle_attachment_put(op->attachment);
-err0: castle_back_reply(op, err, 0, 0, 0);
+err2: castle_attachment_put(op->attachment);
+err0: castle_free(op->key);
+      castle_back_reply(op, err, 0, 0, 0);
 }
 
 static void castle_back_timestamped_replace(void *data)
@@ -1370,7 +1367,6 @@ static void castle_back_timestamped_replace(void *data)
     struct castle_back_op *op = data;
     struct castle_back_conn *conn = op->conn;
     int err;
-    c_vl_bkey_t *key;
 
     op->attachment = castle_attachment_get(op->req.timestamped_replace.collection_id, WRITE);
     if (op->attachment == NULL)
@@ -1379,10 +1375,6 @@ static void castle_back_timestamped_replace(void *data)
         err = -ENOTCONN;
         goto err0;
     }
-
-    err = castle_back_key_copy_get(conn, op->req.timestamped_replace.key_ptr, op->req.timestamped_replace.key_len, &key);
-    if (err)
-        goto err1;
 
     /*
      * Get buffer with value in it and save it
@@ -1401,13 +1393,12 @@ static void castle_back_timestamped_replace(void *data)
                     op->req.timestamped_replace.value_ptr + op->req.timestamped_replace.value_len - 1))
         {
             error("Invalid value length %u (ptr=%p)\n",
-                    op->req.timestamped_replace.value_len, op->req.timestamped_replace.value_ptr);
+                  op->req.timestamped_replace.value_len, op->req.timestamped_replace.value_ptr);
             err = -EINVAL;
             goto err3;
         }
     }
-    else
-        op->buf = NULL;
+    else op->buf = NULL;
 
     op->buffer_offset = 0;
 
@@ -1419,7 +1410,7 @@ static void castle_back_timestamped_replace(void *data)
     op->replace.counter_type = CASTLE_OBJECT_NOT_COUNTER;
     op->replace.has_user_timestamp = 1;
     op->replace.user_timestamp = op->req.timestamped_replace.user_timestamp;
-    op->replace.key = key;      /* Key would be freed by replace_complete. */
+    op->replace.key = op->key;  /* key will be freed by replace_complete() */
 
     err = castle_object_replace(&op->replace, op->attachment, op->cpu_index, 0);
     if (err)
@@ -1428,9 +1419,9 @@ static void castle_back_timestamped_replace(void *data)
     return;
 
 err3: if (op->buf) castle_back_buffer_put(conn, op->buf);
-err2: castle_free(key);
-err1: castle_attachment_put(op->attachment);
-err0: castle_back_reply(op, err, 0, 0, 0);
+err2: castle_attachment_put(op->attachment);
+err0: castle_free(op->key);
+      castle_back_reply(op, err, 0, 0, 0);
 }
 
 static void castle_back_counter_replace(void *data)
@@ -1438,7 +1429,6 @@ static void castle_back_counter_replace(void *data)
     struct castle_back_op *op = data;
     struct castle_back_conn *conn = op->conn;
     int err;
-    c_vl_bkey_t *key;
 
     op->attachment = castle_attachment_get(op->req.counter_replace.collection_id, WRITE);
     if (op->attachment == NULL)
@@ -1447,12 +1437,6 @@ static void castle_back_counter_replace(void *data)
         err = -ENOTCONN;
         goto err0;
     }
-
-    err = castle_back_key_copy_get(conn,
-                                   op->req.counter_replace.key_ptr,
-                                   op->req.counter_replace.key_len, &key);
-    if (err)
-        goto err1;
 
     /*
      * Get buffer with value in it and save it
@@ -1471,13 +1455,12 @@ static void castle_back_counter_replace(void *data)
                     op->req.counter_replace.value_ptr + op->req.counter_replace.value_len - 1))
         {
             error("Invalid value length %u (ptr=%p)\n",
-                    op->req.counter_replace.value_len, op->req.counter_replace.value_ptr);
+                  op->req.counter_replace.value_len, op->req.counter_replace.value_ptr);
             err = -EINVAL;
             goto err3;
         }
     }
-    else
-        op->buf = NULL;
+    else op->buf = NULL;
 
     op->buffer_offset = 0;
 
@@ -1486,11 +1469,10 @@ static void castle_back_counter_replace(void *data)
     op->replace.complete = castle_back_replace_complete;
     op->replace.data_length_get = castle_back_replace_data_length_get;
     op->replace.data_copy = castle_back_replace_data_copy;
-    op->replace.counter_type = ( (op->req.counter_replace.add == CASTLE_COUNTER_TYPE_SET) ?
-                                    CASTLE_OBJECT_COUNTER_SET :
-                                    CASTLE_OBJECT_COUNTER_ADD);
+    op->replace.counter_type = op->req.counter_replace.add == CASTLE_COUNTER_TYPE_SET ?
+        CASTLE_OBJECT_COUNTER_SET : CASTLE_OBJECT_COUNTER_ADD;
     op->replace.has_user_timestamp = 0;
-    op->replace.key = key;      /* Key would be freed by replace_complete. */
+    op->replace.key = op->key;  /* key will be freed by replace_complete() */
 
     err = castle_object_replace(&op->replace, op->attachment, op->cpu_index, 0);
     if (err)
@@ -1499,9 +1481,9 @@ static void castle_back_counter_replace(void *data)
     return;
 
 err3: if (op->buf) castle_back_buffer_put(conn, op->buf);
-err2: castle_free(key);
-err1: castle_attachment_put(op->attachment);
-err0: castle_back_reply(op, err, 0, 0, 0);
+err2: castle_attachment_put(op->attachment);
+err0: castle_free(op->key);
+      castle_back_reply(op, err, 0, 0, 0);
 }
 
 static void castle_back_remove_complete(struct castle_object_replace *replace, int err)
@@ -1540,9 +1522,7 @@ static void castle_back_remove_complete(struct castle_object_replace *replace, i
 static void castle_back_remove(void *data)
 {
     struct castle_back_op *op = data;
-    struct castle_back_conn *conn = op->conn;
     int err;
-    c_vl_bkey_t *key;
 
     op->attachment = castle_attachment_get(op->req.remove.collection_id, WRITE);
     if (op->attachment == NULL)
@@ -1552,10 +1532,6 @@ static void castle_back_remove(void *data)
         goto err0;
     }
 
-    err = castle_back_key_copy_get(conn, op->req.remove.key_ptr, op->req.remove.key_len, &key);
-    if (err)
-        goto err1;
-
     op->buf = NULL;
     op->replace.value_len = 0;
     op->replace.replace_continue = NULL;
@@ -1564,7 +1540,7 @@ static void castle_back_remove(void *data)
     op->replace.data_copy = NULL;
     op->replace.counter_type = CASTLE_OBJECT_NOT_COUNTER;
     op->replace.has_user_timestamp = 0;
-    op->replace.key = key;      /* Key would be freed by remove_complete. */
+    op->replace.key = op->key;  /* key will be freed by remove_complete() */
 
     err = castle_object_replace(&op->replace, op->attachment, op->cpu_index, 1 /*tombstone*/);
     if (err)
@@ -1572,17 +1548,15 @@ static void castle_back_remove(void *data)
 
     return;
 
-err2: castle_free(key);
-err1: castle_attachment_put(op->attachment);
-err0: castle_back_reply(op, err, 0, 0, 0);
+err2: castle_attachment_put(op->attachment);
+err0: castle_free(op->key);
+      castle_back_reply(op, err, 0, 0, 0);
 }
 
 static void castle_back_timestamped_remove(void *data)
 {
     struct castle_back_op *op = data;
-    struct castle_back_conn *conn = op->conn;
     int err;
-    c_vl_bkey_t *key;
 
     op->attachment = castle_attachment_get(op->req.timestamped_remove.collection_id, WRITE);
     if (op->attachment == NULL)
@@ -1591,10 +1565,6 @@ static void castle_back_timestamped_remove(void *data)
         err = -ENOTCONN;
         goto err0;
     }
-
-    err = castle_back_key_copy_get(conn, op->req.timestamped_remove.key_ptr, op->req.timestamped_remove.key_len, &key);
-    if (err)
-        goto err1;
 
     op->buf = NULL;
     op->replace.value_len = 0;
@@ -1605,7 +1575,7 @@ static void castle_back_timestamped_remove(void *data)
     op->replace.counter_type = CASTLE_OBJECT_NOT_COUNTER;
     op->replace.has_user_timestamp = 1;
     op->replace.user_timestamp = op->req.timestamped_replace.user_timestamp;
-    op->replace.key = key;      /* Key would be freed by remove_complete. */
+    op->replace.key = op->key;  /* key will be freed by remove_complete() */
 
     err = castle_object_replace(&op->replace, op->attachment, op->cpu_index, 1 /*tombstone*/);
     if (err)
@@ -1613,9 +1583,9 @@ static void castle_back_timestamped_remove(void *data)
 
     return;
 
-err2: castle_free(key);
-err1: castle_attachment_put(op->attachment);
-err0: castle_back_reply(op, err, 0, 0, 0);
+err2: castle_attachment_put(op->attachment);
+err0: castle_free(op->key);
+      castle_back_reply(op, err, 0, 0, 0);
 }
 
 int castle_back_get_reply_continue(struct castle_object_get *get,
@@ -1726,7 +1696,6 @@ static void castle_back_get(void *data)
     struct castle_back_op *op = data;
     struct castle_back_conn *conn = op->conn;
     int err;
-    c_vl_bkey_t *key;
 
     op->attachment = castle_attachment_get(op->req.get.collection_id, READ);
     if (op->attachment == NULL)
@@ -1735,10 +1704,6 @@ static void castle_back_get(void *data)
         err = -ENOTCONN;
         goto err0;
     }
-
-    err = castle_back_key_copy_get(conn, op->req.get.key_ptr, op->req.get.key_len, &key);
-    if (err)
-        goto err1;
 
     /*
      * Get buffer with value in it and save it
@@ -1751,32 +1716,32 @@ static void castle_back_get(void *data)
         goto err2;
     }
 
-    if (!castle_back_user_addr_in_buffer(op->buf, op->req.get.value_ptr + op->req.get.value_len - 1))
+    if (!castle_back_user_addr_in_buffer(op->buf,
+                op->req.get.value_ptr + op->req.get.value_len - 1))
     {
-        error("Invalid value length %d (ptr=%p)\n", op->req.get.value_len, op->req.get.value_ptr);
+        error("Invalid value length %u (ptr=%p)\n",
+              op->req.get.value_len, op->req.get.value_ptr);
         err = -EINVAL;
         goto err3;
     }
 
     op->get.reply_start = castle_back_get_reply_start;
     op->get.reply_continue = castle_back_get_reply_continue;
-    op->get.key = key;
+    op->get.key = op->key;
     op->get.flags = op->req.flags;
 
-    /* in the beginning, we will be willing to resolve timestamps or counters, but upon retrieval
-       of the first candidate return value, we will pick one or the other. */
+    /* in the beginning, we will be willing to resolve timestamps or counters, but upon
+       retrieval of the first candidate return value, we will pick one or the other. */
     op->get.resolve_counters   = 1;
     op->get.resolve_timestamps = 1;
 
-    if(CASTLE_RING_FLAG_RET_TIMESTAMP & op->req.flags)
+    if ((op->req.flags & CASTLE_RING_FLAG_RET_TIMESTAMP) &&
+        !castle_attachment_user_timestamping_check(op->attachment))
     {
-        if(!castle_attachment_user_timestamping_check(op->attachment))
-        {
-            error("User requested timestamp return on a non-timestamped collection, id=0x%x\n",
-                    op->req.get.collection_id);
-            err = -EINVAL;
-            goto err3;
-        }
+        error("User requested timestamp return on a non-timestamped collection, id=0x%x\n",
+              op->req.get.collection_id);
+        err = -EINVAL;
+        goto err3;
     }
 
     err = castle_object_get(&op->get, op->attachment, op->cpu_index);
@@ -1786,9 +1751,9 @@ static void castle_back_get(void *data)
     return;
 
 err3: castle_back_buffer_put(conn, op->buf);
-err2: castle_free(key);
-err1: castle_attachment_put(op->attachment);
-err0: castle_back_reply(op, err, 0, 0, 0);
+err2: castle_attachment_put(op->attachment);
+err0: castle_free(op->key);
+      castle_back_reply(op, err, 0, 0, 0);
 }
 
 /**** ITERATORS ****/
@@ -2883,7 +2848,6 @@ static void castle_back_big_put(void *data)
     struct castle_back_conn *conn = op->conn;
     int err;
     struct castle_attachment *attachment;
-    c_vl_bkey_t *key;
     castle_interface_token_t token;
     struct castle_back_stateful_op *stateful_op;
 
@@ -2920,17 +2884,10 @@ static void castle_back_big_put(void *data)
         goto err1;
     }
 
-    /* Get a copy of the key into kernel memory from userspace shared buffer. - Why? */
-    /* start_key and end_key are freed by castle_object_iter_finish */
-    err = castle_back_key_copy_get(conn, op->req.big_put.key_ptr,
-        op->req.big_put.key_len, &key);
-    if (err)
-        goto err2;
-
-    #ifdef DEBUG
+#ifdef DEBUG
     debug("key: \n");
-    vl_bkey_print(LOG_DEBUG, key);
-    #endif
+    vl_bkey_print(LOG_DEBUG, op->key);
+#endif
 
     /* Initialize stateful op. */
     stateful_op->tag = CASTLE_RING_BIG_PUT;
@@ -2956,7 +2913,7 @@ static void castle_back_big_put(void *data)
     stateful_op->replace.data_copy = castle_back_big_put_data_copy;
 
     /* Store key and free it after completion of operation. */
-    stateful_op->replace.key = key;
+    stateful_op->replace.key = op->key;
 
     /* We would never big_put counters. */
     stateful_op->replace.counter_type = CASTLE_OBJECT_NOT_COUNTER;
@@ -2972,11 +2929,10 @@ static void castle_back_big_put(void *data)
                                 op->cpu_index,
                                 0 /*tombstone*/);
     if (err)
-        goto err3;
+        goto err2;
 
     return;
 
-err3: castle_free(key);
 err2: castle_attachment_put(attachment);
       stateful_op->attachment = NULL;
 err1: /* Safe as no-one could have queued up an op - we have not returned token */
@@ -2984,7 +2940,8 @@ err1: /* Safe as no-one could have queued up an op - we have not returned token 
       stateful_op->curr_op = NULL;
       /* will drop stateful_op->lock */
       castle_back_put_stateful_op(conn, stateful_op);
-err0: castle_back_reply(op, err, 0, 0, 0);
+err0: castle_free(op->key);
+      castle_back_reply(op, err, 0, 0, 0);
 }
 
 /**
@@ -2999,7 +2956,6 @@ static void castle_back_timestamped_big_put(void *data)
     struct castle_back_conn *conn = op->conn;
     int err;
     struct castle_attachment *attachment;
-    c_vl_bkey_t *key;
     castle_interface_token_t token;
     struct castle_back_stateful_op *stateful_op;
 
@@ -3036,17 +2992,10 @@ static void castle_back_timestamped_big_put(void *data)
         goto err1;
     }
 
-    /* Get a copy of the key into kernel memory from userspace shared buffer. - Why? */
-    /* start_key and end_key are freed by castle_object_iter_finish */
-    err = castle_back_key_copy_get(conn, op->req.timestamped_big_put.key_ptr,
-        op->req.timestamped_big_put.key_len, &key);
-    if (err)
-        goto err2;
-
-    #ifdef DEBUG
+#ifdef DEBUG
     debug("key: \n");
-    vl_bkey_print(LOG_DEBUG, key);
-    #endif
+    vl_bkey_print(LOG_DEBUG, op->key);
+#endif
 
     /* Initialize stateful op. */
     stateful_op->tag = CASTLE_RING_BIG_PUT;
@@ -3072,7 +3021,7 @@ static void castle_back_timestamped_big_put(void *data)
     stateful_op->replace.data_copy = castle_back_big_put_data_copy;
 
     /* Store key and free it after completion of operation. */
-    stateful_op->replace.key = key;
+    stateful_op->replace.key = op->key;
 
     /* We would never big_put counters. */
     stateful_op->replace.counter_type = CASTLE_OBJECT_NOT_COUNTER;
@@ -3090,11 +3039,10 @@ static void castle_back_timestamped_big_put(void *data)
                                 op->cpu_index,
                                 0 /*tombstone*/);
     if (err)
-        goto err3;
+        goto err2;
 
     return;
 
-err3: castle_free(key);
 err2: castle_attachment_put(attachment);
       stateful_op->attachment = NULL;
 err1: /* Safe as no-one could have queued up an op - we have not returned token */
@@ -3102,7 +3050,8 @@ err1: /* Safe as no-one could have queued up an op - we have not returned token 
       stateful_op->curr_op = NULL;
       /* will drop stateful_op->lock */
       castle_back_put_stateful_op(conn, stateful_op);
-err0: castle_back_reply(op, err, 0, 0, 0);
+err0: castle_free(op->key);
+      castle_back_reply(op, err, 0, 0, 0);
 }
 
 static void castle_back_put_chunk(void *data)
@@ -3322,7 +3271,6 @@ static void castle_back_big_get(void *data)
     struct castle_back_conn *conn = op->conn;
     int err;
     struct castle_attachment *attachment;
-    c_vl_bkey_t *key;
     castle_interface_token_t token;
     struct castle_back_stateful_op *stateful_op;
 
@@ -3356,29 +3304,12 @@ static void castle_back_big_get(void *data)
 
     INIT_WORK(&stateful_op->work[0], castle_back_big_get_do_chunk, stateful_op);
 
-    err = castle_back_key_copy_get(conn, op->req.big_get.key_ptr,
-        op->req.big_get.key_len, &key);
-    if (err)
-    {
-        error("Error copying key err=%d\n", err);
-        error("Could not get buffer for pointer=%p, while doing op: "
-              "(tag: 0x%x, call_id: 0x%x, col: 0x%x, key_ptr: %p, key_len: 0x%x)\n",
-                op->req.big_get.key_ptr,
-                op->req.tag,
-                op->req.call_id,
-                op->req.big_get.collection_id,
-                op->req.big_get.key_ptr,
-                op->req.big_get.key_len);
-
-        goto err2;
-    }
-
-    #ifdef DEBUG
+#ifdef DEBUG
     debug_iter("key: \n");
-    vl_bkey_print(LOG_DEBUG, key);
-    #endif
+    vl_bkey_print(LOG_DEBUG, op->key);
+#endif
 
-    stateful_op->pull.key = key;
+    stateful_op->pull.key = op->key;
 
     /* in the beginning, we will be willing to resolve timestamps or counters, but upon retrieval
        of the first candidate return value, we will pick one or the other. */
@@ -3387,18 +3318,18 @@ static void castle_back_big_get(void *data)
 
     err = castle_object_pull(&stateful_op->pull, attachment, op->cpu_index);
     if (err)
-        goto err3;
+        goto err2;
 
     return;
 
-err3: castle_free(key);
 err2: castle_attachment_put(attachment);
       stateful_op->attachment = NULL;
 err1: /* Safe as no one will have queued up a op - we haven't returned token yet */
       spin_lock(&stateful_op->lock);
       stateful_op->curr_op = NULL;
       castle_back_put_stateful_op(conn, stateful_op);
-err0: castle_back_reply(op, err, 0, 0, 0);
+err0: castle_free(op->key);
+      castle_back_reply(op, err, 0, 0, 0);
 }
 
 static void castle_back_get_chunk(void *data)
@@ -3539,12 +3470,13 @@ static int castle_back_stateful_op_cpu_index_get(struct castle_back_conn *conn,
  */
 static void castle_back_request_process(struct castle_back_conn *conn, struct castle_back_op *op)
 {
-    c_vl_bkey_t *key = NULL;
-    uint32_t key_len = 0;
+    int err;
     uint64_t val_len = 0;
     int8_t   counter_add_flag = -1;
 
     debug("Got a request call=%d tag=%d\n", op->req.call_id, op->req.tag);
+
+    op->key = NULL;
 
     /* Required in case castle_back_key_copy_get() fails to return a key.
      * It won't matter that the op ends up on the wrong CPU because it will
@@ -3559,57 +3491,65 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
          * Have CPU affinity based on hash of the key.  They must hit the
          * correct CPU (op->cpu) and CT (op->cpu_index). */
 
-        case CASTLE_RING_REMOVE:
-            INIT_WORK(&op->work, castle_back_remove, op);
-            key_len = op->req.remove.key_len;
-            castle_back_key_copy_get(conn, op->req.remove.key_ptr, key_len, &key);
+        case CASTLE_RING_TIMESTAMPED_REMOVE:
+            if ((err = castle_back_key_copy_get(conn, op->req.timestamped_remove.key_ptr,
+                                                op->req.timestamped_remove.key_len, &op->key)))
+                goto err;
+            INIT_WORK(&op->work, castle_back_timestamped_remove, op);
             break;
 
-        case CASTLE_RING_TIMESTAMPED_REMOVE:
-            INIT_WORK(&op->work, castle_back_timestamped_remove, op);
-            key_len = op->req.timestamped_remove.key_len;
-            castle_back_key_copy_get(conn, op->req.timestamped_remove.key_ptr, key_len, &key);
+        case CASTLE_RING_REMOVE:
+            if ((err = castle_back_key_copy_get(conn, op->req.remove.key_ptr,
+                                                op->req.remove.key_len, &op->key)))
+                goto err;
+            INIT_WORK(&op->work, castle_back_remove, op);
             break;
 
         case CASTLE_RING_TIMESTAMPED_REPLACE:
+            if ((err = castle_back_key_copy_get(conn, op->req.timestamped_replace.key_ptr,
+                                                op->req.timestamped_replace.key_len, &op->key)))
+                goto err;
             INIT_WORK(&op->work, castle_back_timestamped_replace, op);
-            key_len = op->req.timestamped_replace.key_len;
-            castle_back_key_copy_get(conn, op->req.timestamped_replace.key_ptr, key_len, &key);
             break;
 
         case CASTLE_RING_REPLACE:
+            if ((err = castle_back_key_copy_get(conn, op->req.replace.key_ptr,
+                                                op->req.replace.key_len, &op->key)))
+                goto err;
             INIT_WORK(&op->work, castle_back_replace, op);
-            key_len = op->req.replace.key_len;
-            castle_back_key_copy_get(conn, op->req.replace.key_ptr, key_len, &key);
             break;
 
         case CASTLE_RING_COUNTER_REPLACE:
+            err = -EINVAL;
+
             val_len = op->req.counter_replace.value_len;
-            counter_add_flag = op->req.counter_replace.add;
-            if(val_len != sizeof(int64_t))
+            if (val_len != sizeof(int64_t))
             {
                 error("Counter value len %lld is invalid; must be 8 bytes.\n", val_len);
-                castle_back_reply(op, -EINVAL, 0, 0, 0);
-                return;
+                goto err;
             }
+
             /* Note: the following sanity check has never been tested */
-            if((counter_add_flag != CASTLE_COUNTER_TYPE_SET) &&
-                    (counter_add_flag != CASTLE_COUNTER_TYPE_ADD))
+            counter_add_flag = op->req.counter_replace.add;
+            if (counter_add_flag != CASTLE_COUNTER_TYPE_SET &&
+                counter_add_flag != CASTLE_COUNTER_TYPE_ADD)
             {
                 error("Counter op flag (add) must be either 0 (SET) or 1 (ADD); value %d not recognized.\n",
-                        counter_add_flag);
-                castle_back_reply(op, -EINVAL, 0, 0, 0);
-                return;
+                      counter_add_flag);
+                goto err;
             }
+
+            if ((err = castle_back_key_copy_get(conn, op->req.counter_replace.key_ptr,
+                                                op->req.counter_replace.key_len, &op->key)))
+                goto err;
             INIT_WORK(&op->work, castle_back_counter_replace, op);
-            key_len = op->req.counter_replace.key_len;
-            castle_back_key_copy_get(conn, op->req.counter_replace.key_ptr, key_len, &key);
             break;
 
         case CASTLE_RING_GET:
+            if ((err = castle_back_key_copy_get(conn, op->req.get.key_ptr,
+                                                op->req.get.key_len, &op->key)))
+                goto err;
             INIT_WORK(&op->work, castle_back_get, op);
-            key_len = op->req.get.key_len;
-            castle_back_key_copy_get(conn, op->req.get.key_ptr, key_len, &key);
             break;
 
         /* Stateful op initialisers
@@ -3624,27 +3564,29 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
          * Regardless of type, subsequent stateful ops will use the same CPU. */
 
         case CASTLE_RING_TIMESTAMPED_BIG_PUT: /* put, key-hash CPU-affinity */
+            if ((err = castle_back_key_copy_get(conn, op->req.big_put.key_ptr,
+                                                op->req.timestamped_big_put.key_len, &op->key)))
+                goto err;
             INIT_WORK(&op->work, castle_back_timestamped_big_put, op);
-            key_len = op->req.timestamped_big_put.key_len;
-            castle_back_key_copy_get(conn, op->req.big_put.key_ptr, key_len, &key);
             break;
 
         case CASTLE_RING_BIG_PUT: /* put, key-hash CPU-affinity */
+            if ((err = castle_back_key_copy_get(conn, op->req.big_put.key_ptr,
+                                                op->req.big_put.key_len, &op->key)))
+                goto err;
             INIT_WORK(&op->work, castle_back_big_put, op);
-            key_len = op->req.big_put.key_len;
-            castle_back_key_copy_get(conn, op->req.big_put.key_ptr, key_len, &key);
             break;
 
         case CASTLE_RING_BIG_GET: /* get, key-hash CPU-affinity */
+            if ((err = castle_back_key_copy_get(conn, op->req.big_get.key_ptr,
+                                                op->req.big_get.key_len, &op->key)))
+                goto err;
             INIT_WORK(&op->work, castle_back_big_get, op);
-            key_len = op->req.big_get.key_len;
-            castle_back_key_copy_get(conn, op->req.big_get.key_ptr, key_len, &key);
             break;
 
         case CASTLE_RING_ITER_START: /* iterator, round-robin CPU selection */
-            INIT_WORK(&op->work, castle_back_iter_start, op);
-            key_len = op->req.iter_start.end_key_len;
             op->cpu_index = conn->cpu_index;
+            INIT_WORK(&op->work, castle_back_iter_start, op);
             break;
 
         /* Stateful op continuations
@@ -3652,48 +3594,42 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
          * Maintain existing CPU affinity. */
 
         case CASTLE_RING_ITER_NEXT:
-            INIT_WORK(&op->work, castle_back_iter_next, op);
             op->cpu_index = castle_back_stateful_op_cpu_index_get(conn,
                                                                   op->req.iter_next.token,
                                                                   CASTLE_RING_ITER_START);
+            INIT_WORK(&op->work, castle_back_iter_next, op);
             break;
 
         case CASTLE_RING_ITER_FINISH:
-            INIT_WORK(&op->work, castle_back_iter_finish, op);
             op->cpu_index = castle_back_stateful_op_cpu_index_get(conn,
                                                                   op->req.iter_finish.token,
                                                                   CASTLE_RING_ITER_START);
+            INIT_WORK(&op->work, castle_back_iter_finish, op);
             break;
 
         case CASTLE_RING_PUT_CHUNK:
-            INIT_WORK(&op->work, castle_back_put_chunk, op);
             op->cpu_index = castle_back_stateful_op_cpu_index_get(conn,
                                                                   op->req.put_chunk.token,
                                                                   CASTLE_RING_BIG_PUT);
+            INIT_WORK(&op->work, castle_back_put_chunk, op);
             break;
 
         case CASTLE_RING_GET_CHUNK:
-            INIT_WORK(&op->work, castle_back_get_chunk, op);
             op->cpu_index = castle_back_stateful_op_cpu_index_get(conn,
                                                                   op->req.get_chunk.token,
                                                                   CASTLE_RING_BIG_GET);
+            INIT_WORK(&op->work, castle_back_get_chunk, op);
             break;
-
-        /* Default case. */
 
         default:
             error("Unknown request tag %d\n", op->req.tag);
-            castle_back_reply(op, -ENOSYS, 0, 0, 0);
-
-            return;
+            err = -ENOSYS;
+            goto err;
     }
 
     /* Hash key for cpu_index. */
-    if (key != NULL)
-    {
-        op->cpu_index = castle_double_array_key_cpu_index(key, key_len);
-        castle_free(key);
-    }
+    if (op->key != NULL)
+        op->cpu_index = castle_double_array_key_cpu_index(op->key);
 
     /* Get CPU and queue work. */
     op->cpu = castle_double_array_request_cpu(op->cpu_index);
@@ -3703,6 +3639,11 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
     if (++conn->cpu_index >= castle_double_array_request_cpus())
         conn->cpu_index = 0;
     conn->cpu = castle_double_array_request_cpu(conn->cpu_index);
+
+    return;
+
+err:
+    castle_back_reply(op, err, 0, 0, 0);
 }
 
 /**
