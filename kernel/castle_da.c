@@ -10587,7 +10587,6 @@ static void __castle_da_cts_proxy_put(void *data)
     int ct;
 
     BUG_ON(atomic_read(&proxy->ref_cnt) != 0);
-//    BUG_ON(proxy->da->cts_proxy == proxy);
     castle_printk(LOG_DEBUG, "%s: ref_cnt==0, proxy=%p, da=%p\n",
             __FUNCTION__, proxy, proxy->da);
 
@@ -10650,11 +10649,12 @@ void castle_da_cts_proxy_put(struct castle_da_cts_proxy *proxy)
 /**
  * Invalidate an existing DA CTs proxy, if one exists.
  *
- * @param   da_locked   Whether the DA is write-locked
+ * @param   da_locked   1 => DA is write locked
+ *                      0 => DA is not write locked, DA hash lock is held
  *
- * NOTE: We call _castle_da_cts_proxy_put() with the async_free option as we may
- *       have been called from castle_da_cts_proxy_timeout() and hence the DA
- *       hash lock may be held.
+ * NOTE: We call _castle_da_cts_proxy_put() with async_free set if da_locked is
+ *       not true.  This is because it is not safe to drop extent references
+ *       with the DA hash lock held.
  */
 static int castle_da_cts_proxy_invalidate(struct castle_double_array *da, void *da_locked)
 {
@@ -10670,7 +10670,10 @@ static int castle_da_cts_proxy_invalidate(struct castle_double_array *da, void *
 
         proxy = da->cts_proxy;
         da->cts_proxy = NULL;
-        _castle_da_cts_proxy_put(proxy, 1 /*async_free*/);
+        if (da_locked)
+            _castle_da_cts_proxy_put(proxy, 0 /*async_free*/);
+        else
+            _castle_da_cts_proxy_put(proxy, 1 /*async_free*/);
     }
 
     if (!da_locked)
