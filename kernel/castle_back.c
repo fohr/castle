@@ -42,10 +42,10 @@ DEFINE_RING_TYPES(castle, castle_request_t, castle_response_t);
 //#define DEBUG
 #ifndef DEBUG
 #define debug(_f, ...)              ((void)0)
-#define debug_iter(_f, ...)         ((void)0)
+#define stateful_debug(_f, _a...)   ((void)0)
 #else
 #define debug(_f, _a...)            (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
-#define debug_iter(_f, _a...)       (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define stateful_debug(_f, _a...)   (castle_printk(LOG_DEBUG, "%s:%.4d:%s: " _f, __FILE__, __LINE__, __FUNCTION__, ##_a))
 #endif
 
 struct workqueue_struct        *castle_back_wq;
@@ -147,6 +147,11 @@ struct castle_back_iterator
     uint64_t                      nr_keys;          /**< Stats: number of keys.             */
     uint64_t                      nr_bytes;         /**< Stats: number of Bytes.            */
 };
+
+#define stateful_op_fmt_str     "conn=%p stateful_op=%p curr_op=%p in_use=%d "                  \
+                                "cancel_on_op_complete=%d tag=%u token=0x%x"
+#define stateful_op2str(_s_op)  (_s_op)->conn, (_s_op), (_s_op)->curr_op, (_s_op)->in_use,      \
+                                (_s_op)->cancel_on_op_complete, (_s_op)->tag, (_s_op)->token
 
 typedef void (*castle_back_stateful_op_expire_t) (struct castle_back_stateful_op *stateful_op);
 
@@ -825,8 +830,8 @@ static void castle_back_stateful_op_finish_all(struct castle_back_stateful_op *s
 //#endif
     }
 
-    castle_printk(LOG_DEBUG, "%s: stateful_op=%p cancelled %i ops.\n",
-            __FUNCTION__, stateful_op, cancelled);
+    stateful_debug("stateful_op=%p cancelled %i ops.\n",
+            stateful_op, cancelled);
 }
 
 /******************************************************************
@@ -1895,13 +1900,13 @@ static void castle_back_iter_call_queued(struct castle_back_stateful_op *statefu
 
     if (castle_back_stateful_op_prod(stateful_op))
     {
-        debug_iter("castle_back_iter_call_queued add next op to work queue, token = 0x%x.\n",
-                stateful_op->token);
         switch (stateful_op->curr_op->req.tag)
         {
             case CASTLE_RING_ITER_NEXT:
                 /* Requeue ITER_NEXTs to prevent a stack overflow when called
                  * from castle_back_iter_reply(). */
+                stateful_debug(stateful_op_fmt_str" ITER_NEXT\n",
+                        stateful_op2str(stateful_op));
                 spin_unlock(&stateful_op->lock);
                 BUG_ON(!queue_work_on(stateful_op->cpu, castle_back_wq, &stateful_op->work[0]));
                 break;
@@ -1909,9 +1914,8 @@ static void castle_back_iter_call_queued(struct castle_back_stateful_op *statefu
             case CASTLE_RING_ITER_FINISH:
                 /* ITER_FINISH can only ever occur once for a stateful op, so
                  * don't requeue allowing a no-requeue fastpath iterator. */
-                castle_printk(LOG_DEBUG, "%s: conn=%p stateful_op=%p in_use=%d cancel_on_op_complete=%d curr_op=%p\n",
-                        __FUNCTION__, stateful_op->conn, stateful_op, stateful_op->in_use,
-                        stateful_op->cancel_on_op_complete, stateful_op->curr_op);
+                stateful_debug(stateful_op_fmt_str" ITER_FINISH\n",
+                        stateful_op2str(stateful_op));
                 spin_unlock(&stateful_op->lock);
                 __castle_back_iter_finish((void *)stateful_op);
                 break;
@@ -1943,7 +1947,7 @@ static void castle_back_iter_reply(struct castle_back_stateful_op *stateful_op,
                                    struct castle_back_op *op,
                                    int err)
 {
-    debug_iter("castle_back_iter_reply, token = 0x%x.\n", stateful_op->token);
+    stateful_debug(stateful_op_fmt_str"\n", stateful_op2str(stateful_op));
 
     castle_back_reply(op, err, stateful_op->token, 0, 0);
 
@@ -2054,7 +2058,7 @@ static void castle_back_iter_start(void *data)
     c_vl_bkey_t *end_key;
     int err;
 
-    debug_iter("castle_back_iter_start\n");
+    stateful_debug("conn=%p op=%p\n", conn, op);
 
     token = castle_back_stateful_op_get(conn,
                                         &stateful_op,
@@ -2088,10 +2092,10 @@ static void castle_back_iter_start(void *data)
         goto err3;
 
 #ifdef DEBUG
-    debug_iter("start_key: \n");
+    stateful_debug("start_key: \n");
     vl_bkey_print(LOG_DEBUG, start_key);
 
-    debug_iter("end_key: \n");
+    stateful_debug("end_key: \n");
     vl_bkey_print(LOG_DEBUG, end_key);
 #endif
 
@@ -2128,6 +2132,8 @@ static void castle_back_iter_start(void *data)
 
     /* castle_object_iter_init() has gone asynchronous, iter_start will be
      * continued via callback handler, _castle_back_iter_start(). */
+
+    stateful_debug("op=%p "stateful_op_fmt_str"\n", op, stateful_op2str(stateful_op));
 
     return;
 
@@ -2260,6 +2266,9 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
     op = stateful_op->curr_op;
     BUG_ON(!op);
 
+    stateful_debug("op=%p "stateful_op_fmt_str" key=%p err=%d\n",
+            op, stateful_op2str(stateful_op), key, err);
+
     if (err)
         goto err0;
 
@@ -2334,6 +2343,8 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
                    val->length);
         }
 
+        stateful_debug("op=%p "stateful_op_fmt_str" key=%p err=%d cur_len=0\n",
+                op, stateful_op2str(stateful_op), key, err);
         castle_back_buffer_put(conn, op->buf);
         castle_back_iter_reply(stateful_op, op, 0);
 
@@ -2372,14 +2383,15 @@ static void __castle_back_iter_next(void *data)
     int                             err;
     struct castle_back_stateful_op *stateful_op = data;
 
-    debug_iter("__castle_back_iter_next, token = 0x%x\n", stateful_op->token);
-
     BUG_ON(!stateful_op->in_use);
 
     conn = stateful_op->conn;
     op = stateful_op->curr_op;
     BUG_ON(!op);
     iterator = stateful_op->iterator.iterator;
+
+    stateful_debug("op=%p "stateful_op_fmt_str" iterator=%p iterator.saved_key=%p\n",
+            op, stateful_op2str(stateful_op), iterator, stateful_op->iterator.saved_key);
 
     stateful_op->iterator.kv_list_tail = castle_back_user_to_kernel(op->buf,
             op->req.iter_next.buffer_ptr);
@@ -2393,18 +2405,16 @@ static void __castle_back_iter_next(void *data)
     buf_len = op->req.iter_next.buffer_len;
 
 #ifdef DEBUG
-    debug_iter("iter_next start_key\n");
+    stateful_debug("iter_next start_key\n");
     vl_bkey_print(LOG_DEBUG, iterator->start_key);
 
-    debug_iter("iter_next end_key\n");
+    stateful_debug("iter_next end_key\n");
     vl_bkey_print(LOG_DEBUG, iterator->end_key);
 #endif
 
     /* if we have a saved key and value from the last call, add them to the buffer */
     if (stateful_op->iterator.saved_key != NULL)
     {
-        debug_iter("iter_next found saved key, adding to buffer\n");
-
         buf_used = castle_back_save_key_value_to_list(stateful_op,  /* stateful_op      */
                 kv_list_head,                                       /* kv_list          */
                 stateful_op->iterator.saved_key,                    /* key              */
@@ -2424,8 +2434,6 @@ static void __castle_back_iter_next(void *data)
         castle_free(stateful_op->iterator.saved_key);
         /* we copied it so free it */
         CVT_INLINE_FREE(stateful_op->iterator.saved_val);
-
-        debug_iter("iter_next added saved key\n");
 
         stateful_op->iterator.saved_key = NULL;
 
@@ -2475,7 +2483,7 @@ static void _castle_back_iter_next(struct castle_back_op *op,
     spin_lock(&stateful_op->lock);
 
     /* Put this op on the queue for the iterator */
-    debug_iter("Adding iter_next to stateful_op %p queue.\n", stateful_op);
+    stateful_debug("op=%p "stateful_op_fmt_str"\n", op, stateful_op2str(stateful_op));
     err = castle_back_stateful_op_queue_op(stateful_op, op->req.iter_next.token, op);
     if (err)
     {
@@ -2505,8 +2513,6 @@ static void castle_back_iter_next(void *data)
 {
     struct castle_back_op *op = data;
     struct castle_back_stateful_op *stateful_op;
-
-    debug_iter("castle_back_iter_next, token = 0x%x\n", op->req.iter_next.token);
 
     stateful_op = castle_back_find_stateful_op(op->conn,
                                                op->req.iter_next.token,
@@ -2563,9 +2569,10 @@ static void __castle_back_iter_finish(void *data)
     BUG_ON(stateful_op->cancelled);
     stateful_op->cancelled++;
 
-    debug_iter("__castle_back_iter_finish, token = 0x%x\n", stateful_op->token);
-
     err = castle_object_iter_finish(stateful_op->iterator.iterator);
+
+    stateful_debug(stateful_op_fmt_str" err=%d\n",
+            stateful_op2str(stateful_op), err);
 
     castle_back_reply(stateful_op->curr_op, err, 0, 0, 0);
 
@@ -2639,20 +2646,19 @@ static void castle_back_iter_finish(void *data)
     struct castle_back_op *op = data;
     struct castle_back_stateful_op *stateful_op;
 
-    debug_iter("castle_back_iter_finish, token = 0x%x\n", op->req.iter_finish.token);
-
     stateful_op = castle_back_find_stateful_op(op->conn,
                                                op->req.iter_finish.token,
                                                CASTLE_RING_ITER_START);
-
     if (!stateful_op)
     {
-        castle_printk(LOG_INFO, "%s Token not found 0x%x\n",
-                __FUNCTION__, op->req.iter_finish.token);
+        stateful_debug("op=%p stateful_op=%p token=0x%x not found\n",
+                op, stateful_op, op->req.iter_finish.token);
         castle_back_reply(op, -EBADFD, 0, 0, 0);
 
         return;
     }
+
+    stateful_debug("op=%p "stateful_op_fmt_str"\n", op, stateful_op2str(stateful_op));
 
     _castle_back_iter_finish(op, stateful_op);
 }
@@ -3303,7 +3309,7 @@ static void castle_back_big_get(void *data)
     INIT_WORK(&stateful_op->work[0], castle_back_big_get_do_chunk, stateful_op);
 
 #ifdef DEBUG
-    debug_iter("key: \n");
+    stateful_debug("key: \n");
     vl_bkey_print(LOG_DEBUG, op->key);
 #endif
 
