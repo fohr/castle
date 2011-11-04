@@ -311,8 +311,6 @@ void castle_btree_node_init(struct castle_component_tree *ct,
 {
     uint8_t  node_flags;
 
-    /* memset the node, so that ftree nodes are easily recognisable in hexdump. */
-    memset(node, 0x77, node_size * C_BLK_SIZE);
     /* node leaf flag */
     node_flags     = (rev_level == 0 ? BTREE_NODE_IS_LEAF_FLAG : 0);
     /* node timestamped flag */
@@ -2731,6 +2729,8 @@ void castle_btree_node_buffer_init(btree_t type,
                                    int version)
 {
     debug("Resetting btree node buffer.\n");
+    /* memset the node, so that btree nodes are easily recognisable in hexdump. */
+    memset(node, 0x77, node_size * C_BLK_SIZE);
     /* Buffers are proper btree nodes understood by castle_btree_node_type function sets.
        Initialise the required bits of the node, so that the types don't complain. */
     buffer->magic   = BTREE_NODE_MAGIC;
