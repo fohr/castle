@@ -1990,15 +1990,6 @@ void _castle_back_iter_start(void *private, int err)
     if (err)
         goto err;
 
-    if ((stateful_op->flags & CASTLE_RING_FLAG_RET_TIMESTAMP) &&
-        !castle_attachment_user_timestamping_check(stateful_op->attachment))
-    {
-        error("User requested timestamp return on a non-timestamped collection, id=0x%x\n",
-              op->req.get.collection_id);
-        err = -EINVAL;
-        goto err;
-    }
-
     /* Check CASTLE_BACK_CONN_DEAD_FLAG under the stateful_op lock to prevent
      * racing with castle_back_release().  _op_enable_expire() also needs it. */
     spin_lock(&stateful_op->lock);
@@ -2078,6 +2069,15 @@ static void castle_back_iter_start(void *data)
         error("Collection not found id=0x%x\n", op->req.iter_start.collection_id);
         err = -ENOTCONN;
         goto err1;
+    }
+
+    if ((op->req.flags & CASTLE_RING_FLAG_RET_TIMESTAMP) &&
+        !castle_attachment_user_timestamping_check(attachment))
+    {
+        error("User requested timestamp return on a non-timestamped collection, id=0x%x\n",
+              op->req.get.collection_id);
+        err = -EINVAL;
+        goto err2;
     }
 
     /* start_key and end_key are freed by castle_object_iter_finish */
