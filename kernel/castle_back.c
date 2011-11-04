@@ -2559,6 +2559,10 @@ static void __castle_back_iter_finish(void *data)
     struct castle_back_stateful_op *stateful_op = data;
     int err;
 
+    /* Verify this iter hasn't been finished twice. */
+    BUG_ON(stateful_op->cancelled);
+    stateful_op->cancelled++;
+
     debug_iter("__castle_back_iter_finish, token = 0x%x\n", stateful_op->token);
 
     err = castle_object_iter_finish(stateful_op->iterator.iterator);
@@ -2600,10 +2604,6 @@ static void _castle_back_iter_finish(struct castle_back_op *op,
      * Put this op on the queue for the iterator
      */
     spin_lock(&stateful_op->lock);
-
-    /* Verify this iter hasn't been finished twice. */
-    BUG_ON(stateful_op->cancelled);
-    stateful_op->cancelled++;
 
     castle_printk(LOG_DEBUG, "%s: conn=%p stateful_op=%p op=%p in_use=%d cancel_on_op_complete=%d curr_op=%p\n",
             __FUNCTION__, stateful_op->conn, stateful_op, op, stateful_op->in_use,
