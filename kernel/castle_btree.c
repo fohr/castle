@@ -294,14 +294,14 @@ void castle_btree_lub_find(struct castle_btree_node *node,
 }
 
 /**
- * Initialises btree node header. This is a convenience function that calls
+ * Initialize the btree node header. This is a convenience function that calls
  * castle_btree_node_buffer_init().
  *
- * @param ct          Component tree this node will belong to.
- * @param node        Pointer to where the node lives in memory.
- * @param version     Version of the node.
- * @param rev_level   Level at which this node will be used. Important: counted from the leaves,
- *                    same as for btree_type->node_size().
+ * @param ct          component tree this node will belong to
+ * @param node        pointer to where the node lives in memory
+ * @param version     version of the node
+ * @param node_size   size of the node in pages
+ * @param rev_level   level at which this node will be used, counted from the leaves
  */
 void castle_btree_node_init(struct castle_component_tree *ct,
                             struct castle_btree_node *node,
@@ -309,20 +309,14 @@ void castle_btree_node_init(struct castle_component_tree *ct,
                             uint16_t node_size,
                             uint8_t rev_level)
 {
-    uint8_t  node_flags;
+    uint8_t node_flags = 0;
 
-    /* node leaf flag */
-    node_flags     = (rev_level == 0 ? BTREE_NODE_IS_LEAF_FLAG : 0);
-    /* node timestamped flag */
-    if( !TREE_GLOBAL(ct->seq) &&
-        castle_da_user_timestamping_check(ct->da) )
+    if (rev_level == 0)
+        node_flags |= BTREE_NODE_IS_LEAF_FLAG;
+    if (!TREE_GLOBAL(ct->seq) && castle_da_user_timestamping_check(ct->da))
         node_flags |= BTREE_NODE_HAS_TIMESTAMPS_FLAG;
 
-    castle_btree_node_buffer_init(ct->btree_type,
-                                  node,
-                                  node_size,
-                                  node_flags,
-                                  version);
+    castle_btree_node_buffer_init(ct->btree_type, node, node_size, node_flags, version);
 }
 
 static int castle_btree_node_space_get(struct castle_component_tree *ct,
