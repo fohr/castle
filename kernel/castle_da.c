@@ -822,21 +822,6 @@ static int castle_kv_compare(struct castle_btree_type *btree,
     return castle_version_compare(v2, v1);
 }
 
-void castle_da_node_buffer_init(struct castle_btree_type *btree,
-                                       struct castle_btree_node *buffer,
-                                       uint16_t node_size)
-{
-    debug("Resetting btree node buffer.\n");
-    /* Buffers are proper btree nodes understood by castle_btree_node_type function sets.
-       Initialise the required bits of the node, so that the types don't complain. */
-    buffer->magic     = BTREE_NODE_MAGIC;
-    buffer->type      = btree->magic;
-    buffer->version   = 0;
-    buffer->used      = 0;
-    buffer->flags     = BTREE_NODE_IS_LEAF_FLAG | BTREE_NODE_HAS_TIMESTAMPS_FLAG;
-    buffer->size      = node_size;
-}
-
 /**
  * Modlist B-tree iterator structure.
  *
