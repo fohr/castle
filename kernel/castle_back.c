@@ -1623,7 +1623,7 @@ int castle_back_get_reply_continue(struct castle_object_get *get,
         uint32_t get_value_len = op->req.get.value_len;
         castle_user_timestamp_t u_ts = ULLONG_MAX;
 
-        if( CASTLE_RING_FLAG_RET_TIMESTAMP & get->flags )
+        if (get->flags & CASTLE_RING_FLAG_RET_TIMESTAMP)
             u_ts = get->cvt.user_timestamp;
 
         castle_back_buffer_put(op->conn, op->buf);
@@ -1986,15 +1986,13 @@ void _castle_back_iter_start(void *private, int err)
     if (err)
         goto err;
 
-    if ( CASTLE_RING_FLAG_RET_TIMESTAMP & stateful_op->flags )
+    if ((stateful_op->flags & CASTLE_RING_FLAG_RET_TIMESTAMP) &&
+        !castle_attachment_user_timestamping_check(stateful_op->attachment))
     {
-        if (!castle_attachment_user_timestamping_check(stateful_op->attachment))
-        {
-            error("User requested timestamp return on a non-timestamped collection, id=0x%x\n",
-                    op->req.get.collection_id);
-            err = -EINVAL;
-            goto err;
-        }
+        error("User requested timestamp return on a non-timestamped collection, id=0x%x\n",
+              op->req.get.collection_id);
+        err = -EINVAL;
+        goto err;
     }
 
     /* Check CASTLE_BACK_CONN_DEAD_FLAG under the stateful_op lock to prevent
@@ -2215,7 +2213,7 @@ static uint32_t castle_back_save_key_value_to_list(struct castle_back_stateful_o
         this_kv_used += val_len;
     }
 
-    if( CASTLE_RING_FLAG_RET_TIMESTAMP & stateful_op->flags )
+    if (stateful_op->flags & CASTLE_RING_FLAG_RET_TIMESTAMP)
         u_ts = val->user_timestamp;
 
     kv_list->user_timestamp = u_ts;
