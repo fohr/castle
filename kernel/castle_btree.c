@@ -2724,7 +2724,7 @@ void castle_btree_node_buffer_init(btree_t type,
 {
     debug("Resetting btree node buffer.\n");
     /* memset the node, so that btree nodes are easily recognisable in hexdump. */
-    memset(node, 0x77, node_size * C_BLK_SIZE);
+    memset(buffer, 0x77, node_size * C_BLK_SIZE);
     /* Buffers are proper btree nodes understood by castle_btree_node_type function sets.
        Initialise the required bits of the node, so that the types don't complain. */
     buffer->magic   = BTREE_NODE_MAGIC;
