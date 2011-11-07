@@ -1801,13 +1801,11 @@ struct castle_da_rq_iterator
     c_ver_t                     version;
     void                       *start_key;
     void                       *end_key;
-    void                       *start_stripped;
-    void                       *end_stripped;
+    void                       *start_stripped;     /**< Stripped start key.                    */
+    void                       *end_stripped;       /**< Stripped end key.                      */
 
     c_da_rq_iter_ct_relevant_t *relevant_cts;       /**< CT range query relevance.              */
     atomic_t                    pending_lookups;    /**< Number of pending CT relevance checks. */
-    void                       *stripped_start;     /**< Stripped start key.                    */
-    void                       *stripped_end;       /**< Stripped end key.                      */
 
     c_async_iterator_t          async_iter;         /**< Async iterator callback.               */
 
