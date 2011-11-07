@@ -2523,12 +2523,12 @@ extern int castle_meta_ext_compact_pct;
 extern int castle_last_checkpoint_ongoing;
 
 struct castle_merge_thread {
-    c_thread_id_t         id;
-    struct task_struct   *thread;
-    c_merge_id_t          merge_id;
-    int                   running;
-    uint64_t              cur_work_size;
-    struct list_head      hash_list;
+    c_thread_id_t               id;
+    struct task_struct         *thread;
+    c_merge_id_t                merge_id;
+    uint64_t                    cur_work_size;
+    struct list_head            hash_list;
+    struct castle_double_array *da;
 };
 
 extern uint32_t castle_merge_threads_count;

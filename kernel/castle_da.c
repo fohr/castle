@@ -221,16 +221,13 @@ void castle_da_next_ct_read(c_bvec_t *c_bvec);
 struct workqueue_struct *castle_da_wqs[NR_CASTLE_DA_WQS];
 char *castle_da_wqs_names[NR_CASTLE_DA_WQS] = {"castle_da0"};
 
-static int castle_merge_thread_stop(struct castle_merge_thread *thread, void *unused);
-
 static int castle_da_merge_check(struct castle_da_merge *merge, void *da);
 static void castle_ct_stats_commit(struct castle_component_tree *ct);
 static int castle_data_ext_should_drain(c_ext_id_t ext_id, struct castle_da_merge *merge);
 static void castle_data_ext_size_get(c_ext_id_t ext_id, uint64_t *nr_bytes,
                                      uint64_t *nr_drain_bytes, uint64_t *nr_entries);
-static int castle_merge_thread_create(c_thread_id_t *thread_id);
+static int castle_merge_thread_create(c_thread_id_t *thread_id, struct castle_double_array *da);
 static int castle_merge_thread_attach(c_merge_id_t merge_id, c_thread_id_t thread_id);
-static int castle_da_merge_thread_wakeup(struct castle_merge_thread *merge_thread, void *unused);
 
 static atomic_t castle_da_merge_thread_count = ATOMIC(0);
 
@@ -5615,7 +5612,7 @@ deser_done:
     /* If the merge is getting de-serialised for golden nugget, create a thread for it. */
     if (merge->serdes.des && castle_golden_nugget && (merge->level == 2))
     {
-        castle_merge_thread_create(&thread_id);
+        castle_merge_thread_create(&thread_id, da);
         if (THREAD_ID_INVAL(thread_id))
         {
             castle_printk(LOG_USERINFO, "Failed to create thread for the merge: %u\n", merge->id);
@@ -5882,7 +5879,7 @@ error_out:
     castle_check_kfree(merge->snapshot_delete.need_parent);
     castle_check_kfree(merge->snapshot_delete.occupied);
     castle_version_states_free(&merge->version_states);
-    if (!in_trees)  castle_check_kfree(merge->in_trees);
+    castle_check_kfree(merge->in_trees);
     castle_kfree(merge);
 
     debug_merges("Failed a merge with ret=%d\n", ret);
@@ -6895,16 +6892,18 @@ complete_merge_do:
         }
     }
 
-    /* Incase of abort, delay merge_dealloc until DA finish for the sake of last checkpoint. */
+    /* Successfully completed current unit of work. */
+    if (ret == EAGAIN)
+        goto out;
+
+    /* Merge could be aborted either due to DA destroy or due to FS exit. */
     if (ret == -ESHUTDOWN)
     {
+        /* If FS exiting, delay merge_dealloc until DA finish for the sake of last checkpoint. */
+        /* In case of DA destroy, merge thread itself will dealloc the merge. */
         castle_printk(LOG_DEVEL, "Stopping merge due to thread shutdown\n");
         goto out;
     }
-
-    /* Completed current unit of work. */
-    if (ret == EAGAIN)
-        goto out;
 
     /* Merge failed due to other issues. */
     if (ret)
@@ -11554,7 +11553,7 @@ void castle_double_array_merges_fini(void)
     /* Write memory barried to make sure all threads see castle_da_exiting. */
     wmb();
 
-    castle_merge_threads_hash_iterate(castle_da_merge_thread_wakeup, NULL);
+    castle_da_hash_iterate(castle_da_merge_restart, NULL);
 
     /* Wait for all merge threads to complete. */
     while (atomic_read(&castle_da_merge_thread_count))
@@ -11621,20 +11620,11 @@ void castle_da_destroy_complete(struct castle_double_array *da)
         list_for_each_safe(l, lt, &da->levels[i].trees)
         {
             struct castle_component_tree *ct;
-            struct castle_da_merge *merge;
 
             ct = list_entry(l, struct castle_component_tree, da_list);
 
-            /* Output trees would get destroyed during merge_dealloc. */
-            if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags))
-                continue;
-
-            merge = castle_merges_hash_get(ct->merge_id);
-            if (merge)
-            {
-                BUG_ON(merge != ct->merge);
-                castle_da_merge_dealloc(ct->merge, -ESTALE);
-            }
+            /* There should be no out-standing merges. */
+            BUG_ON(ct->merge || !MERGE_ID_INVAL(ct->merge_id));
 
             castle_sysfs_ct_del(ct);
 
@@ -11902,39 +11892,51 @@ static int castle_merge_thread_start(void *_data)
 {
     struct castle_merge_thread *merge_thread = (struct castle_merge_thread *)_data;
     struct castle_da_merge *merge;
+    struct castle_double_array *da = merge_thread->da;
 
     atomic_inc(&castle_da_merge_thread_count);
 
-    while(!castle_da_exiting && !kthread_should_stop())
-    {
-        int ret;
+    /* Get a reference for this thread. */
+    castle_da_get(da);
+
+    do {
+        int ret, ignore;
         uint64_t prev_nr_bytes;
 
-        set_current_state(TASK_INTERRUPTIBLE);
-        schedule();
-
-        if (castle_da_exiting || kthread_should_stop())
-            break;
-
-        /* Running should be set by the wakeup thread. */
-        BUG_ON(!merge_thread->running);
+        /* Wait for next merge work unit assignment or the exit condition. */
+        __wait_event_interruptible(da->merge_waitq,
+                                   exit_cond || merge_thread->cur_work_size,
+                                   ignore);
 
         merge = castle_merges_hash_get(merge_thread->merge_id);
+
+        /* Merge thread should skip the merge work, and exit. */
+        if (exit_cond)
+        {
+            /* If DA is destroyed, get-rid off merge. */
+            if (merge && castle_da_deleted(da))
+                castle_da_merge_dealloc(merge, -ESTALE);
+
+            break;
+        }
+
+        /* Work should be set by wake-up thread. */
+        BUG_ON(!merge_thread->cur_work_size);
         BUG_ON(!merge);
 
-        /* Take snapshot of current status. */
         prev_nr_bytes = merge->nr_bytes;
+        ret = castle_da_merge_do(merge, merge_thread->cur_work_size);
 
         /* Check if merge completed successfully. */
-        if ((ret = castle_da_merge_do(merge, merge_thread->cur_work_size)) == 0)
+        if (!ret)
         {
             BUG_ON(merge->nr_bytes < prev_nr_bytes);
             castle_events_merge_work_finished(merge_thread->merge_id,
                                               merge->nr_bytes - prev_nr_bytes, 1);
             merge_thread->merge_id = INVAL_MERGE_ID;
 
-            /* No need of this thread any more - exit. */
-            goto exit_thread;
+            /* One thread per merge, for now. Exit thread. */
+            break;
         }
         /* Merge not completed, but work completed successfully.
          *              (or)
@@ -11946,10 +11948,9 @@ static int castle_merge_thread_start(void *_data)
                                               merge->nr_bytes - prev_nr_bytes, 0);
         }
 
-        merge_thread->running = 0;
-    }
+        merge_thread->cur_work_size = 0;
+    } while(1);
 
-exit_thread:
     castle_printk(LOG_DEVEL, "Thread destroy: %u\n", merge_thread->id);
 
     castle_merge_threads_hash_remove(merge_thread);
@@ -11958,22 +11959,18 @@ exit_thread:
 
     atomic_dec(&castle_da_merge_thread_count);
 
+    castle_da_put(da);
+
     /* Note: Mereg thread code isnot very clean. Changes from user level merge handling to kernel are
      * particularly. Clean it up before v2. */
-    if (!kthread_should_stop())
-        do_exit(0);
+    BUG_ON(kthread_should_stop());
+
+    do_exit(0);
 
     return 0;
 }
 
-static int castle_da_merge_thread_wakeup(struct castle_merge_thread *merge_thread, void *unused)
-{
-    wake_up_process(merge_thread->thread);
-
-    return 0;
-}
-
-static int castle_merge_thread_create(c_thread_id_t *thread_id)
+static int castle_merge_thread_create(c_thread_id_t *thread_id, struct castle_double_array *da)
 {
     struct castle_merge_thread *merge_thread = castle_malloc(sizeof(struct castle_merge_thread),
                                                              GFP_KERNEL);
@@ -11984,9 +11981,11 @@ static int castle_merge_thread_create(c_thread_id_t *thread_id)
     if (!merge_thread)
         return -EINVAL;
 
-    merge_thread->running = 0;
-    merge_thread->thread  = kthread_create(castle_merge_thread_start, merge_thread,
-                                           "castle_mt_%u", castle_merge_threads_count);
+    merge_thread->merge_id      = INVAL_MERGE_ID;
+    merge_thread->cur_work_size = 0;
+    merge_thread->da            = da;
+    merge_thread->thread        = kthread_create(castle_merge_thread_start, merge_thread,
+                                                 "castle_mt_%u", castle_merge_threads_count);
     if (IS_ERR(merge_thread->thread))
     {
         castle_printk(LOG_USERINFO, "Failed to create merge thread\n");
@@ -11994,22 +11993,11 @@ static int castle_merge_thread_create(c_thread_id_t *thread_id)
         return -ENOMEM;
     }
 
-    merge_thread->merge_id  = INVAL_MERGE_ID;
     *thread_id = merge_thread->id = castle_merge_threads_count++;
 
     castle_merge_threads_hash_add(merge_thread);
 
     wake_up_process(merge_thread->thread);
-
-    return 0;
-}
-
-static int castle_merge_thread_stop(struct castle_merge_thread *merge_thread, void *unused)
-{
-    BUG_ON(!CASTLE_IN_TRANSACTION);
-    BUG_ON(!merge_thread);
-
-    kthread_stop(merge_thread->thread);
 
     return 0;
 }
@@ -12134,13 +12122,6 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
         goto err_out;
     }
 
-    if (castle_merge_thread_create(&thread_id) < 0)
-    {
-        ret = C_ERR_MERGE_THREAD;
-        castle_printk(LOG_USERINFO, "Failed to create merge thread\n");
-        goto err_out;
-    }
-
     /* Allocate memory for list of input arrays. */
     in_trees = castle_malloc(sizeof(void *) * merge_cfg->nr_arrays, GFP_KERNEL);
     if (!in_trees)
@@ -12232,6 +12213,7 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
         ret = C_ERR_NOMEM;
         goto err_out;
     }
+    castle_check_kfree(in_trees);
 
     ret = castle_da_merge_init(merge, NULL);
     if (ret < 0)
@@ -12252,6 +12234,13 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
 
     *merge_id = merge->id;
 
+    if (castle_merge_thread_create(&thread_id, da) < 0)
+    {
+        ret = C_ERR_MERGE_THREAD;
+        castle_printk(LOG_USERINFO, "Failed to create merge thread\n");
+        goto err_out;
+    }
+
     /* Attach merge thread to merge. */
     BUG_ON(castle_merge_thread_attach(merge->id, thread_id) < 0);
 
@@ -12261,11 +12250,10 @@ err_out:
 
     /* All userspace errors are +ve. */
     BUG_ON(ret <= 0);
-    BUG_ON(merge);
+    if (merge)
+        castle_da_merge_dealloc(merge, ret);
 
     castle_check_kfree(in_trees);
-    if (!THREAD_ID_INVAL(thread_id))
-        castle_merge_thread_stop(castle_merge_threads_hash_get(thread_id), NULL);
 
     return ret;
 }
@@ -12297,7 +12285,7 @@ int castle_merge_do_work(c_merge_id_t merge_id, c_work_size_t work_size, c_work_
     BUG_ON(!merge_thread);
     BUG_ON(merge_thread->merge_id != merge_id);
 
-    if (merge_thread->running)
+    if (merge_thread->cur_work_size)
     {
         castle_printk(LOG_WARN, "Can't do merge as it is already doing work: %u\n", merge_id);
         ret = C_ERR_MERGE_RUNNING;
@@ -12305,7 +12293,6 @@ int castle_merge_do_work(c_merge_id_t merge_id, c_work_size_t work_size, c_work_
     }
 
     merge_thread->cur_work_size = work_size;
-    merge_thread->running       = 1;
     wmb();
 
     wake_up_process(merge_thread->thread);
@@ -12363,7 +12350,6 @@ static int castle_merge_thread_attach(c_merge_id_t merge_id, c_thread_id_t threa
         goto err_out;
     }
 
-    BUG_ON(merge_thread->running);
     merge_thread->merge_id = merge_id;
     merge->thread_id       = thread_id;
     wmb();
