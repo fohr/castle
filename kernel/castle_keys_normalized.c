@@ -554,9 +554,9 @@ static int castle_norm_key_bounds_check(const struct castle_norm_key *key,
                                         const struct castle_norm_key *upper,
                                         unsigned int *offending_dim)
 {
-    const unsigned char *key_data, *key_end = castle_norm_key_end(key, &key_data), *key_curr = key_data;
-    const unsigned char *lower_data, *lower_end = castle_norm_key_end(lower, &lower_data), *lower_curr = lower_data;
-    const unsigned char *upper_data, *upper_end = castle_norm_key_end(upper, &upper_data), *upper_curr = upper_data;
+    const unsigned char *key_curr, *key_end = castle_norm_key_end(key, &key_curr);
+    const unsigned char *lower_curr, *lower_end = castle_norm_key_end(lower, &lower_curr);
+    const unsigned char *upper_curr, *upper_end = castle_norm_key_end(upper, &upper_curr);
 
     unsigned int dim;
     size_t key_dim = castle_norm_key_dim_get(&key_curr);
