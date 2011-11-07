@@ -542,13 +542,13 @@ static ssize_t slave_rebuild_state_show(struct kobject *kobj,
     return sprintf(buf, "0x%lx\n", slave->flags);
 }
 
-static ssize_t slave_free_show(struct kobject *kobj,
+static ssize_t slave_free_available_show(struct kobject *kobj,
                                struct attribute *attr,
                                char *buf)
 {
     struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj);
     castle_freespace_t  *freespace;
-    uint64_t current_freespace, max_freespace;
+    uint64_t free_available;
 
     if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))
     {
@@ -556,21 +556,31 @@ static ssize_t slave_free_show(struct kobject *kobj,
         freespace = freespace_sblk_get(slave);
         /* Work out how many free bytes there are ATM. */
         if(freespace->cons <= slave->prev_prod)
-            current_freespace =
+            free_available =
                 (uint64_t)((slave->prev_prod - freespace->cons) * CHKS_PER_SLOT * C_CHK_SIZE);
         else
-            current_freespace =
+            free_available =
                 (uint64_t)((freespace->max_entries - freespace->cons + slave->prev_prod)
                     * CHKS_PER_SLOT * C_CHK_SIZE);
-        /* Based on current usage, how many free bytes there will be after next checkpoint */
-        max_freespace = (uint64_t)(atomic_read(&slave->free_chk_cnt) * C_CHK_SIZE);
         freespace_sblk_put(slave, 0);
         castle_extent_transaction_end();
     }
     else
-        current_freespace = max_freespace = 0;
+        free_available = 0;
 
-    return sprintf(buf, "%llu %llu\n", current_freespace, max_freespace);
+    return sprintf(buf, "%llu\n", free_available);
+}
+
+static ssize_t slave_free_blocked_show(struct kobject *kobj,
+                               struct attribute *attr,
+                               char *buf)
+{
+    struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj);
+
+    if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))
+        return sprintf(buf, "%llu\n", (uint64_t)atomic_read(&slave->free_chk_cnt) * C_CHK_SIZE);
+    else
+        return sprintf(buf, "0\n");
 }
 
 /* Display the fs version (checkpoint number). */
@@ -1376,8 +1386,11 @@ __ATTR(ssd, S_IRUGO|S_IWUSR, slave_ssd_show, NULL);
 static struct castle_sysfs_entry slave_rebuild_state =
 __ATTR(rebuild_state, S_IRUGO|S_IWUSR, slave_rebuild_state_show, NULL);
 
-static struct castle_sysfs_entry slave_free =
-__ATTR(free, S_IRUGO|S_IWUSR, slave_free_show, NULL);
+static struct castle_sysfs_entry slave_free_available =
+__ATTR(free_available, S_IRUGO|S_IWUSR, slave_free_available_show, NULL);
+
+static struct castle_sysfs_entry slave_free_blocked =
+__ATTR(free_blocked, S_IRUGO|S_IWUSR, slave_free_blocked_show, NULL);
 
 static struct attribute *castle_slave_attrs[] = {
     &slave_uuid.attr,
@@ -1385,7 +1398,8 @@ static struct attribute *castle_slave_attrs[] = {
     &slave_used.attr,
     &slave_ssd.attr,
     &slave_rebuild_state.attr,
-    &slave_free.attr,
+    &slave_free_available.attr,
+    &slave_free_blocked.attr,
     NULL,
 };
 
