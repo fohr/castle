@@ -178,7 +178,7 @@ typedef uint64_t c_da_opts_t;       /**< Options bitmask for DA options that mus
                                          creation time. */
 enum {
     CASTLE_DA_OPTS_NONE                  = (0),             /**< No options (all defaults). */
-    CASTLE_DA_OPTS_NO_USER_TIMESTAMPING  = (1 << 0),        /**< Enable user timestamping. */
+    CASTLE_DA_OPTS_NO_USER_TIMESTAMPING  = (1 << 0),        /**< Disable user timestamping. */
 };
 
 /* Golden Nugget - Types */
