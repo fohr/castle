@@ -938,15 +938,18 @@ err1:
 
 void castle_sysfs_da_del(struct castle_double_array *da)
 {
-    kobject_remove(&da->merges_kobj);
-    kobject_remove(&da->arrays_kobj);
+    /* It is possible that some one could try to add to sysfs after da_del has happened.
+     * Sepcially merges, they take a reference on DA and try to add merges and arrays to
+     * to sysfs and parallely there could be a double_array_destroy(). So, just delete
+     * the top level and remain other directories for the sake last minute additions. We
+     * clean them up properly, anyway. */
     kobject_remove(&da->kobj);
 }
 
 void castle_sysfs_da_del_check(struct castle_double_array *da)
 {
-    castle_sysfs_kobj_release_wait(&da->merges_kobj);
-    castle_sysfs_kobj_release_wait(&da->arrays_kobj);
+    kobject_remove_wait(&da->merges_kobj);
+    kobject_remove_wait(&da->arrays_kobj);
     castle_sysfs_kobj_release_wait(&da->kobj);
 }
 

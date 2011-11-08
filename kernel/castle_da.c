@@ -4780,16 +4780,14 @@ static void castle_da_merge_partial_merge_cleanup(struct castle_da_merge *merge,
  *
  * @also castle_da_merge_init
  */
-static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
+static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err, int locked)
 {
     int i;
 
-    if (!merge)
-    {
-        castle_printk(LOG_ERROR, "%s::[da %d level %d] no merge structure.\n",
-                                  __FUNCTION__, merge->da->id, merge->level);
-        return;
-    }
+    if (!locked)
+        CASTLE_TRANSACTION_BEGIN;
+
+    BUG_ON(!merge);
 
     /* Remove entries from sysfs first. This has to happen before any another clean-up. */
     castle_da_merge_sysfs_cleanup(merge, err);
@@ -4844,7 +4842,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     {
         castle_printk(LOG_ERROR, "%s::[da %d level %d] version_states not fully"
                 " allocated.\n", __FUNCTION__, merge->da->id, merge->level);
-        return;
+        BUG();
     }
 
     /* Free the merged iterator, if one was allocated. */
@@ -4856,6 +4854,9 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
     castle_check_kfree(merge->drain_exts);
     castle_check_kfree(merge->in_trees);
     castle_kfree(merge);
+
+    if (!locked)
+        CASTLE_TRANSACTION_END;
 }
 
 /**
@@ -5506,6 +5507,8 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
     tree_seq_t out_tree_data_age;
     c_thread_id_t thread_id;
 
+    BUG_ON(!CASTLE_IN_TRANSACTION);
+
     debug("Merging Trees:\n");
     for (i=0; i<nr_trees; i++)
         debug("\tct=0x%x, dynamic=%d, size=%lu\n", in_trees[i]->seq, in_trees[i]->dynamic,
@@ -5718,7 +5721,7 @@ error_out:
         castle_ct_put(merge->out_tree, 0, NULL);
     }
     castle_printk(LOG_ERROR, "%s::Failed a merge with ret=%d\n", __FUNCTION__, ret);
-    castle_da_merge_dealloc(merge, ret);
+    castle_da_merge_dealloc(merge, ret, 1 /* In transaction. */);
     debug_merges("Failed a merge with ret=%d\n", ret);
 
     return ret;
@@ -6910,7 +6913,7 @@ complete_merge_do:
         castle_printk(LOG_WARN, "Merge for DA=%d, level=%d, failed to merge err=%d.\n",
                                  da->id, level, ret);
 
-    castle_da_merge_dealloc(merge, ret);
+    castle_da_merge_dealloc(merge, ret, 1/* In transaction. */);
 
     castle_trace_da_merge(TRACE_END, TRACE_DA_MERGE_ID, da->id, level, out_tree_id, 0);
 
@@ -7109,9 +7112,15 @@ merge_do:
             ret = castle_da_merge_do(merge, nr_bytes);
         } while(ret == EAGAIN);
 
+        /* Merge has been aborted. */
         if (ret == -ESHUTDOWN)
-            /* Merge has been aborted. */
+        {
+            /* DA is destroyed. Get-rid of merge. */
+            if (castle_da_deleted(da))
+                castle_da_merge_dealloc(merge, -ESTALE, 0 /* Not in transaction. */);
+
             goto __again;
+        }
         else if (ret)
         {
             /* Merge failed, wait 10s to retry. */
@@ -8687,20 +8696,16 @@ static int castle_da_ct_dealloc(struct castle_double_array *da,
 
 static int _castle_da_merge_dealloc(struct castle_da_merge *merge, void *unused)
 {
-    castle_da_merge_dealloc(merge, -ESHUTDOWN);
+    castle_da_merge_dealloc(merge, -ESHUTDOWN, 0/* Not in transction. */);
 
     return 0;
 }
 
 static void castle_merge_hash_destroy(void)
 {
-    CASTLE_TRANSACTION_BEGIN;
-
     __castle_merges_hash_iterate(_castle_da_merge_dealloc, NULL);
     castle_check_kfree(castle_merges_hash);
     castle_check_kfree(castle_merge_threads_hash);
-
-    CASTLE_TRANSACTION_END;
 }
 
 static int castle_da_hash_dealloc(struct castle_double_array *da, void *unused)
@@ -11952,7 +11957,7 @@ static int castle_merge_thread_start(void *_data)
         {
             /* If DA is destroyed, get-rid off merge. */
             if (merge && castle_da_deleted(da))
-                castle_da_merge_dealloc(merge, -ESTALE);
+                castle_da_merge_dealloc(merge, -ESTALE, 0 /* Not in transaction. */);
 
             break;
         }
@@ -12288,7 +12293,7 @@ err_out:
     /* All userspace errors are +ve. */
     BUG_ON(ret <= 0);
     if (merge)
-        castle_da_merge_dealloc(merge, ret);
+        castle_da_merge_dealloc(merge, ret, 1 /* In transaction. */);
 
     castle_check_kfree(in_trees);
 
