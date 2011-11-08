@@ -84,12 +84,12 @@ static inline _struct* _prefix##_hash_get(_key_t key)                           
     return v;                                                                                  \
 }                                                                                              \
                                                                                                \
-static inline int __##_prefix##_nr_entries_get()                                               \
+static inline int __##_prefix##_nr_entries_get(void)                                           \
 {                                                                                              \
     return _prefix##_nr_entries;                                                               \
 }                                                                                              \
                                                                                                \
-static inline int _prefix##_nr_entries_get()                                                   \
+static inline int _prefix##_nr_entries_get(void)                                               \
 {                                                                                              \
     int nr_entries;                                                                            \
     unsigned long flags;                                                                       \
