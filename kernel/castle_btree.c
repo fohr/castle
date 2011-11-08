@@ -1847,52 +1847,6 @@ static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
     }
 }
 
-static void castle_btree_iter_parent_node_idx_increment(c_iter_t *c_iter)
-{
-#ifdef DEBUG
-    int i;
-#endif
-
-    iter_debug("Called parent_node_idx_increment at depth=%d\n",
-                c_iter->depth);
-    /* Increment ONLY if we are doing C_ITER_ALL_ENTRIES */
-    if(c_iter->type != C_ITER_ALL_ENTRIES)
-        return;
-    /* Otherwise, increment the index for our parent node, if one exists.
-       Note that this may move the index beyond the capacity of the
-       parent node. This will be picked up, and fixed up on the next
-       path_traverse() */
-    if(c_iter->depth > 0)
-    {
-        /* Increment the idx */
-        iter_debug("Incrementing index at depth=%d, %d->%d\n",
-                c_iter->depth-1,
-                c_iter->node_idx[c_iter->depth - 1],
-                c_iter->node_idx[c_iter->depth - 1] + 1);
-        c_iter->node_idx[c_iter->depth - 1]++;
-        /* Reset the current depth idx to -1 */
-        iter_debug("Reseting index at depth: %d, from %d->-1\n",
-                c_iter->depth,
-                c_iter->node_idx[c_iter->depth]);
-        c_iter->node_idx[c_iter->depth] = -1;
-#ifdef DEBUG
-        /* All indicies below should be zero, but check that anyway */
-        for(i=c_iter->depth+1; i<MAX_BTREE_DEPTH; i++)
-        {
-            if(c_iter->node_idx[i] == -1)
-                continue;
-            castle_printk(LOG_ERROR, "ERROR: non -1 node_idx (%d) in idx_increment. "
-                   "at c_iter->depth=%d, found non -1 at depth=%d\n",
-                c_iter->node_idx[i], c_iter->depth, i);
-            BUG();
-        }
-#endif
-    }
-    /* We don't have to do anything if we are at the root node.
-       What will happen is that iter_start() will be called again, and
-       this will terminate the iterator, as the ->depth == 0 */
-}
-
 void castle_iter_parent_key_set(c_iter_t *iter, void *key)
 {
     struct castle_btree_type *btree = castle_btree_type_get(iter->tree->btree_type);
@@ -2001,66 +1955,6 @@ static int castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
     }
 }
 
-static int castle_btree_iter_all_leaf_process(c_iter_t *c_iter)
-{
-    struct castle_btree_node *node;
-    struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
-    c2_block_t *leaf;
-    int running_async, i;
-
-    leaf = c_iter->path[c_iter->depth];
-    BUG_ON(leaf == NULL);
-
-    node = c2b_bnode(leaf);
-    BUG_ON(!BTREE_NODE_IS_LEAF(node));
-
-    iter_debug("All entries: processing %d entries\n", node->used);
-
-    /* Perform consumer setup and determine index to start searching node. */
-    if (c_iter->node_start != NULL)
-        i = c_iter->node_start(c_iter);
-    else
-        i = 0;
-
-    for (; i < node->used; i++)
-    {
-        c_ver_t     entry_version;
-        c_val_tup_t entry_cvt;
-        void       *entry_key;
-
-        if (c_iter->cancelled)
-            break;
-
-        btree->entry_get(node, i, &entry_key, &entry_version,
-                         &entry_cvt);
-
-        if (CVT_ON_DISK(entry_cvt))
-            iter_debug("All entries: current slot: (b=%p, v=%x)->(cep=0x%x, 0x%x)\n",
-                       entry_key, entry_version, entry_cvt.cep.ext_id,
-                       entry_cvt.cep.offset);
-        if (!CVT_LEAF_PTR(entry_cvt))
-            if (c_iter->each(c_iter, i, entry_key, entry_version, entry_cvt))
-                break; /* Consumer advised us to terminate. */
-    }
-
-    iter_debug("Done processing entries.\n");
-
-    /* Run node_end callback if specified, otherwise continue iterating. */
-    running_async = c_iter->running_async;
-    c_iter->running_async = 0;
-    if (c_iter->node_end != NULL)
-        /* The node_end() callback may restart us asynchronously.  Whether this
-         * is the case or we are already running asynchronously we need to
-         * return this information to the caller. */
-        return c_iter->node_end(c_iter, running_async) || running_async;
-    else
-    {
-        castle_btree_iter_continue(c_iter);
-
-        return 1; /* inform caller we went async */
-    }
-}
-
 static int   castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_cep);
 /**
  * @return  0   Completed synchronously (e.g. cancelled, error, did not execute
@@ -2072,9 +1966,9 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
 {
     struct castle_btree_node *node;
     struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
-    c_ext_pos_t  entry_cep, node_cep;
+    c_ext_pos_t entry_cep;
     void *entry_key;
-    int index, skip;
+    int index;
     c_val_tup_t cvt;
 
     /* Return early on error */
@@ -2099,65 +1993,6 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
 
     switch(c_iter->type)
     {
-        case C_ITER_ALL_ENTRIES:
-            node_cep = c_iter->path[c_iter->depth]->cep;
-            /* If we enumerating all entries in the tree, we use the index saved
-               in node_idx table. */
-            index = c_iter->node_idx[c_iter->depth];
-            iter_debug("iter %p processing node_cep="cep_fmt_str", index=%d, node->used=%d\n",
-                    c_iter, cep2str(node_cep), index, node->used);
-            BUG_ON((index >= 0) && (index > node->used)); /* Be careful about unsigned comparions */
-            /* If index is in range [0 - (node->used-1)] (inclusive), we don't
-               have to check need_visit() (this has already been done).
-               If so, we can go straight to the next level of recursion */
-            if((index >= 0) && (index < node->used))
-            {
-                iter_debug("Subsequent visit, processing.\n");
-                break;
-            }
-
-            /* Skip processing the node if we already got to the end of the node.
-               Or if we are visiting the node for the first time (index == -1),
-               we may still want to skip it, if need_visit() call is false. */
-            BUG_ON((index != node->used) && (index != -1));
-            skip = (index == node->used) ||
-                   (c_iter->need_visit && !c_iter->need_visit(c_iter, node_cep));
-
-            if (skip)
-            {
-                castle_btree_iter_parent_node_idx_increment(c_iter);
-                iter_debug("skipping, iter %p, unlocking cep "cep_fmt_str"\n",
-                        c_iter, cep2str(node_cep));
-                read_unlock_node(c_iter->path[c_iter->depth]);
-
-                castle_btree_iter_start(c_iter);
-
-                return 1; /* inform caller we went async */
-            }
-
-            /* If we got here, it must be because we are visiting a node for the
-               first time, and need_visit() was true */
-            BUG_ON((index != -1) || skip);
-
-            /* Deal with leafs first */
-            if (BTREE_NODE_IS_LEAF(node))
-            {
-                int ret;
-
-                iter_debug("iter %p, visiting leaf node cep="cep_fmt_str".\n",
-                        c_iter, cep2str(node_cep));
-                ret = castle_btree_iter_all_leaf_process(c_iter);
-                castle_btree_iter_parent_node_idx_increment(c_iter);
-
-                return ret;
-            }
-
-            /* Final case: intermediate node visited for the first time */
-            iter_debug("iter %p visiting node cep="cep_fmt_str" for the first time.\n",
-                       c_iter, cep2str(node_cep));
-            c_iter->node_idx[c_iter->depth] = index = 0;
-            iter_debug("ALL_ENTRIES iter %p index=%d\n", c_iter, index);
-            break;
         case C_ITER_MATCHING_VERSIONS:
         case C_ITER_ANCESTRAL_VERSIONS:
             /* Deal with leafs first */
@@ -2478,7 +2313,6 @@ void castle_btree_iter_cancel(c_iter_t *c_iter, int err)
 void castle_btree_iter_init(c_iter_t *c_iter, c_ver_t version, int type)
 {
     struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
-    int i;
 
     iter_debug("Initialising iterator for version=0x%x\n", version);
 
@@ -2496,13 +2330,6 @@ void castle_btree_iter_init(c_iter_t *c_iter, c_ver_t version, int type)
     memset(c_iter->path, 0, sizeof(c_iter->path));
     switch(c_iter->type)
     {
-        case C_ITER_ALL_ENTRIES:
-            BUG_ON(!VERSION_INVAL(version));
-            /* Set all node indices to -1, which implies most extreme LHS walk through
-               the tree first */
-            for(i=0; i<MAX_BTREE_DEPTH; i++)
-                c_iter->node_idx[i] = -1;
-            return;
         case C_ITER_MATCHING_VERSIONS:
         case C_ITER_ANCESTRAL_VERSIONS:
             /* VLBA trees don't have leaf pointers. */
@@ -2539,183 +2366,6 @@ void castle_btree_free(void)
     wait_event(castle_btree_iters_wq, (atomic_read(&castle_btree_iters_cnt) == 0));
 }
 
-
-/**********************************************************************************************/
-/* Btree enumerator */
-#define VISITED_HASH_LENGTH     (1000)
-static int castle_enum_iter_need_visit(c_iter_t *c_iter, c_ext_pos_t  node_cep)
-{
-    struct castle_enumerator *c_enum = c_iter->private;
-    struct castle_visited *visited;
-    struct list_head *l;
-    int i;
-
-    enum_debug("Iterator is asking if to visit (0x%x, 0x%x)\n",
-            node_cep.ext_id, node_cep.offset);
-    /* All hash operations need to be protected with the lock */
-    spin_lock(&c_enum->visited_lock);
-    /* Simplistic hash function */
-    i = (node_cep.ext_id + node_cep.offset) % VISITED_HASH_LENGTH;
-    enum_debug("Hash bucket: %d\n", i);
-    /* Check if the cep is in the hash */
-    list_for_each(l, &c_enum->visited_hash[i])
-    {
-        visited = list_entry(l, struct castle_visited, list);
-        if(EXT_POS_EQUAL(visited->cep, node_cep))
-        {
-            enum_debug("Found in the hash.\n");
-            spin_unlock(&c_enum->visited_lock);
-            return 0;
-        }
-    }
-    enum_debug("Not found in the hash. Inserting\n");
-    /* We haven't found the entry in the hash, insert it instead */
-    visited = c_enum->visited + c_enum->next_visited++;
-    BUG_ON(c_enum->next_visited >= c_enum->max_visited);
-    visited->cep = node_cep;
-    list_add(&visited->list, &c_enum->visited_hash[i]);
-    /* Unlock and return 1 (please visit the node) */
-    spin_unlock(&c_enum->visited_lock);
-
-    return 1;
-}
-
-static int castle_enum_iter_each(c_iter_t *c_iter,
-                                 int index,
-                                 void *key,
-                                 c_ver_t version,
-                                 c_val_tup_t cvt)
-{
-    struct castle_enumerator *c_enum = c_iter->private;
-    struct castle_btree_type *btree;
-
-    btree = castle_btree_type_get(c_enum->buffer->type);
-    BUG_ON(c_enum->prod_idx != c_enum->buffer->used);
-    enum_debug("Entry for iterator: idx=%d, key=%p, version=%d\n",
-               index, key, version);
-    BUG_ON(CVT_LEAF_PTR(cvt));
-    btree->entry_add(c_enum->buffer, c_enum->prod_idx, key, version, cvt);
-    c_enum->prod_idx++;
-
-    return 0; /* Iterator to continue */
-}
-
-/**
- * @return  0   This callback did not cause calling iterator to go async.
- * @return  1   This callback started the calling iterator asynchronously.
- */
-static int castle_enum_iter_node_end(c_iter_t *c_iter, int async)
-{
-    struct castle_enumerator *c_enum = c_iter->private;
-
-    BUG_ON(c_enum->cons_idx != 0);
-    enum_debug("Ending node for iterator, nr_entries=%d.\n", c_enum->prod_idx);
-    /* Special case, if nothing was read (it's possible if e.g. all entries are leaf ptrs)
-       schedule the next node read, and exit early */
-    if(c_enum->prod_idx == 0)
-    {
-        castle_printk(LOG_WARN, "There were no useful entries in the node. "
-                "How is that possible? Error?.\n");
-        castle_btree_iter_continue(c_iter);
-
-        return 1; /* inform caller we went async */
-    }
-    /* Release the leaf lock, otherwise other iterators will block, and we will never
-       go past the enumaror initialisation */
-    __castle_btree_iter_release(c_iter);
-
-    c_enum->iterator_outs = 0;
-    wmb();
-    wake_up(&c_enum->iterator_wq);
-
-    return 0;
-}
-
-static void castle_enum_iter_end(c_iter_t *c_iter, int err, int async)
-{
-    struct castle_enumerator *c_enum = c_iter->private;
-
-    if(err) c_enum->err = err;
-    enum_debug("Iterator ending, err=%d\n", err);
-    c_enum->iter_completed = 1;
-    c_enum->iterator_outs = 0;
-    wmb();
-    wake_up(&c_enum->iterator_wq);
-}
-
-static void castle_btree_enum_fini(c_enum_t *c_enum)
-{
-    enum_debug("Freeing enumerator.\n");
-#ifdef DEBUG
-    if(c_enum->buffer)
-    {
-        enum_debug("Freeing buffer for the iterator.\n");
-        BUG_ON((c_enum->err != -ENOMEM) && (!c_enum->iter_completed));
-    }
-#endif
-    if(c_enum->buffer1)
-        castle_free(c_enum->buffer1);
-    if(c_enum->buffer2)
-        castle_free(c_enum->buffer2);
-
-    if(c_enum->visited_hash)
-    {
-        castle_kfree(c_enum->visited_hash);
-        c_enum->visited_hash = NULL;
-    }
-    if(c_enum->visited)
-    {
-        castle_free(c_enum->visited);
-        c_enum->visited = NULL;
-    }
-}
-
-static inline void castle_btree_enum_iterator_wait(c_enum_t *c_enum)
-{
-    wait_event(c_enum->iterator_wq, ({int _ret;
-                                      rmb();
-                                      _ret = (c_enum->iterator_outs == 0);
-                                      _ret;}));
-}
-
-void castle_btree_enum_cancel(c_enum_t *c_enum)
-{
-    enum_debug("Cancelling the enumerator\n");
-    /* Make sure that there are no outstanding iterations going on */
-    castle_btree_enum_iterator_wait(c_enum);
-    /* Cancel the iterator */
-    enum_debug("Canceling the iterator.\n");
-    if(!c_enum->iter_completed)
-    {
-        castle_btree_iter_cancel(&c_enum->iterator, 0);
-        /* Increment the counter, before restarting the iterator (this will terminate it) */
-        c_enum->iterator_outs = 1;
-        c_enum->cons_idx = c_enum->prod_idx = 0;
-        castle_btree_iter_start(&c_enum->iterator);
-    }
-    /* Wait for the iterator to terminate */
-    enum_debug("Waiting for the iterator to terminate, currently iterator_outs: %d\n",
-        c_enum->iterator_outs);
-    castle_btree_enum_iterator_wait(c_enum);
-
-    /* Now free the buffers */
-    castle_btree_enum_fini(c_enum);
-}
-
-int castle_btree_enum_has_next(c_enum_t *c_enum)
-{
-    int ret;
-
-    /* Make sure that all buffers are up-to-date */
-    castle_btree_enum_iterator_wait(c_enum);
-
-    ret = !c_enum->iter_completed;
-    if(!ret)
-        castle_btree_enum_fini(c_enum);
-
-    return ret;
-}
-
 void castle_btree_node_buffer_init(btree_t type,
                                    struct castle_btree_node *buffer,
                                    uint16_t node_size,
@@ -2734,113 +2384,6 @@ void castle_btree_node_buffer_init(btree_t type,
     buffer->flags   = flags;
     buffer->size    = node_size;
 }
-
-void castle_btree_enum_next(c_enum_t *c_enum,
-                            void **key_p,
-                            c_ver_t *version_p,
-                            c_val_tup_t *cvt_p)
-{
-    struct castle_btree_type *btree = castle_btree_type_get(c_enum->tree->btree_type);
-
-    /* _has_next() waits for all buffers to be filled in, it's safe to assume this has
-       been called just before */
-    BUG_ON(c_enum->iterator_outs != 0);
-    BUG_ON(c_enum->iter_completed);
-    BUG_ON(c_enum->cons_idx >= c_enum->prod_idx);
-
-    enum_debug("cons_idx %d, prod_idx %d\n", c_enum->cons_idx, c_enum->prod_idx);
-    /* Read off the entry we want to return, and increment the consumer index */
-    btree->entry_get(c_enum->buffer, c_enum->cons_idx, key_p, version_p, cvt_p);
-    c_enum->cons_idx++;
-    /* Check if next node should be read from the iterator */
-    if(c_enum->cons_idx == c_enum->prod_idx)
-    {
-        enum_debug("Scheduling a read for iterator.\n");
-        c_enum->prod_idx = c_enum->cons_idx = 0;
-        /* Remember that the iterator is in flight, and schedule the read. */
-        c_enum->iterator_outs = 1;
-        /* Switch buffers and reset the buffer node */
-        enum_debug("Switching buffer from %p ...\n", c_enum->buffer);
-        c_enum->buffer = (c_enum->buffer == c_enum->buffer1 ? c_enum->buffer2 : c_enum->buffer1);
-        enum_debug("                   to %p.\n", c_enum->buffer);
-        castle_btree_node_init(c_enum->tree, c_enum->buffer, 0, c_enum->buffer->size, 0);
-
-        /* Run the iterator again to get the next nodes worth of stuff */
-        castle_btree_iter_start(&c_enum->iterator);
-    }
-}
-
-void castle_btree_enum_init(c_enum_t *c_enum)
-{
-    struct castle_component_tree *ct;
-    struct castle_iterator *iter;
-    uint16_t leaf_node_size;
-    int i;
-
-    ct = c_enum->tree;
-    leaf_node_size = ct->node_sizes[0];
-    /* We no longer need to support multiple iterators, this should simplify a lot of
-       this code.
-        @TODO: go through it all and remove unneccessary code */
-    c_enum->err            = 0;
-    init_waitqueue_head(&c_enum->iterator_wq);
-    c_enum->iterator_outs  = 0;
-    /* Allocate memory for for buffers to store one node's worth of entries from the iterator */
-    c_enum->buffer         = NULL;
-    c_enum->buffer1        = NULL;
-    c_enum->buffer2        = NULL;
-    c_enum->visited_hash   = castle_malloc(VISITED_HASH_LENGTH * sizeof(struct list_head),
-                                     GFP_KERNEL);
-    c_enum->max_visited    = 8 * VISITED_HASH_LENGTH;
-    c_enum->visited        = castle_alloc(c_enum->max_visited * sizeof(struct castle_visited));
-    if(!c_enum->visited_hash || !c_enum->visited)
-        goto no_mem;
-    /* Init structures related to visited hash */
-    spin_lock_init(&c_enum->visited_lock);
-    c_enum->next_visited = 0;
-    for(i=0; i<VISITED_HASH_LENGTH; i++)
-        INIT_LIST_HEAD(c_enum->visited_hash + i);
-    /* Initialise the iterator and the buffer */
-
-    c_enum->prod_idx = 0;
-    c_enum->cons_idx = 0;
-    c_enum->iter_completed = 0;
-    c_enum->buffer1 = castle_alloc(leaf_node_size * C_BLK_SIZE);
-    c_enum->buffer2 = castle_alloc(leaf_node_size * C_BLK_SIZE);
-    c_enum->buffer = c_enum->buffer1;
-    if(!c_enum->buffer1 || !c_enum->buffer2)
-        goto no_mem;
-
-    castle_btree_node_init(ct, c_enum->buffer, 0, leaf_node_size, 0);
-
-    iter = &c_enum->iterator;
-    iter->tree       = ct;
-    iter->need_visit = castle_enum_iter_need_visit;
-    iter->node_start = NULL;
-    iter->each       = castle_enum_iter_each;
-    iter->node_end   = castle_enum_iter_node_end;
-    iter->end        = castle_enum_iter_end;
-    iter->private    = c_enum;
-    castle_btree_iter_init(iter, INVAL_VERSION, C_ITER_ALL_ENTRIES);
-
-    enum_debug("Allocated everything.\n");
-    c_enum->iterator_outs = 1;
-    /* Now, that the iterator has been created, and buffers allocated, start it */
-    castle_btree_iter_start(&c_enum->iterator);
-
-    return;
-no_mem:
-    c_enum->err = -ENOMEM;
-    castle_btree_enum_fini(c_enum);
-}
-
-struct castle_iterator_type castle_btree_enum = {
-    .register_cb = NULL,
-    .prep_next   = NULL,
-    .has_next = (castle_iterator_has_next_t)castle_btree_enum_has_next,
-    .next     = (castle_iterator_next_t)    castle_btree_enum_next,
-    .skip     = NULL,
-};
 
 static struct node_buf_t* node_buf_alloc(c_rq_iter_t *rq_iter)
 {
