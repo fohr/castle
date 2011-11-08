@@ -34,11 +34,6 @@ void        castle_rq_iter_init       (c_rq_iter_t *c_rq_iter,
 void        castle_rq_iter_cancel     (c_rq_iter_t *c_rq_iter);
 extern struct castle_iterator_type castle_rq_iter;
 
-/* Iterator to enumerate all entries in a dynamic modlist tree */
-void        castle_btree_enum_init    (c_enum_t *c_enum);
-void        castle_btree_enum_cancel  (c_enum_t *c_enum);
-extern struct castle_iterator_type castle_btree_enum;
-
 int         castle_btree_init         (void);
 void        castle_btree_free         (void);
 void castle_btree_node_init(struct castle_component_tree *ct,

@@ -1570,7 +1570,6 @@ struct castle_indirect_node {
 };
 
 enum {
-    C_ITER_ALL_ENTRIES,
     C_ITER_MATCHING_VERSIONS,
     C_ITER_ANCESTRAL_VERSIONS
 };
@@ -1605,8 +1604,6 @@ typedef struct castle_iterator {
     void                         *parent_key; /* The key we followed to get to the block
                                                  on the top of the path/stack */
     union {
-        /* Used by C_ITER_ALL_ENTRIES       */
-        int                       node_idx[MAX_BTREE_DEPTH];
         /* Used by C_ITER_MATCHING_VERSIONS & C_ITER_ANCESTORAL_VERSIONS */
         struct {
             void                 *key;          /* The next key to look for in the iteration
@@ -1632,35 +1629,6 @@ typedef struct castle_iterator {
 
     struct work_struct            work;
 } c_iter_t;
-
-/* Enumerates all entries in a modlist btree */
-typedef struct castle_enumerator {
-    struct castle_component_tree *tree;
-    int                           err;
-    struct castle_iterator        iterator;
-    wait_queue_head_t             iterator_wq;
-    volatile int                  iterator_outs;
-    int                           iter_completed;
-    /* Variables used to buffer up entries from the iterator */
-    int                           prod_idx;
-    int                           cons_idx;
-    struct castle_btree_node     *buffer;       /* Two buffers are actually allocated (buffer1/2) */
-    struct castle_btree_node     *buffer1;      /* buffer points to the one currently used to     */
-    struct castle_btree_node     *buffer2;      /* read in a node, second is used to preserve     */
-                                                /* key pointer validity. TODO: fix, waseful.      */
-
-    /* Set to decide whether to visit nodes, implemented as hash table */
-    struct {
-        spinlock_t                visited_lock;
-        struct list_head         *visited_hash;
-        int                       next_visited;
-        int                       max_visited;
-        struct castle_visited {
-            c_ext_pos_t           cep;
-            struct list_head      list;
-        } *visited;
-    };
-} c_enum_t;
 
 struct node_buf_t;
 struct node_buf_t {
