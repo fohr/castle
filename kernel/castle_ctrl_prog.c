@@ -7,6 +7,7 @@
 #include "castle_defines.h"
 #include "castle.h"
 #include "castle_events.h"
+#include "castle_utils.h"
 
 
 enum {
@@ -50,7 +51,7 @@ int castle_ctrl_prog_ioctl(cctrl_ioctl_t *ioctl)
     switch(ioctl->cmd)
     {
         case CASTLE_CTRL_PROG_REGISTER:
-            printk("Registering, from pid=%d\n", castle_ctrl_prog_curr_pid_get());
+            castle_printk(LOG_DEBUG, "Registering, from pid=%d\n", castle_ctrl_prog_curr_pid_get());
             if(castle_ctrl_prog_state != CTRL_PROG_NOT_PRESENT)
             {
                 ioctl->ctrl_prog_register.ret = C_ERR_EXISTS;
@@ -64,7 +65,7 @@ int castle_ctrl_prog_ioctl(cctrl_ioctl_t *ioctl)
             break;
 
         case CASTLE_CTRL_PROG_DEREGISTER:
-            printk("Deregistering, from pid=%d\n", castle_ctrl_prog_curr_pid_get());
+            castle_printk(LOG_DEBUG, "Deregistering, from pid=%d\n", castle_ctrl_prog_curr_pid_get());
             if(ioctl->ctrl_prog_deregister.shutdown)
             {
                 if(castle_ctrl_prog_state == CTRL_PROG_PRESENT)
@@ -91,7 +92,7 @@ int castle_ctrl_prog_ioctl(cctrl_ioctl_t *ioctl)
             break;
 
         case CASTLE_CTRL_PROG_HEARTBEAT:
-            printk("Heartbeat, from pid=%d\n", castle_ctrl_prog_curr_pid_get());
+            castle_printk(LOG_DEBUG, "Heartbeat, from pid=%d\n", castle_ctrl_prog_curr_pid_get());
             if(castle_ctrl_prog_state != CTRL_PROG_PRESENT)
             {
                 ioctl->ctrl_prog_register.ret = C_ERR_EXISTS;
@@ -149,16 +150,16 @@ static void castle_ctrl_prog_work_do(void *unused)
     switch(castle_ctrl_prog_state)
     {
         case CTRL_PROG_NOT_PRESENT:
-            printk("Startup ctrl prog.\n");
+            castle_printk(LOG_DEBUG, "Startup ctrl prog.\n");
             castle_ctrl_prog_touch();
             castle_uevent1(CASTLE_CTRL_PROG_REGISTER, 0);
             break;
         case CTRL_PROG_PRESENT:
-            printk("No heartbeat from ctrl prog.\n");
+            castle_printk(LOG_DEBUG, "No heartbeat from ctrl prog.\n");
             castle_ctrl_prog_state = CTRL_PROG_NOT_PRESENT;
             break;
         case CTRL_PROG_SHUTDOWN:
-            printk("Expected shutdown didn't happen.\n");
+            castle_printk(LOG_DEBUG, "Expected shutdown didn't happen.\n");
             castle_ctrl_prog_state = CTRL_PROG_NOT_PRESENT;
             break;
     }
