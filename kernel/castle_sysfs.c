@@ -478,7 +478,7 @@ static ssize_t slave_size_show(struct kobject *kobj,
     struct castle_slave_superblock *sb;
     uint64_t size;
 
-    if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))
+    if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
     {
         sb = castle_slave_superblock_get(slave);
         size = sb->pub.size;
@@ -500,7 +500,7 @@ static ssize_t slave_used_show(struct kobject *kobj,
     c_chk_cnt_t size_chunks;
     uint64_t used;
 
-    if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))
+    if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
     {
         castle_freespace_summary_get(slave, &free_chunks, &size_chunks);
 
@@ -520,7 +520,7 @@ static ssize_t slave_ssd_show(struct kobject *kobj,
     struct castle_slave_superblock *sb;
     int ssd;
 
-    if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))
+    if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
     {
         sb = castle_slave_superblock_get(slave);
         ssd = !!(sb->pub.flags & CASTLE_SLAVE_SSD);
@@ -550,7 +550,7 @@ static ssize_t slave_free_available_show(struct kobject *kobj,
     castle_freespace_t  *freespace;
     uint64_t free_available;
 
-    if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))
+    if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
     {
         castle_extent_transaction_start();
         freespace = freespace_sblk_get(slave);
@@ -577,7 +577,7 @@ static ssize_t slave_free_blocked_show(struct kobject *kobj,
 {
     struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj);
 
-    if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))
+    if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
         return sprintf(buf, "%llu\n", (uint64_t)atomic_read(&slave->free_chk_cnt) * C_CHK_SIZE);
     else
         return sprintf(buf, "0\n");
