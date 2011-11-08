@@ -11791,7 +11791,7 @@ reallocate:
 
     read_unlock(&da->lock);
 
-    castle_da_put(da);
+    castle_double_array_put(da_id);
 
     return 0;
 }
