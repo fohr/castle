@@ -917,19 +917,22 @@ int castle_fs_init(void)
     castle_printk(LOG_INIT, "Castle FS started.\n");
     castle_fs_inited = 1;
 
-    /* Now fs is started, we can add the sysfs tree for each non-GHOST slave. */
-    rcu_read_lock();
+    /*
+     * Now the fs is started. We can add the sysfs tree for each non-GHOST slave.
+     * Note that we don't rcu_read_lock protect this list scan as we might go to sleep
+     * in castle_sysfs_slave_add. However, castle_fs_init and the slave_add functions
+     * are initiated via control ioctls which are single-threaded through the
+     * castle transaction lock, so this is safe to do.
+     */
     list_for_each_rcu(lh, &castle_slaves.slaves)
     {
         cs = list_entry(lh, struct castle_slave, list);
         if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &cs->flags) && castle_sysfs_slave_add(cs))
         {
             castle_printk(LOG_ERROR, "Could not add slave to sysfs.\n");
-            rcu_read_unlock();
             return C_ERR_INTERNAL;
         }
     }
-    rcu_read_unlock();
 
     if(sync_checkpoint)
     {
