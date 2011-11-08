@@ -1919,10 +1919,14 @@ static int castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
              castle_version_is_ancestor(entry_version, c_iter->version)))
         {
             c2_block_t *c2b;
+            int disabled;
 
             slot_follow_ptr(i, c2b, real_slot_idx);
-            btree->entry_get(c2b_bnode(c2b), real_slot_idx, NULL, NULL,
-                             &entry_cvt);
+            disabled = btree->entry_get(c2b_bnode(c2b), real_slot_idx, NULL, NULL,
+                                        &entry_cvt);
+            /* If a disabled entry is about to be returned, we should have gone
+               to the node that's currently handling this key instead. */
+            BUG_ON(disabled);
 #ifdef DEBUG
             /* Next key should always be greater than all the keys in the current node. */
             if ((btree->key_compare(c_iter->next_key.key, btree->inv_key) != 0) &&
