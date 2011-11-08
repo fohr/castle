@@ -2255,6 +2255,16 @@ struct castle_da_cts_proxy {
     struct work_struct          work;       /**< For asynchronous castle_da_cts_proxy_drop().   */
 };
 
+/**
+ * State structure for use by castle_da_cts_proxy_all_invalidate().
+ *
+ * @also castle_da_cts_proxy_all_invalidate().
+ */
+struct castle_da_cts_proxy_all_invalidate {
+    struct castle_da_cts_proxy    **proxies;        /**< Array of proxy CTs proxy pointers.     */
+    int                             proxy;          /**< Number of elements in proxies[].       */
+};
+
 /* Low free space structure being used by each merge in DA. */
 struct castle_da_lfs_ct_t {
     uint8_t             space_reserved;     /**< Reserved space from low space handler  */

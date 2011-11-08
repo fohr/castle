@@ -15,7 +15,7 @@
 #define DEFINE_HASH_TBL(_prefix, _tab, _tab_size, _struct, _list_mbr, _key_t, _key)            \
                                                                                                \
 static DEFINE_RWLOCK(_prefix##_hash_lock);                                                     \
-static int _prefix##_nr_entries;                                                               \
+static int _prefix##_nr_entries = 0;                                                           \
                                                                                                \
 static inline int _prefix##_hash_idx(_key_t key)                                               \
 {                                                                                              \

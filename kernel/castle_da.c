@@ -206,7 +206,7 @@ static void castle_da_merge_new_partition_activate(struct castle_da_merge *merge
 static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
                                                  c2_block_t *node_c2b,
                                                  void *key);
-static int castle_da_cts_proxy_invalidate(struct castle_double_array *da, void *da_locked);
+static void castle_da_cts_proxy_invalidate(struct castle_double_array *da);
 static int __castle_da_rwct_create(struct castle_double_array *da,
                                    int cpu_index,
                                    int in_tran,
@@ -9991,13 +9991,13 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
 
     if (!in_tran) CASTLE_TRANSACTION_END;
 
-    /* Invalidate any existing DA CTs proxy structure. */
-    castle_da_cts_proxy_invalidate(da, (void *)1 /*da_locked*/);
-
     debug("Created T0: %d\n", ++t0_count);
     /* DA is attached, therefore we must be holding a ref, therefore it is safe to schedule
        the merge check. */
     write_unlock(&da->lock);
+
+    /* Invalidate any existing DA CTs proxy structure. */
+    castle_da_cts_proxy_invalidate(da);
 
     castle_sysfs_ct_add(ct);
 
@@ -10580,9 +10580,8 @@ retry:
  *
  * @param   data    castle_da_cts_proxy pointer
  */
-static void __castle_da_cts_proxy_put(void *data)
+static inline void _castle_da_cts_proxy_put(struct castle_da_cts_proxy *proxy)
 {
-    struct castle_da_cts_proxy *proxy = data;
     int ct;
 
     BUG_ON(atomic_read(&proxy->ref_cnt) != 0);
@@ -10608,13 +10607,11 @@ static void __castle_da_cts_proxy_put(void *data)
  * Put a reference on the DA CTs proxy, freeing it, if necessary.
  *
  * @param   proxy       CTs proxy to release reference on
- * @param   async_free  Whether to asynchronously free the proxy if we put
- *                      the last reference
  *
  * NOTE: See castle_da_cts_proxy{} for description of why we do not need to
  *       update da->cts_proxy pointer if dropping the last reference.
  */
-static void _castle_da_cts_proxy_put(struct castle_da_cts_proxy *proxy, int async_free)
+void castle_da_cts_proxy_put(struct castle_da_cts_proxy *proxy)
 {
     int ref_cnt;
 
@@ -10622,63 +10619,99 @@ static void _castle_da_cts_proxy_put(struct castle_da_cts_proxy *proxy, int asyn
 
     /* Drop CT references and free proxy if we put the last reference. */
     if (ref_cnt == 0)
-    {
-        INIT_WORK(&proxy->work, __castle_da_cts_proxy_put, proxy);
-        if (async_free)
-            /* Drop asynchronously. */
-            queue_work(castle_wqs[0], &proxy->work);
-        else
-            /* Drop synchronously. */
-            __castle_da_cts_proxy_put(proxy);
-    }
+        _castle_da_cts_proxy_put(proxy);
     else
         BUG_ON(ref_cnt < 0);
 }
 
 /**
- * Put a reference on the DA CTs proxy, freeing it, if necessary.
+ * Invalidate an existing DA CTs proxy, if one exists.
  *
- * @param   proxy   CTs proxy to release reference on
+ * NOTE: Caller must not hold either DA lock or DA hash lock.
  */
-void castle_da_cts_proxy_put(struct castle_da_cts_proxy *proxy)
+static void castle_da_cts_proxy_invalidate(struct castle_double_array *da)
 {
-    _castle_da_cts_proxy_put(proxy, 0 /*async_free*/);
+    struct castle_da_cts_proxy *proxy = NULL;
+
+    write_lock(&da->lock);
+    proxy = da->cts_proxy;
+    if (proxy)
+        da->cts_proxy = NULL;
+    write_unlock(&da->lock);
+
+    if (proxy)
+    {
+        castle_printk(LOG_DEBUG, "%s: Putting proxy=%p, da=%p, da_id=%d\n",
+                __FUNCTION__, proxy, da, da->id);
+        castle_da_cts_proxy_put(proxy);
+    }
 }
 
 /**
- * Invalidate an existing DA CTs proxy, if one exists.
+ * DA hash iterate callback to store proxy pointer and update DA pointer.
  *
- * @param   da_locked   1 => DA is write locked
- *                      0 => DA is not write locked, DA hash lock is held
- *
- * NOTE: We call _castle_da_cts_proxy_put() with async_free set if da_locked is
- *       not true.  This is because it is not safe to drop extent references
- *       with the DA hash lock held.
+ * @param   da      Doubling array to invalidate
+ * @param   private castle_da_cts_proxy_all_invalidate pointer
  */
-static int castle_da_cts_proxy_invalidate(struct castle_double_array *da, void *da_locked)
+static inline int _castle_da_cts_proxy_all_invalidate(struct castle_double_array *da, void *private)
 {
-    if (!da_locked)
-        write_lock(&da->lock);
+    struct castle_da_cts_proxy_all_invalidate *invalidate = private;
 
-    if (likely(da->cts_proxy))
+    write_lock(&da->lock);
+    if (da->cts_proxy)
     {
-        void *proxy;
-
-        castle_printk(LOG_DEBUG, "%s: proxy=%p, da=%p, da_id=%d\n",
-                __FUNCTION__, da->cts_proxy, da, da->id);
-
-        proxy = da->cts_proxy;
+        invalidate->proxies[invalidate->proxy++] = da->cts_proxy;
         da->cts_proxy = NULL;
-        if (da_locked)
-            _castle_da_cts_proxy_put(proxy, 0 /*async_free*/);
-        else
-            _castle_da_cts_proxy_put(proxy, 1 /*async_free*/);
     }
-
-    if (!da_locked)
-        write_unlock(&da->lock);
+    write_unlock(&da->lock);
 
     return 0;
+}
+
+/**
+ * Iterate all DA hash and invalidate all CTs proxies without locks held.
+ */
+static void castle_da_cts_proxy_all_invalidate(void)
+{
+    struct castle_da_cts_proxy_all_invalidate invalidate;
+    struct castle_da_cts_proxy **proxies;
+    unsigned long flags;
+    int nr_das, i;
+
+retry:
+    nr_das = castle_da_nr_entries_get();
+    if (nr_das == 0)
+        return;
+    else
+        nr_das += 5; /* overestimate to help prevent reallocation */
+
+    proxies = castle_alloc(nr_das * sizeof(struct castle_da_cts_proxy *));
+    if (!proxies)
+        goto retry; /* this could be a nasty loop... */
+
+    read_lock_irqsave(&castle_da_hash_lock, flags);
+    if (__castle_da_nr_entries_get() > nr_das)
+    {
+        /* Number of DAs in the hash changed, drop lock and try again. */
+        read_unlock_irqrestore(&castle_da_hash_lock, flags);
+        castle_free(proxies);
+        goto retry;
+    }
+    /* Initialise invalidate structure then iterate DA hash to store active
+     * proxy pointers at the same time as marking no active proxy for DA. */
+    invalidate.proxies = proxies;
+    invalidate.proxy   = 0;
+    __castle_da_hash_iterate(_castle_da_cts_proxy_all_invalidate, &invalidate);
+    read_unlock_irqrestore(&castle_da_hash_lock, flags);
+
+    /* Put proxies with no locks held.  If we're dropping the last reference
+     * castle_free() is called, which may sleep. */
+    for (i = 0; i < invalidate.proxy; i++)
+        castle_da_cts_proxy_put(invalidate.proxies[i]);
+
+    castle_free(proxies);
+
+    castle_printk(LOG_DEBUG, "%s: Put %d proxies\n", __FUNCTION__, i);
 }
 
 /**
@@ -10686,7 +10719,7 @@ static int castle_da_cts_proxy_invalidate(struct castle_double_array *da, void *
  */
 static void castle_da_cts_proxy_timeout(void *unused)
 {
-    castle_da_hash_iterate(castle_da_cts_proxy_invalidate, NULL /*da_locked*/);
+    castle_da_cts_proxy_all_invalidate();
 }
 
 #define CASTLE_DA_CTS_PROXY_TIMEOUT_FREQ    (10)    /* Timeout all DA CT's proxies every 10s.   */
@@ -11561,7 +11594,7 @@ void castle_double_array_merges_fini(void)
 
     /* Stop DA CTs proxy timer and invalidate any existing proxies. */
     del_singleshot_timer_sync(&castle_da_cts_proxy_timer);
-    __castle_da_hash_iterate(castle_da_cts_proxy_invalidate, (void *)1 /*da_locked*/);
+    castle_da_cts_proxy_all_invalidate();
 
     /* This is happening at the end of execution. No need for the hash lock. */
     __castle_da_hash_iterate(castle_da_merge_stop, NULL);
@@ -11598,8 +11631,12 @@ static int castle_da_merge_check(struct castle_da_merge *merge, void *da)
     return 0;
 }
 
+/**
+ *
+ * NOTE: Called with transaction lock held.
+ */
 void castle_da_destroy_complete(struct castle_double_array *da)
-{ /* Called with lock held. */
+{
     int i;
 
     /* Sanity Checks. */
@@ -11610,7 +11647,7 @@ void castle_da_destroy_complete(struct castle_double_array *da)
     castle_printk(LOG_USERINFO, "Cleaning VerTree: %u\n", da->id);
 
     /* Invalidate DA CTs proxy structure. */
-    castle_da_cts_proxy_invalidate(da, (void *)1);
+    castle_da_cts_proxy_invalidate(da);
 
     /* Destroy Component Trees. */
     for(i=0; i<MAX_DA_LEVEL; i++)
