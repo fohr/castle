@@ -452,13 +452,18 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
         void        *entry_key;
         c_ver_t      entry_version;
         c_val_tup_t  entry_cvt;
-        int          need_move;
+        int          need_move, disabled;
 
-        btree->entry_get(node, i, &entry_key, &entry_version, &entry_cvt);
+        disabled = btree->entry_get(node, i, &entry_key, &entry_version, &entry_cvt);
         /* Check if slot->version is ancestoral to version. If not,
            reject straigt away. */
         if(!castle_version_is_ancestor(entry_version, version))
             continue;
+
+        /* There are never meant to be disabled entries ancestral to the
+           query version. If that was the case, the query (write) should have gone
+           to the node that's currently handling that disabled key. */
+        BUG_ON(disabled);
 
         /* Ignore all versions of the key except of the left-most (=> newest) one. */
         if(btree->key_compare(last_eff_key, entry_key) == 0)
@@ -552,7 +557,7 @@ static c2_block_t* castle_btree_node_key_split(c_bvec_t *c_bvec,
     uint16_t node_size;
     c2_block_t *c2b;
     uint8_t rev_level;
-    int i, was_preallocated;
+    int i, j, nr_moved, was_preallocated;
 
     void        *entry_key;
     c_ver_t      entry_version;
@@ -573,18 +578,47 @@ static c2_block_t* castle_btree_node_key_split(c_bvec_t *c_bvec,
         atomic_dec(&c_bvec->reserv_nodes);
     sec_node  = c2b_bnode(c2b);
     /* The original node needs to contain the elements from the right hand side
-       because otherwise the key in it's parent would have to change. We want
+       because otherwise the key in its parent would have to change. We want
        to avoid that */
     BUG_ON(sec_node->used != 0);
-    for(i=0; i<node->used >> 1; i++)
+    nr_moved = node->used / 2;
+    for(i=0, j=0; i<nr_moved; i++)
     {
-        /* Copy the entries */
-        btree->entry_get(node,     i, &entry_key, &entry_version, &entry_cvt);
-        btree->entry_add(sec_node, i,  entry_key,  entry_version,  entry_cvt);
+        int disabled;
+
+        /* Copy the entries. Skip disabled entries, since they aren't reachable
+           any more (plus it is not possible to insert disabled entry at once). */
+        disabled = btree->entry_get(node, i, &entry_key, &entry_version, &entry_cvt);
+        if(disabled)
+            continue;
+
+        /* If the entry isn't disabled, just copy it over to the new node. */
+        btree->entry_add(sec_node, j, entry_key, entry_version, entry_cvt);
+        j++;
     }
 
-    BUG_ON(sec_node->used != node->used >> 1);
-    btree->entries_drop(node, 0, sec_node->used - 1);
+    /* Check that at least one entry got inserted.
+       The following (very unlikely) corner case may cause this to happen:
+       * a node gets created in version v,
+       * entries get inserted in version v', which is descendant of v
+       * node becomes full, and a new node gets version split in version v',
+         in the process all entries in v' get disabled in the original node
+       * v' gets snapshot deleted, and v becames writable again
+       * a new write reaches the node, and since the version of the node is
+         identical to the version of the insert, effective node is not created
+         (this is deamed to be pointless, which, in most circumstances it is)
+       * key split is called on the node, but it turns out that all entries in [0, nr_moved-1]
+         range are disabled. This produces empty sec node.
+       This could be handled, but since it is so unlikely to happen the distabilisation
+       due to such handlers is more risky.
+       However, an explicit test to catch such case needs to be in place. */
+    BUG_ON(j == 0);
+
+    /* Check that the number of entries in the new node is as many as we've inserted. */
+    BUG_ON(sec_node->used != j);
+
+    /* Drop entries from the original node. */
+    btree->entries_drop(node, 0, nr_moved - 1);
 
     /* c2b has already been dirtied by the node_create() function, but the orig_c2b
        needs to be dirtied here */
