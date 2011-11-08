@@ -15,6 +15,7 @@
 #define DEFINE_HASH_TBL(_prefix, _tab, _tab_size, _struct, _list_mbr, _key_t, _key)            \
                                                                                                \
 static DEFINE_RWLOCK(_prefix##_hash_lock);                                                     \
+static int _prefix##_nr_entries;                                                               \
                                                                                                \
 static inline int _prefix##_hash_idx(_key_t key)                                               \
 {                                                                                              \
@@ -35,12 +36,14 @@ static inline void _prefix##_hash_add(_struct *v)                               
     write_lock_irqsave(&_prefix##_hash_lock, flags);                                           \
     BUG_ON(__##_prefix##_hash_get(v->_key));                                                   \
     list_add(&v->_list_mbr, &_tab[idx]);                                                       \
+    _prefix##_nr_entries++;                                                                    \
     write_unlock_irqrestore(&_prefix##_hash_lock, flags);                                      \
 }                                                                                              \
                                                                                                \
 static inline void __##_prefix##_hash_remove(_struct *v)                                       \
 {                                                                                              \
     list_del(&v->_list_mbr);                                                                   \
+    _prefix##_nr_entries--;                                                                    \
 }                                                                                              \
                                                                                                \
 static inline void _prefix##_hash_remove(_struct *v)                                           \
@@ -79,6 +82,23 @@ static inline _struct* _prefix##_hash_get(_key_t key)                           
     read_unlock_irqrestore(&_prefix##_hash_lock, flags);                                       \
                                                                                                \
     return v;                                                                                  \
+}                                                                                              \
+                                                                                               \
+static inline int __##_prefix##_nr_entries_get()                                               \
+{                                                                                              \
+    return _prefix##_nr_entries;                                                               \
+}                                                                                              \
+                                                                                               \
+static inline int _prefix##_nr_entries_get()                                                   \
+{                                                                                              \
+    int nr_entries;                                                                            \
+    unsigned long flags;                                                                       \
+                                                                                               \
+    read_lock_irqsave(&_prefix##_hash_lock, flags);                                            \
+    nr_entries = __##_prefix##_nr_entries_get();                                               \
+    read_unlock_irqrestore(&_prefix##_hash_lock, flags);                                       \
+                                                                                               \
+    return nr_entries;                                                                         \
 }                                                                                              \
                                                                                                \
 static inline void __##_prefix##_hash_iterate(int (*fn)(_struct*, void*), void *arg)           \
