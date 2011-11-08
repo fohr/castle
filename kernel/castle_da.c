@@ -11284,7 +11284,7 @@ struct castle_btree_type *castle_double_array_btree_type_get(struct castle_attac
 uint8_t castle_da_user_timestamping_check(struct castle_double_array *da)
 {
     BUG_ON(!da);
-    return (da->creation_opts & CASTLE_DA_OPTS_USER_TIMESTAMPING);
+    return (!(da->creation_opts & CASTLE_DA_OPTS_NO_USER_TIMESTAMPING));
 }
 uint8_t castle_attachment_user_timestamping_check(struct castle_attachment *att)
 {

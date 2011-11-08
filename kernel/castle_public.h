@@ -10,7 +10,7 @@
 #include <linux/time.h>
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 29 /* last updated by TR */
+#define CASTLE_PROTOCOL_VERSION 30 /* last updated by TR */
 
 #define PACKED               __attribute__((packed))
 
@@ -177,8 +177,8 @@ typedef uint32_t c_da_t;
 typedef uint64_t c_da_opts_t;       /**< Options bitmask for DA options that must be set at
                                          creation time. */
 enum {
-    CASTLE_DA_OPTS_NONE               = (0),             /**< No options (all defaults). */
-    CASTLE_DA_OPTS_USER_TIMESTAMPING  = (1 << 0),        /**< Enable user timestamping. */
+    CASTLE_DA_OPTS_NONE                  = (0),             /**< No options (all defaults). */
+    CASTLE_DA_OPTS_NO_USER_TIMESTAMPING  = (1 << 0),        /**< Enable user timestamping. */
 };
 
 /* Golden Nugget - Types */
