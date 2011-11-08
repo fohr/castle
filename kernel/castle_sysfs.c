@@ -1422,8 +1422,8 @@ int castle_sysfs_slave_add(struct castle_slave *slave)
         return ret;
     /* TODO: do we need a link for >32?. If so, how do we get hold of the right kobj */
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
-    /* There is no bdev for ghost slaves. */
-    if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags))
+    /* Do not access bdev for oos slaves. */
+    if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
     {
         /* If this is a partition, link to the partition. */
         if(slave->bdev->bd_part)
