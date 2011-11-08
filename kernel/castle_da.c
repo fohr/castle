@@ -3304,9 +3304,17 @@ no_space:
     tree_ext_id = lfs->tree_ext.ext_id;
     BUG_ON(!EXT_ID_INVAL(lfs->data_ext.ext_id));
 
-    /* Reset ext ids. */
-    lfs->internal_ext.ext_id = lfs->tree_ext.ext_id = lfs->data_ext.ext_id = INVAL_EXT_ID;
-    lfs->leafs_on_ssds = lfs->internals_on_ssds = 0;
+    /* If there is no callback, no need to kep sizes in this LFS structure. */
+    if (!lfs_callback)
+    {
+        castle_da_lfs_ct_reset(lfs);
+    }
+    else
+    {
+        /* Reset ext ids. */
+        lfs->internal_ext.ext_id = lfs->tree_ext.ext_id = lfs->data_ext.ext_id = INVAL_EXT_ID;
+        lfs->leafs_on_ssds = lfs->internals_on_ssds = 0;
+    }
 
     /* End extent transaction. */
     castle_extent_transaction_end();
@@ -7570,10 +7578,9 @@ static void castle_da_dealloc(struct castle_double_array *da)
     /* Delete rate control timer. */
     del_timer_sync(&da->write_throttle_timer);
 
-    if (da->ios_waiting)
-        castle_kfree(da->ios_waiting);
-    if (da->t0_lfs)
-        castle_kfree(da->t0_lfs);
+    castle_check_kfree(da->ios_waiting);
+    castle_check_kfree(da->t0_lfs);
+
     /* Poison and free (may be repoisoned on debug kernel builds). */
     memset(da, 0xa7, sizeof(struct castle_double_array));
     castle_kfree(da);
