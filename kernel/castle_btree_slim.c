@@ -171,9 +171,6 @@ static void castle_slim_key_print(int level, const void *key)
  * Entry type related definitions.
  */
 
-/* only needed for T0s */
-#define STRIP_DISABLED(type)             ((type) & ~CVT_TYPE_DISABLED_FLAG)
-
 #define TYPE_NODE(type)                  ((type) == CVT_TYPE_NODE)
 #define TYPE_TOMBSTONE(type)             ((type) == CVT_TYPE_TOMBSTONE)
 #define TYPE_ON_DISK(type)               ((type) == CVT_TYPE_MEDIUM_OBJECT || \
@@ -197,7 +194,7 @@ inline static int cvt_type_to_entry_type(int type)
  */
 
 enum {
-    LEAF_ENTRY_DISABLED_FLAG  = 1, /* not used at the moment */
+    LEAF_ENTRY_DISABLED_FLAG  = 1,
     LEAF_ENTRY_TIMESTAMP_FLAG = 2
 };
 
@@ -237,6 +234,7 @@ struct slim_extern_val {
 #define LEAF_ENTRY_EXTERN_VAL_PTR(entry) ((struct slim_extern_val *) LEAF_ENTRY_VAL_PTR(entry))
 #define LEAF_ENTRY_INLINE_VAL_END(val)   ((char *) (val) + sizeof(struct slim_inline_val) + (val)->length)
 #define LEAF_ENTRY_EXTERN_VAL_END(val)   ((char *) (val) + sizeof(struct slim_extern_val))
+#define LEAF_ENTRY_IS_DISABLED(entry)    ((entry)->flags & LEAF_ENTRY_DISABLED_FLAG)
 #define LEAF_ENTRY_HAS_TIMESTAMP(entry)  ((entry)->flags & LEAF_ENTRY_TIMESTAMP_FLAG)
 
 /**
@@ -247,7 +245,7 @@ static size_t leaf_entry_size(const struct slim_leaf_entry *entry)
 {
     size_t size = LEAF_ENTRY_BASE_SIZE(&entry->key);
 
-    if (!TYPE_ON_DISK(STRIP_DISABLED(entry->type)))
+    if (!TYPE_ON_DISK(entry->type))
     {
         const struct slim_inline_val *val =
             (const struct slim_inline_val *) ((const char *) entry + size);
@@ -289,11 +287,15 @@ inline static void leaf_entry_timestamp_put(void **pos, castle_user_timestamp_t 
  * Structure definitions for internal node entries.
  */
 
+enum {
+    INTERN_ENTRY_DISABLED_FLAG = 1
+};
+
 struct slim_intern_entry {
     /* align:   2 */
     /* offset:  0 */ c_byte_off_t offset;  /* extent ids are stored in the node header */
     /*          8 */ c_ver_t      version;
-    /*         12 */ uint8_t      type;    /* only needed for T0s */
+    /*         12 */ uint8_t      flags;   /* only needed for T0s, for now */
     /*         13 */ uint8_t      _pad;
     /*         14 */ struct castle_norm_key key;
     /*         16 */
@@ -305,6 +307,7 @@ struct slim_intern_entry {
                                           4) /* for the index entry */
 #define INTERN_ENTRY_BASE_SIZE(key)      (sizeof(struct slim_intern_entry) - sizeof *(key) + \
                                           castle_norm_key_size(key))
+#define INTERN_ENTRY_IS_DISABLED(entry)  ((entry)->flags & INTERN_ENTRY_DISABLED_FLAG)
 
 /**
  * Calculate the size of an internal (i.e., non-leaf) entry of the slim tree.
@@ -507,8 +510,7 @@ static int castle_slim_entry_get(struct castle_btree_node *node, int idx,
             *version = entry->version;
         if (cvt)
         {
-            int type = STRIP_DISABLED(entry->type);
-            if (TYPE_ON_DISK(type))
+            if (TYPE_ON_DISK(entry->type))
             {
                 struct slim_extern_val *val = LEAF_ENTRY_EXTERN_VAL_PTR(entry);
                 const void *entry_end = LEAF_ENTRY_EXTERN_VAL_END(val);
@@ -524,13 +526,13 @@ static int castle_slim_entry_get(struct castle_btree_node *node, int idx,
                 castle_user_timestamp_t timestamp = 0;
                 if (LEAF_ENTRY_HAS_TIMESTAMP(entry))
                     timestamp = leaf_entry_timestamp_get(&entry_end);
-                BUG_ON(TYPE_NODE(type));
-                BUG_ON(TYPE_TOMBSTONE(type) && val->length != 0);
+                BUG_ON(TYPE_NODE(entry->type));
+                BUG_ON(TYPE_TOMBSTONE(entry->type) && val->length != 0);
                 BUG_ON(val->length > MAX_INLINE_VAL_SIZE);
                 *cvt = convert_to_cvt(entry->type, val->length, INVAL_EXT_POS, val->data, timestamp);
             }
         }
-        return entry->type & CVT_TYPE_DISABLED_FLAG;
+        return LEAF_ENTRY_IS_DISABLED(entry);
     }
 
     else
@@ -546,10 +548,9 @@ static int castle_slim_entry_get(struct castle_btree_node *node, int idx,
         if (cvt)
         {
             c_ext_pos_t cep = { intern_entry_extent_get(SLIM_HEADER_PTR(node), idx), entry->offset };
-            BUG_ON(!TYPE_NODE(STRIP_DISABLED(entry->type)));
-            *cvt = convert_to_cvt(entry->type, 0, cep, NULL, 0);
+            *cvt = convert_to_cvt(CVT_TYPE_NODE, 0, cep, NULL, 0);
         }
-        return entry->type & CVT_TYPE_DISABLED_FLAG;
+        return INTERN_ENTRY_IS_DISABLED(entry);
     }
 }
 
@@ -764,7 +765,7 @@ static void castle_slim_entry_construct(struct castle_btree_node *node,
         struct slim_intern_entry *entry = NODE_INTERN_ENTRY_PTR(node, idx);
         BUG_ON(!TYPE_NODE(cvt.type));
         memmove(&entry->key, key, key_size);
-        entry->type = cvt_type_to_entry_type(cvt.type);
+        entry->flags = 0;
         entry->version = version;
         entry->offset = cvt.cep.offset;
         intern_entry_extent_add(SLIM_HEADER_PTR(node), idx, cvt.cep.ext_id);
@@ -865,12 +866,12 @@ static void castle_slim_entry_disable(struct castle_btree_node *node, int idx)
     if (BTREE_NODE_IS_LEAF(node))
     {
         struct slim_leaf_entry *entry = NODE_LEAF_ENTRY_PTR(node, idx);
-        entry->type |= CVT_TYPE_DISABLED_FLAG;
+        entry->flags |= LEAF_ENTRY_DISABLED_FLAG;
     }
     else
     {
         struct slim_intern_entry *entry = NODE_INTERN_ENTRY_PTR(node, idx);
-        entry->type |= CVT_TYPE_DISABLED_FLAG;
+        entry->flags |= INTERN_ENTRY_DISABLED_FLAG;
     }
 }
 
@@ -893,12 +894,12 @@ static void castle_slim_node_print(struct castle_btree_node *node)
         for (i = 0; i < node->used; ++i)
         {
             struct slim_leaf_entry *entry = NODE_LEAF_ENTRY_PTR(node, i);
-            castle_printk(LOG_DEBUG, "[%u] offset=%ld, type=%u, version=%u, key_size=%lu, key:\n",
-                          i, (char *) entry - (char *) node, entry->type, entry->version,
+            castle_printk(LOG_DEBUG, "[%u] offset=%ld, type=%u, flags=%u, version=%u, key_size=%lu, key:\n",
+                          i, (char *) entry - (char *) node, entry->type, entry->flags, entry->version,
                           castle_norm_key_size(&entry->key));
             castle_norm_key_print(LOG_DEBUG, &entry->key);
 
-            if (TYPE_ON_DISK(STRIP_DISABLED(entry->type)))
+            if (TYPE_ON_DISK(entry->type))
             {
                 struct slim_extern_val *val = LEAF_ENTRY_EXTERN_VAL_PTR(entry);
                 const void *entry_end = LEAF_ENTRY_EXTERN_VAL_END(val);
@@ -925,8 +926,8 @@ static void castle_slim_node_print(struct castle_btree_node *node)
         {
             struct slim_intern_entry *entry = NODE_INTERN_ENTRY_PTR(node, i);
             c_ext_pos_t cep = { intern_entry_extent_get(header, i), entry->offset };
-            castle_printk(LOG_DEBUG, "[%u] offset=%ld, type=%u, version=%u, key_size=%lu, key:\n",
-                          i, (char *) entry - (char *) node, entry->type, entry->version,
+            castle_printk(LOG_DEBUG, "[%u] offset=%ld, flags=%u, version=%u, key_size=%lu, key:\n",
+                          i, (char *) entry - (char *) node, entry->flags, entry->version,
                           castle_norm_key_size(&entry->key));
             castle_norm_key_print(LOG_DEBUG, &entry->key);
             castle_printk(LOG_DEBUG, "cep=" cep_fmt_str_nl, cep2str(cep));
@@ -1036,47 +1037,55 @@ static void castle_slim_node_validate(struct castle_btree_node *node)
     /* checks performed in index order */
     for (i = 0; i < node->used; ++i)
     {
-        int type;
         c_ver_t version;
         struct castle_norm_key *key;
-        size_t val_len;
 
         if (BTREE_NODE_IS_LEAF(node))
         {
             struct slim_leaf_entry *entry = NODE_LEAF_ENTRY_PTR(node, i);
-            type = STRIP_DISABLED(entry->type);
-            if (type != CVT_TYPE_TOMBSTONE && type != CVT_TYPE_INLINE &&
-                type != CVT_TYPE_MEDIUM_OBJECT && type != CVT_TYPE_LARGE_OBJECT &&
-                type != CVT_TYPE_COUNTER_SET && type != CVT_TYPE_COUNTER_ADD &&
-                type != CVT_TYPE_COUNTER_ACCUM_SET_SET && type != CVT_TYPE_COUNTER_ACCUM_ADD_SET &&
-                type != CVT_TYPE_COUNTER_ACCUM_ADD_ADD && (failed = 1))
-                castle_printk(LOG_ERROR, "error: found invalid type %u at position %u\n", type, i);
+
+            if (entry->type != CVT_TYPE_TOMBSTONE     && entry->type != CVT_TYPE_INLINE &&
+                entry->type != CVT_TYPE_MEDIUM_OBJECT && entry->type != CVT_TYPE_LARGE_OBJECT &&
+                entry->type != CVT_TYPE_COUNTER_SET   && entry->type != CVT_TYPE_COUNTER_ADD &&
+                entry->type != CVT_TYPE_COUNTER_ACCUM_SET_SET &&
+                entry->type != CVT_TYPE_COUNTER_ACCUM_ADD_SET &&
+                entry->type != CVT_TYPE_COUNTER_ACCUM_ADD_ADD && (failed = 1))
+                castle_printk(LOG_ERROR, "error: found invalid type %u at position %u\n", entry->type, i);
 
             if (!LEAF_ENTRY_HAS_TIMESTAMP(entry) != !BTREE_NODE_HAS_TIMESTAMPS(node) && (failed = 1))
                 castle_printk(LOG_ERROR, "error: entry timestamp flag does not agree with node at position %u\n", i);
 
             version = entry->version;
             key = &entry->key;
-            if (TYPE_ON_DISK(type))
+
+            if (TYPE_ON_DISK(entry->type))
             {
                 struct slim_extern_val *val = LEAF_ENTRY_EXTERN_VAL_PTR(entry);
-                val_len = val->length;
+
+                if (entry->type == CVT_TYPE_MEDIUM_OBJECT &&
+                    (val->length <= MAX_INLINE_VAL_SIZE ||
+                     val->length > MEDIUM_OBJECT_LIMIT) && (failed = 1))
+                    castle_printk(LOG_ERROR, "error: found a mis-sized medium object at position %u\n", i);
+                else if (entry->type == CVT_TYPE_LARGE_OBJECT &&
+                         val->length <= MEDIUM_OBJECT_LIMIT && (failed = 1))
+                    castle_printk(LOG_ERROR, "error: found a mis-sized large object at position %u\n", i);
+
                 if (val->cep.ext_id == INVAL_EXT_ID && (failed = 1))
                     castle_printk(LOG_ERROR, "error: found invalid extent id at position %u\n", i);
             }
             else
             {
                 struct slim_inline_val *val = LEAF_ENTRY_INLINE_VAL_PTR(entry);
-                val_len = val->length;
+
+                if (entry->type == CVT_TYPE_TOMBSTONE && val->length != 0 && (failed = 1))
+                    castle_printk(LOG_ERROR, "error: found tombstone with non-zero length at position %u\n", i);
+                else if (val->length > MAX_INLINE_VAL_SIZE && (failed = 1))
+                    castle_printk(LOG_ERROR, "error: found a mis-sized inline value at position %u\n", i);
             }
         }
         else
         {
             struct slim_intern_entry *entry = NODE_INTERN_ENTRY_PTR(node, i);
-            type = STRIP_DISABLED(entry->type);
-            if (type != CVT_TYPE_NODE && (failed = 1))
-                castle_printk(LOG_ERROR, "error: found invalid type %u at position %u\n", type, i);
-
             version = entry->version;
             key = &entry->key;
         }
@@ -1088,17 +1097,6 @@ static void castle_slim_node_validate(struct castle_btree_node *node)
             castle_printk(LOG_ERROR, "error: found invalid key at position %u\n", i);
         else if (castle_norm_key_size(key) > SLIM_TREE_MAX_KEY_SIZE && (failed = 1))
             castle_printk(LOG_ERROR, "error: found too large a key at position %u\n", i);
-
-        /* value length checks */
-        if (type == CVT_TYPE_TOMBSTONE && val_len != 0 && (failed = 1))
-            castle_printk(LOG_ERROR, "error: found tombstone with non-zero length at position %u\n", i);
-        else if (type == CVT_TYPE_INLINE && val_len > MAX_INLINE_VAL_SIZE && (failed = 1))
-            castle_printk(LOG_ERROR, "error: found a mis-sized inline value at position %u\n", i);
-        else if (type == CVT_TYPE_MEDIUM_OBJECT &&
-                 (val_len <= MAX_INLINE_VAL_SIZE || val_len > MEDIUM_OBJECT_LIMIT) && (failed = 1))
-            castle_printk(LOG_ERROR, "error: found a mis-sized medium object at position %u\n", i);
-        else if (type == CVT_TYPE_LARGE_OBJECT && val_len <= MEDIUM_OBJECT_LIMIT && (failed = 1))
-            castle_printk(LOG_ERROR, "error: found a mis-sized large object at position %u\n", i);
 
         /* key/version ordering checks */
         if (i > 0)
