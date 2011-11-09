@@ -96,7 +96,9 @@ int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da
 #endif
     castle_printk(LOG_DEBUG, "%s::merge id %u, function mode %u, with capacity for %u entries\n",
             __FUNCTION__, dfs_resolver->merge->id, dfs_resolver->functions, dfs_resolver->_buffer_max);
-    return 0;
+
+    BUG_ON(ret != 0);
+    return ret;
 
 error:
     castle_dfs_resolver_destroy(dfs_resolver);
@@ -115,8 +117,7 @@ void castle_dfs_resolver_destroy(c_dfs_resolver *dfs_resolver)
     castle_printk(LOG_DEBUG, "%s::merge id %u\n", __FUNCTION__, dfs_resolver->merge->id);
 
     /* Destroy stack */
-    if(!dfs_resolver->stack)
-        castle_uint32_stack_destroy(dfs_resolver->stack);
+    castle_uint32_stack_destroy(dfs_resolver->stack);
 
     /* Dealloc stack base struct */
     castle_check_free(dfs_resolver->stack);
