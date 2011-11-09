@@ -1230,9 +1230,12 @@ static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *val,
                     CVT_INLINE_VAL_PTR(*val),
                     val->length);
         else
+	{
             /* Fetch from data extent. */
             castle_back_iter_fetch_object(val,
                     (uint8_t *)castle_back_user_to_kernel(buf, val_copy->val));
+	    val_copy->type = CASTLE_VALUE_TYPE_INLINE;
+	}
     }
     else
         /* Set the collection_id. */
