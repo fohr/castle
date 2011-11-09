@@ -252,7 +252,7 @@ void castle_btree_lub_find(struct castle_btree_node *node,
     insert_idx = -1;
     for(lub_idx=high; lub_idx < node->used; lub_idx++)
     {
-        int cmp, anc;
+        int cmp;
 
         btree->entry_get(node, lub_idx, &key_lub, &version_lub, NULL);
 
@@ -264,18 +264,9 @@ void castle_btree_lub_find(struct castle_btree_node *node,
         BUG_ON(cmp < 0);
         if(cmp > 0)
             insert_candidate(lub_idx);
-        castle_version_is_ancestor_and_compare(version_lub, version, &anc, &cmp);
-        /* cmp is computed based on DFS order. Therefore, cmp < 0 implies that:
-           dfs(version_lub) < dfs(version). This in turn means that version_lub is
-           greater/equal to version in reverse DFS order. */
-        if(cmp < 0)
-            insert_candidate(lub_idx);
-        if(anc)
+        if(castle_version_is_ancestor(version_lub, version))
         {
-            /* If version_lub is ancestral to version, version_lub must also be
-               smaller/equal to version in DFS ordering. */
-            BUG_ON(cmp > 0);
-            /* Ancestor found, break out of the loop. Lub_idx now correctly set. */
+            insert_candidate(lub_idx);
             break;
         }
     }

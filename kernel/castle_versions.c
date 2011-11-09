@@ -1719,11 +1719,15 @@ process_version:
     return err;
 }
 
-static int _castle_version_is_ancestor(c_ver_t candidate, c_ver_t version)
+int castle_version_is_ancestor(c_ver_t candidate, c_ver_t version)
 {
     struct castle_version *c, *v;
     int ret;
 
+    if (candidate == version)
+        return 1;
+
+    read_lock_irq(&castle_versions_hash_lock);
     v = __castle_versions_hash_get(version);
     c = __castle_versions_hash_get(candidate);
     /* Sanity checks */
@@ -1737,25 +1741,12 @@ static int _castle_version_is_ancestor(c_ver_t candidate, c_ver_t version)
     /* c is an ancestor of v if v->o_order is in range c->o_order to c->r_order
        inclusive */
     ret = (v->o_order >= c->o_order) && (v->o_order <= c->r_order);
-
-    return ret;
-}
-
-int castle_version_is_ancestor(c_ver_t candidate, c_ver_t version)
-{
-    int ret;
-
-    if (candidate == version)
-        return 1;
-
-    read_lock_irq(&castle_versions_hash_lock);
-    ret = _castle_version_is_ancestor(candidate, version);
     read_unlock_irq(&castle_versions_hash_lock);
 
     return ret;
 }
 
-static inline int _castle_version_compare(c_ver_t version1, c_ver_t version2)
+int castle_version_compare(c_ver_t version1, c_ver_t version2)
 {
     struct castle_version *v1, *v2;
     int ret;
@@ -1775,38 +1766,6 @@ static inline int _castle_version_compare(c_ver_t version1, c_ver_t version2)
     read_unlock_irq(&castle_versions_hash_lock);
 
     return ret;
-}
-
-int castle_version_compare(c_ver_t version1, c_ver_t version2)
-{
-    int ret;
-
-    if (version1 == version2)
-        return 0;
-
-    read_lock_irq(&castle_versions_hash_lock);
-    ret = _castle_version_compare(version1, version2);
-    read_unlock_irq(&castle_versions_hash_lock);
-
-    return ret;
-}
-
-void castle_version_is_ancestor_and_compare(c_ver_t version1,
-                                            c_ver_t version2,
-                                            int *ver1_is_anc_of_ver2,
-                                            int *cmp)
-{
-    if (version1 == version2)
-    {
-        *ver1_is_anc_of_ver2 = 1;
-        *cmp = 0;
-        return;
-    }
-
-    read_lock_irq(&castle_versions_hash_lock);
-    *ver1_is_anc_of_ver2 = _castle_version_is_ancestor(version1, version2);
-    *cmp = _castle_version_compare(version1, version2);
-    read_unlock_irq(&castle_versions_hash_lock);
 }
 
 /**
