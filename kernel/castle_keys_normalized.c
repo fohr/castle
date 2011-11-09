@@ -1,8 +1,3 @@
-/*
- * Current issues:
- * - switch from magic numbers like 2 and 4 to sizeof(uint32_t) and the like
- * - then also make those sizes typedefs to have a single definition
- */
 
 /*
  * System header file inclusions.

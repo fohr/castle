@@ -4,7 +4,7 @@
 #include <linux/sort.h>
 #include "castle_public.h"
 #include "castle_defines.h"
-#include "castle.h"             /* XXX: needs to go away */
+#include "castle.h"
 #include "castle_utils.h"
 #include "castle_keys_normalized.h"
 #ifdef CASTLE_DEBUG
