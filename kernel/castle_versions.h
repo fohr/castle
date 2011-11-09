@@ -3,6 +3,10 @@
 
 int         castle_version_is_ancestor              (c_ver_t candidate, c_ver_t version);
 int         castle_version_compare                  (c_ver_t version1,  c_ver_t version2);
+void        castle_version_is_ancestor_and_compare  (c_ver_t version1,
+                                                     c_ver_t version2,
+                                                     int *ver1_is_anc_of_ver2,
+                                                     int *cmp);
 int         castle_version_attach                   (c_ver_t version);
 void        castle_version_detach                   (c_ver_t version);
 int         castle_version_read                     (c_ver_t version,
