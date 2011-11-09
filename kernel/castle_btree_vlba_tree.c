@@ -621,7 +621,7 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
 #endif
 
     new_entry.version        = version;
-    new_entry.type           = cvt_type_to_btree_entry_type(cvt);
+    new_entry.type           = cvt_type_to_btree_entry_type(cvt.type);
     new_entry.disabled       = 0;
     new_entry.val_len        = cvt.length;
     new_entry.key.length     = key_length;
@@ -727,7 +727,7 @@ static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
     BUG_ON(((uint8_t *)entry) >= EOF_VLBA_NODE(node));
 
     new_entry.version        = version;
-    new_entry.type           = cvt_type_to_btree_entry_type(cvt);
+    new_entry.type           = cvt_type_to_btree_entry_type(cvt.type);
     new_entry.disabled       = 0;
     new_entry.val_len        = cvt.length;
     new_entry.key.length     = key->length;
