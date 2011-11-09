@@ -169,8 +169,8 @@ extern struct workqueue_struct *castle_da_wqs[NR_CASTLE_DA_WQS];
 
 struct castle_component_tree*
      castle_component_tree_get (tree_seq_t seq);
-void castle_ct_get	       (struct castle_component_tree *ct, int write, c_ct_ext_ref_t *refs);
-void castle_ct_put	       (struct castle_component_tree *ct, int write, c_ct_ext_ref_t *refs);
+void castle_ct_get             (struct castle_component_tree *ct, int write, c_ct_ext_ref_t *refs);
+void castle_ct_put             (struct castle_component_tree *ct, int write, c_ct_ext_ref_t *refs);
 void castle_da_cts_proxy_put   (struct castle_da_cts_proxy *proxy);
 void castle_da_next_ct_read    (c_bvec_t *c_bvec);
 

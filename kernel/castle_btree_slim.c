@@ -695,10 +695,10 @@ static void castle_slim_entries_drop(struct castle_btree_node *node, int low, in
  * directly.
  */
 static void castle_slim_entry_construct(struct castle_btree_node *node,
-					int idx,
+                                        int idx,
                                         const struct castle_norm_key *key,
-					c_ver_t version,
-					c_val_tup_t cvt)
+                                        c_ver_t version,
+                                        c_val_tup_t cvt)
 {
     size_t key_size = castle_norm_key_size(key);
     BUG_ON(key_size > SLIM_TREE_MAX_KEY_SIZE);

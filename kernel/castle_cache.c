@@ -448,26 +448,26 @@ void castle_cache_stats_print(int verbose)
         atomic_sub(count1, &extent_stats[i].hits);
         hits += count1;
 
-	count2 = atomic_read(&extent_stats[i].misses);
+        count2 = atomic_read(&extent_stats[i].misses);
         atomic_sub(count2, &extent_stats[i].misses);
         misses += count2;
 
-	if(i == EXT_T_T0_INTERNAL_NODES) {
-	    castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_T0_INT_HIT_MISS_ID,
-			       count1, count2);
-	}
-	else if(i == EXT_T_T0_LEAF_NODES) {
-	    castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_T0_LEAF_HIT_MISS_ID,
-			       count1, count2);
-	}
-	else if(i == EXT_T_INTERNAL_NODES) {
-	    castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_INT_HIT_MISS_ID,
-			       count1, count2);
-	}
-	else if(i == EXT_T_LEAF_NODES) {
-	    castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_LEAF_HIT_MISS_ID,
-			       count1, count2);
-	}
+        if(i == EXT_T_T0_INTERNAL_NODES) {
+            castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_T0_INT_HIT_MISS_ID,
+                               count1, count2);
+        }
+        else if(i == EXT_T_T0_LEAF_NODES) {
+            castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_T0_LEAF_HIT_MISS_ID,
+                               count1, count2);
+        }
+        else if(i == EXT_T_INTERNAL_NODES) {
+            castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_INT_HIT_MISS_ID,
+                               count1, count2);
+        }
+        else if(i == EXT_T_LEAF_NODES) {
+            castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_LEAF_HIT_MISS_ID,
+                               count1, count2);
+        }
     }
     castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_GET_HIT_MISS_ID, hits, misses);
     count1 = atomic_read(&merge_hits);
@@ -475,13 +475,13 @@ void castle_cache_stats_print(int verbose)
     atomic_sub(count1, &merge_hits);
     atomic_sub(count2, &merge_misses);
     castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_MERGE_HIT_MISS_ID, count1,
-		       count2);
+                       count2);
     count1 = atomic_read(&non_merge_hits);
     count2 = atomic_read(&non_merge_misses);
     atomic_sub(count1, &non_merge_hits);
     atomic_sub(count2, &non_merge_misses);
     castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_NON_MERGE_HIT_MISS_ID, count1,
-		       count2);
+                       count2);
 }
 
 EXPORT_SYMBOL(castle_cache_stats_print);
@@ -1687,10 +1687,10 @@ static int c_io_next_slave_get(c2_block_t *c2b, c_disk_chk_t *chunks, int k_fact
                 disk_idx = i;
                 min_outstanding_ios = atomic_read(&slave->io_in_flight);
             }
-	    else if(do_second && disk_idx != -1) {
-		disk_idx = i;
-		min_outstanding_ios = 0; /* fix on this second disk */
-	    }
+            else if(do_second && disk_idx != -1) {
+                disk_idx = i;
+                min_outstanding_ios = 0; /* fix on this second disk */
+            }
             else
             {
                 tmp = atomic_read(&slave->io_in_flight);
@@ -2417,7 +2417,7 @@ void put_c2b_and_demote(c2_block_t *c2b)
 {
     spin_lock_irq(&castle_cache_block_lru_lock);
     if(!c2b_dirty(c2b)) {
-	list_move(&c2b->clean, &castle_cache_cleanlist);
+        list_move(&c2b->clean, &castle_cache_cleanlist);
     }
     spin_unlock_irq(&castle_cache_block_lru_lock);
     put_c2b(c2b);
@@ -2436,8 +2436,8 @@ void put_c2b_and_demote(c2_block_t *c2b)
  * @return NULL if no matches were found
  */
 static inline c2_block_t* _castle_cache_block_hash_get(c_ext_pos_t cep,
-						       uint32_t nr_pages,
-						       int promote)
+                                                       uint32_t nr_pages,
+                                                       int promote)
 {
     c2_block_t *c2b = NULL;
 
@@ -3341,8 +3341,8 @@ static inline void castle_cache_page_freelist_grow(int nr_pages)
 
 static c2_block_t* _castle_cache_block_get(c_ext_pos_t cep,
                                            int nr_pages,
-					   int transient,
-					   int merge_originated)
+                                           int transient,
+                                           int merge_originated)
 {
     int grown_block_freelist = 0, grown_page_freelist = 0;
 #ifdef PERF_DEBUG
@@ -3453,22 +3453,22 @@ out:
     {
         if (c2b_uptodate(c2b)) {
             atomic_add(c2b->nr_pages, &extent_stats[ext_type].hits);
-	    if(merge_originated) {
-		atomic_add(c2b->nr_pages, &merge_hits);
-	    }
-	    else {
-		atomic_add(c2b->nr_pages, &non_merge_hits);
-	    }
-	}
+            if(merge_originated) {
+                atomic_add(c2b->nr_pages, &merge_hits);
+            }
+            else {
+                atomic_add(c2b->nr_pages, &non_merge_hits);
+            }
+        }
         else {
             atomic_add(c2b->nr_pages, &extent_stats[ext_type].misses);
-	    if(merge_originated) {
-		atomic_add(c2b->nr_pages, &merge_misses);
-	    }
-	    else {
-		atomic_add(c2b->nr_pages, &non_merge_misses);
-	    }
-	}
+            if(merge_originated) {
+                atomic_add(c2b->nr_pages, &merge_misses);
+            }
+            else {
+                atomic_add(c2b->nr_pages, &non_merge_misses);
+            }
+        }
     }
 #endif
 
@@ -3754,12 +3754,12 @@ static void c2_pref_block_chunk_put(c_ext_pos_t cep, c2_pref_window_t *window, i
                 cep.ext_id, CHUNK(cep.offset), castle_extent_size_get(cep.ext_id)-1,
                 atomic_read(&c2b->softpin_cnt));
 
-	if (demote) {
-	    put_c2b_and_demote(c2b);
-	}
-	else {
-	    put_c2b(c2b);
-	}
+        if (demote) {
+            put_c2b_and_demote(c2b);
+        }
+        else {
+            put_c2b(c2b);
+        }
     }
 }
 
@@ -6738,10 +6738,10 @@ int castle_cache_init(void)
 
     /* Initialise per-cpu vmap mutexes */
     for(cpu_iter = 0; cpu_iter < NR_CPUS; cpu_iter++) {
-	if(cpu_possible(cpu_iter)) {
-	    vmap_mutex_ptr = &per_cpu(castle_cache_vmap_lock, cpu_iter);
-	    mutex_init(vmap_mutex_ptr);
-	}
+        if(cpu_possible(cpu_iter)) {
+            vmap_mutex_ptr = &per_cpu(castle_cache_vmap_lock, cpu_iter);
+            mutex_init(vmap_mutex_ptr);
+        }
     }
 
     /* Init kmem_cache for io_array (Structure is too big to fit in stack). */
