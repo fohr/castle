@@ -159,7 +159,7 @@ int castle_uevent_init(struct sk_buff *unused, struct genl_info *info)
 errout_dealloc:
     nlmsg_free(skb);
 errout:
-    castle_printk(LOG_ERROR, "Failed to correctly initialise castle uevent netlink:\n", ret);
+    castle_printk(LOG_ERROR, "Failed to correctly initialise castle uevent netlink: %d\n", ret);
     return ret;
 }
 
