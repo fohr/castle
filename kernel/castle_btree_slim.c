@@ -176,19 +176,6 @@ static void castle_slim_key_print(int level, const void *key)
 #define TYPE_ON_DISK(type)               ((type) == CVT_TYPE_MEDIUM_OBJECT || \
                                           (type) == CVT_TYPE_LARGE_OBJECT)
 
-/* XXX: lifted from castle_btree_vlba_tree.c; should reside somewhere in common */
-inline static int cvt_type_to_entry_type(int type)
-{
-    /* Local counters will be turned into inline counters. */
-    if (type == CVT_TYPE_COUNTER_LOCAL_SET)
-        return CVT_TYPE_COUNTER_SET;
-    if (type == CVT_TYPE_COUNTER_LOCAL_ADD)
-        return CVT_TYPE_COUNTER_ADD;
-
-    /* Otherwise, just use the cvt type directly. */
-    return type;
-}
-
 /*
  * Structure definitions for leaf node entries.
  */
@@ -753,7 +740,7 @@ static void castle_slim_entry_construct(struct castle_btree_node *node,
         }
         memmove(&entry->key, key, key_size);
         entry->flags = BTREE_NODE_HAS_TIMESTAMPS(node) ? LEAF_ENTRY_TIMESTAMP_FLAG : 0;
-        entry->type = cvt_type_to_entry_type(cvt.type);
+        entry->type = cvt_type_to_btree_entry_type(cvt.type);
         entry->version = version;
         if (LEAF_ENTRY_HAS_TIMESTAMP(entry))
             leaf_entry_timestamp_put(&entry_end, cvt.user_timestamp);

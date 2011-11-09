@@ -287,6 +287,23 @@ static inline int ptr_in_range(void *ptr, void *range_start, size_t range_size)
     return overlap(ptr, ptr, range_start, range_start + range_size);
 }
 
+/**
+ * Converts the CVT type to the type field that will be stored in the btree.
+ * It deals with local counters correctly, other than that it just returns
+ * the CVT type field.
+ */
+inline static int cvt_type_to_btree_entry_type(int type)
+{
+    /* Local counters will be turned into inline counters. */
+    if (type == CVT_TYPE_COUNTER_LOCAL_SET)
+        return CVT_TYPE_COUNTER_SET;
+    if (type == CVT_TYPE_COUNTER_LOCAL_ADD)
+        return CVT_TYPE_COUNTER_ADD;
+
+    /* Otherwise, just use the cvt type directly. */
+    return type;
+}
+
 #ifdef DEBUG
 #include <linux/sched.h>
 static USED void check_stack_usage(void)

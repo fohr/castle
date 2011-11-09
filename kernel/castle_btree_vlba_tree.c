@@ -595,24 +595,6 @@ static int castle_vlba_tree_entry_get(struct castle_btree_node *node,
 static void castle_vlba_tree_node_validate(struct castle_btree_node *node);
 #endif
 
-/**
- * Converts CVT to type field that will be store in the btree.
- * It deals with local counters correctly, other than that just returns
- * the CVT type field.
- */
-static inline uint8_t castle_vlba_tree_cvt_type_to_entry_type(c_val_tup_t cvt)
-{
-    /* Local counters will be turned into inline counters. */
-    if(CVT_COUNTER_LOCAL_SET(cvt))
-        return CVT_TYPE_COUNTER_SET;
-
-    if(CVT_COUNTER_LOCAL_ADD(cvt))
-        return CVT_TYPE_COUNTER_ADD;
-
-    /* Otherwise, just use the cvt type directly. */
-    return cvt.type;
-}
-
 static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
                                        int                       idx,
                                        void                     *key_v,
@@ -639,7 +621,7 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
 #endif
 
     new_entry.version        = version;
-    new_entry.type           = castle_vlba_tree_cvt_type_to_entry_type(cvt);
+    new_entry.type           = cvt_type_to_btree_entry_type(cvt);
     new_entry.disabled       = 0;
     new_entry.val_len        = cvt.length;
     new_entry.key.length     = key_length;
@@ -745,7 +727,7 @@ static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
     BUG_ON(((uint8_t *)entry) >= EOF_VLBA_NODE(node));
 
     new_entry.version        = version;
-    new_entry.type           = castle_vlba_tree_cvt_type_to_entry_type(cvt);
+    new_entry.type           = cvt_type_to_btree_entry_type(cvt);
     new_entry.disabled       = 0;
     new_entry.val_len        = cvt.length;
     new_entry.key.length     = key->length;
