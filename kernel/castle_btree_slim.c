@@ -432,9 +432,7 @@ static void intern_entry_extents_drop(struct slim_header *header, int low, int h
 #define NODE_END(node)                   ((char *) (node) + NODE_SIZE(node))
 #define NODE_INDEX(node, i)              (*((uint32_t *) NODE_END(node) - ((i)+1)))
 #define NODE_INDEX_BOUND(node)           ((char *) &NODE_INDEX(node, (node)->used-1))
-#define NODE_ENTRY_PTR(node, i)          ((char *) (node) + NODE_INDEX(node, i))
-#define NODE_LEAF_ENTRY_PTR(node, i)     ((struct slim_leaf_entry *) NODE_ENTRY_PTR(node, i))
-#define NODE_INTERN_ENTRY_PTR(node, i)   ((struct slim_intern_entry *) NODE_ENTRY_PTR(node, i))
+#define NODE_ENTRY_PTR(node, i)          ((void *) ((char *) (node) + NODE_INDEX(node, i)))
 
 /**
  * Calculate a conservative estimate of the max number of entries which can fit in a node.
@@ -487,7 +485,7 @@ static int castle_slim_entry_get(struct castle_btree_node *node, int idx,
 
     if (BTREE_NODE_IS_LEAF(node))
     {
-        struct slim_leaf_entry *entry = NODE_LEAF_ENTRY_PTR(node, idx);
+        struct slim_leaf_entry *entry = NODE_ENTRY_PTR(node, idx);
         BUG_ON(castle_norm_key_size(&entry->key) > SLIM_TREE_MAX_KEY_SIZE);
         BUG_ON((char *) entry + leaf_entry_size(entry) > NODE_INDEX_BOUND(node));
 
@@ -524,7 +522,7 @@ static int castle_slim_entry_get(struct castle_btree_node *node, int idx,
 
     else
     {
-        struct slim_intern_entry *entry = NODE_INTERN_ENTRY_PTR(node, idx);
+        struct slim_intern_entry *entry = NODE_ENTRY_PTR(node, idx);
         BUG_ON(castle_norm_key_size(&entry->key) > SLIM_TREE_MAX_KEY_SIZE);
         BUG_ON((char *) entry + intern_entry_size(entry) > NODE_INDEX_BOUND(node));
 
@@ -714,7 +712,7 @@ static void castle_slim_entry_construct(struct castle_btree_node *node,
 
     if (BTREE_NODE_IS_LEAF(node))
     {
-        struct slim_leaf_entry *entry = NODE_LEAF_ENTRY_PTR(node, idx);
+        struct slim_leaf_entry *entry = NODE_ENTRY_PTR(node, idx);
         void *entry_end;
         if (TYPE_ON_DISK(cvt.type))
         {
@@ -747,7 +745,7 @@ static void castle_slim_entry_construct(struct castle_btree_node *node,
 
     else
     {
-        struct slim_intern_entry *entry = NODE_INTERN_ENTRY_PTR(node, idx);
+        struct slim_intern_entry *entry = NODE_ENTRY_PTR(node, idx);
         BUG_ON(!TYPE_NODE(cvt.type));
         memmove(&entry->key, key, key_size);
         entry->flags = 0;
@@ -823,8 +821,8 @@ static void castle_slim_entry_replace(struct castle_btree_node *node, int idx,
 
     BUG_ON(idx < 0 || idx > node->used);
 
-    if (NODE_ENTRY_PTR(node, idx) + old_size + header->free_bytes == NODE_INDEX_BOUND(node) &&
-        new_size <= old_size + header->free_bytes)
+    if ((char *) NODE_ENTRY_PTR(node, idx) + old_size + header->free_bytes == NODE_INDEX_BOUND(node)
+        && new_size <= old_size + header->free_bytes)
     {
         castle_slim_entry_construct(node, idx, norm_key, version, cvt);
         header->free_bytes += old_size - new_size;
@@ -850,12 +848,12 @@ static void castle_slim_entry_disable(struct castle_btree_node *node, int idx)
 {
     if (BTREE_NODE_IS_LEAF(node))
     {
-        struct slim_leaf_entry *entry = NODE_LEAF_ENTRY_PTR(node, idx);
+        struct slim_leaf_entry *entry = NODE_ENTRY_PTR(node, idx);
         entry->flags |= LEAF_ENTRY_DISABLED_FLAG;
     }
     else
     {
-        struct slim_intern_entry *entry = NODE_INTERN_ENTRY_PTR(node, idx);
+        struct slim_intern_entry *entry = NODE_ENTRY_PTR(node, idx);
         entry->flags |= INTERN_ENTRY_DISABLED_FLAG;
     }
 }
@@ -878,7 +876,7 @@ static void castle_slim_node_print(struct castle_btree_node *node)
     {
         for (i = 0; i < node->used; ++i)
         {
-            struct slim_leaf_entry *entry = NODE_LEAF_ENTRY_PTR(node, i);
+            struct slim_leaf_entry *entry = NODE_ENTRY_PTR(node, i);
             castle_printk(LOG_DEBUG, "[%u] offset=%ld, type=%u, flags=%u, version=%u, key_size=%lu, key:\n",
                           i, (char *) entry - (char *) node, entry->type, entry->flags, entry->version,
                           castle_norm_key_size(&entry->key));
@@ -909,7 +907,7 @@ static void castle_slim_node_print(struct castle_btree_node *node)
     {
         for (i = 0; i < node->used; ++i)
         {
-            struct slim_intern_entry *entry = NODE_INTERN_ENTRY_PTR(node, i);
+            struct slim_intern_entry *entry = NODE_ENTRY_PTR(node, i);
             c_ext_pos_t cep = { intern_entry_extent_get(header, i), entry->offset };
             castle_printk(LOG_DEBUG, "[%u] offset=%ld, flags=%u, version=%u, key_size=%lu, key:\n",
                           i, (char *) entry - (char *) node, entry->flags, entry->version,
@@ -1027,7 +1025,7 @@ static void castle_slim_node_validate(struct castle_btree_node *node)
 
         if (BTREE_NODE_IS_LEAF(node))
         {
-            struct slim_leaf_entry *entry = NODE_LEAF_ENTRY_PTR(node, i);
+            struct slim_leaf_entry *entry = NODE_ENTRY_PTR(node, i);
 
             if (entry->type != CVT_TYPE_TOMBSTONE     && entry->type != CVT_TYPE_INLINE &&
                 entry->type != CVT_TYPE_MEDIUM_OBJECT && entry->type != CVT_TYPE_LARGE_OBJECT &&
@@ -1070,7 +1068,7 @@ static void castle_slim_node_validate(struct castle_btree_node *node)
         }
         else
         {
-            struct slim_intern_entry *entry = NODE_INTERN_ENTRY_PTR(node, i);
+            struct slim_intern_entry *entry = NODE_ENTRY_PTR(node, i);
             version = entry->version;
             key = &entry->key;
         }
