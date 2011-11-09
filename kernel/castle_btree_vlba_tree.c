@@ -46,7 +46,8 @@ static const vlba_key_t VLBA_TREE_MAX_KEY = (vlba_key_t){.length = VLBA_TREE_LEN
 struct castle_vlba_tree_entry {
     /* align:   8 */
     /* offset:  0 */ uint8_t                 type;
-    /*          1 */ uint8_t                 _pad[3];
+    /*          1 */ uint8_t                 disabled;
+    /*          2 */ uint8_t                 _pad[2];
     /*          4 */ c_ver_t                 version;
     /*          8 */ castle_user_timestamp_t user_timestamp;
     /*         16 */ uint64_t                val_len;
@@ -587,7 +588,7 @@ static int castle_vlba_tree_entry_get(struct castle_btree_node *node,
 
     cvt.type = entry->type;
 
-    return CVT_DISABLED(cvt);
+    return entry->disabled;
 }
 
 #ifdef CASTLE_DEBUG
@@ -639,6 +640,7 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
 
     new_entry.version        = version;
     new_entry.type           = castle_vlba_tree_cvt_type_to_entry_type(cvt);
+    new_entry.disabled       = 0;
     new_entry.val_len        = cvt.length;
     new_entry.key.length     = key_length;
     new_entry.user_timestamp = cvt.user_timestamp;
@@ -744,6 +746,7 @@ static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
 
     new_entry.version        = version;
     new_entry.type           = castle_vlba_tree_cvt_type_to_entry_type(cvt);
+    new_entry.disabled       = 0;
     new_entry.val_len        = cvt.length;
     new_entry.key.length     = key->length;
     new_entry.user_timestamp = cvt.user_timestamp;
@@ -777,18 +780,11 @@ static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
 static void castle_vlba_tree_entry_disable(struct castle_btree_node *node,
                                            int                       idx)
 {
-    c_val_tup_t cvt;
-
     struct castle_vlba_tree_node *vlba_node =
         (struct castle_vlba_tree_node*) BTREE_NODE_PAYLOAD(node);
     struct castle_vlba_tree_entry *entry =
         (struct castle_vlba_tree_entry *)VLBA_ENTRY_PTR(node, vlba_node, idx);
-
-
-    /* Disable the entry using the appropriate CVT macro. */
-    cvt.type = entry->type;
-    CVT_DISABLED_INIT(cvt)
-    entry->type = cvt.type;
+    entry->disabled = 1;
 }
 
 
