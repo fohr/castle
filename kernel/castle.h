@@ -514,7 +514,6 @@ struct castle_fs_superblock {
 /* Different CVT types. These are stored in btree nodes, so changes to those should be
    made in a backwards compatible way. */
 
-#define CVT_TYPE_DISABLED_FLAG   0x80
 enum {
     CVT_TYPE_INVALID               = 0x00,
     CVT_TYPE_LEAF_PTR              = 0x02,
@@ -536,8 +535,6 @@ enum {
                                               subcounters are sets. */
     CVT_TYPE_COUNTER_ACCUM_ADD_SET = 0x08, /**< Composite counter, first is an add, second a set. */
     CVT_TYPE_COUNTER_ACCUM_ADD_ADD = 0x0a, /**< Composite counter, both are adds.                 */
-
-    /* 0x80 - 0xFF should not be used, because it conflicts with CVT_TYPE_DISABLED_FLAG. */
 };
 
 struct castle_value_tuple {
@@ -560,8 +557,6 @@ typedef struct castle_value_tuple c_val_tup_t;
 
 
 #define CVT_INVALID(_cvt)           ((_cvt).type == CVT_TYPE_INVALID)
-
-#define CVT_DISABLED(_cvt)          ((_cvt).type & CVT_TYPE_DISABLED_FLAG)
 
 /* CVT_LEAF_VAL checks for any value type (directly usable entry from leaf btree nodes).
    In particular pointers to btree nodes aren't CVT_LEAF_VAL, neither are leaf ptrs. */
@@ -644,10 +639,6 @@ typedef struct castle_value_tuple c_val_tup_t;
 #define CVT_ANY_COUNTER(_cvt)    (CVT_INLINE_COUNTER(_cvt) ||                 \
                                   CVT_LOCAL_COUNTER(_cvt))
 
-#define CVT_DISABLED_INIT(_cvt)                                               \
-{                                                                             \
-   (_cvt).type |= CVT_TYPE_DISABLED_FLAG;                                     \
-}
 #define CVT_INVALID_INIT(_cvt)                                                \
 {                                                                             \
    (_cvt).type   = CVT_TYPE_INVALID;                                          \
