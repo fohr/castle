@@ -202,6 +202,7 @@ void castle_da_ct_marshall(struct castle_clist_entry *ctm, struct castle_compone
 static struct castle_component_tree* castle_da_ct_unmarshall(struct castle_component_tree *ct,
                                                              struct castle_clist_entry *ctm);
 /* partial merges: partition handling */
+//TODO@tr get rid of partition_activate if this stage no longer needed?
 static void castle_da_merge_new_partition_activate(struct castle_da_merge *merge);
 static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
                                                  c2_block_t *node_c2b,
@@ -5161,6 +5162,7 @@ static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
         }
         curr_comp++;
     }
+    castle_da_merge_new_partition_activate(merge);
 }
 
 static int castle_da_merge_space_reserve(struct castle_da_merge *merge, c_val_tup_t cvt)
@@ -5287,25 +5289,8 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
                             &merge->out_tree->min_user_timestamp);
     }
 
-    if (merge->out_tree->bloom_exists)
-    {
-        /* Only add this key to the bloom filter if it is a new key. */
-        if (merge->is_new_key
-                && castle_bloom_add(&merge->out_tree->bloom, merge->out_btree, key))
-            /* Advance partition key if by adding the new key the current
-             * bloom chunk was completed. */
-            castle_da_merge_new_partition_activate(merge);
-
-        //TODO@tr
-        //        it we want to timstamp chunks then we have to be careful to prevent the
-        //        possibility of a timestamp-based FALSE NEGATIVE.  (this is unlikely to happen
-        //        because the spillover into the next chunk will be for an ancestral key, and
-        //        for an v-order older key to have a newer timestamp than it's children, a lot
-        //        of other things will probably be broken anyway... but nevertheless, this is
-        //        something to watch out for).
-    }
-    else
-        castle_da_merge_new_partition_activate(merge);
+    if (merge->out_tree->bloom_exists && merge->is_new_key)
+        castle_bloom_add(&merge->out_tree->bloom, merge->out_btree, key);
 
     /* Update per-version and merge statistics.
      * We are starting with merged iterator stats (from above). */
@@ -6795,14 +6780,15 @@ static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_bytes)
         write_lock_c2b(merge->levels[0].node_c2b);
 
     /* ditto the in-progress bloom filter */
+    //TODO@tr fix this up (lock removal underway)
     if (merge->out_tree->bloom_exists)
     {
         struct castle_bloom_build_params *bf_bp =  merge->out_tree->bloom.private;
 
         if (bf_bp)
         {
-            if (bf_bp->chunk_c2b)
-                write_lock_c2b(bf_bp->chunk_c2b);
+            //if (bf_bp->chunk_c2b)
+            //    write_lock_c2b(bf_bp->chunk_c2b);
             //if (bf_bp->node_c2b)
             //    write_lock_c2b(bf_bp->node_c2b);
         }
@@ -6882,26 +6868,25 @@ complete_merge_do:
         write_unlock_c2b(merge->levels[0].node_c2b);
     }
 
-    if (merge->out_tree->bloom_exists)
-    {
-        struct castle_bloom_build_params *bf_bp =  merge->out_tree->bloom.private;
+    //TODO@tr lock removal underway; clean this up once complete.
+    //if (merge->out_tree->bloom_exists)
+    //{
+    //    struct castle_bloom_build_params *bf_bp =  merge->out_tree->bloom.private;
 
-        if (bf_bp)
-        {
-            if (bf_bp->chunk_c2b)
-            {
-                debug("%s::unlocking bloom filter chunk_c2b for merge on da %d level %d.\n",
-                        __FUNCTION__, da->id, level);
-                dirty_c2b(bf_bp->chunk_c2b);
-                write_unlock_c2b(bf_bp->chunk_c2b);
-            }
-            if (bf_bp->node_c2b)
-            {
-                if(c2b_write_locked(bf_bp->node_c2b))
-                    BUG();
-            }
-        }
-    }
+    //    if (bf_bp)
+    //    {
+    //        if (bf_bp->chunk_c2b)
+    //        {
+    //            if(c2b_write_locked(bf_bp->chunk_c2b))
+    //                BUG();
+    //        }
+    //        if (bf_bp->node_c2b)
+    //        {
+    //            if(c2b_write_locked(bf_bp->node_c2b))
+    //                BUG();
+    //        }
+    //    }
+    //}
 
     /* Successfully completed current unit of work. */
     if (ret == EAGAIN)

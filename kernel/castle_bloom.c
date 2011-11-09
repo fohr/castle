@@ -284,6 +284,7 @@ static void castle_bloom_complete_chunk(castle_bloom_t *bf)
     }
 #endif
 
+    write_lock_c2b(bf_bp->chunk_c2b);
     dirty_c2b(bf_bp->chunk_c2b);
     write_unlock_c2b(bf_bp->chunk_c2b);
     put_c2b(bf_bp->chunk_c2b);
@@ -317,6 +318,8 @@ static void castle_bloom_next_chunk(castle_bloom_t *bf)
     update_c2b(bf_bp->chunk_c2b);
     bf_bp->cur_chunk_buffer = c2b_buffer(bf_bp->chunk_c2b);
     memset(bf_bp->cur_chunk_buffer, 0, BLOOM_CHUNK_SIZE);
+    dirty_c2b(bf_bp->chunk_c2b);
+    write_unlock_c2b(bf_bp->chunk_c2b);
 
     castle_printk(LOG_DEBUG, "%s: New chunk at " cep_fmt_str" for bf=%p "
             "BLOOM_BLOCKS_PER_CHUNK(bf)=%d chunks_complete=%d.\n",
@@ -1138,7 +1141,9 @@ void castle_bloom_build_param_marshall(struct castle_bbp_entry *bbpm,
     {
         BUG_ON(EXT_POS_INVAL(bbpm->chunk_cep));
         bbpm->chunk_avail = 1;
+        write_lock_c2b(bf_bp->chunk_c2b);
         dirty_c2b(bf_bp->chunk_c2b);
+        write_unlock_c2b(bf_bp->chunk_c2b);
     }
     else
         bbpm->chunk_avail = 0;
