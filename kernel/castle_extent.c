@@ -2215,6 +2215,9 @@ out:
 }
 
 #define META_POOL_SIZE 10000
+static unsigned int castle_meta_pool_entries = META_POOL_SIZE;
+module_param(castle_meta_pool_entries, uint, S_IRUSR | S_IRGRP);
+MODULE_PARM_DESC(castle_meta_pool_entries, "Meta extent pool size");
 
 static meta_pool_entry_t    *meta_extent_pool;
 
@@ -2313,7 +2316,14 @@ void castle_extents_meta_pool_init(void)
     INIT_LIST_HEAD(&meta_pool_released);
     INIT_LIST_HEAD(&meta_pool_frozen);
 
-    meta_extent_pool = castle_vmalloc(META_POOL_SIZE * sizeof(meta_pool_entry_t));
+    if (castle_meta_pool_entries <= 0)
+    {
+        castle_printk(LOG_WARN, "Meta extent pool disabled.\n");
+        goto out;
+    }
+    if (castle_meta_pool_entries > META_POOL_SIZE) castle_meta_pool_entries = META_POOL_SIZE;
+
+    meta_extent_pool = castle_vmalloc(castle_meta_pool_entries * sizeof(meta_pool_entry_t));
     if (!meta_extent_pool)
     {
         castle_printk(LOG_ERROR, "Couldn't allocate bitmap.\n");
@@ -2349,7 +2359,7 @@ void castle_extents_meta_pool_init(void)
     }
 
     /* For each meta extent block in the pool ... */
-    for (i=0; i<META_POOL_SIZE; i++)
+    for (i=0; i<castle_meta_pool_entries; i++)
     {
         /* Find a free meta extent block. */
         unused_idx = castle_extent_meta_unused_find(&meta_pool, 1);
@@ -2375,7 +2385,7 @@ void castle_extents_meta_pool_init(void)
 
     debug("Initialising meta ext pool with %d unused pages\n", castle_extent_meta_pool_size);
 
-    if (castle_extent_meta_pool_size < META_POOL_SIZE)
+    if (castle_extent_meta_pool_size < castle_meta_pool_entries)
     {
         /*
          * We didn't allocate the entire free pool from meta extent pages before
@@ -2383,26 +2393,26 @@ void castle_extents_meta_pool_init(void)
          * that meta_ext_free is correctly updated.
          */
         if (castle_ext_freespace_get(&meta_ext_free,
-                                    (META_POOL_SIZE - castle_extent_meta_pool_size) * PAGE_SIZE,
-                                    0,
-                                    &maps_cep))
+                            (castle_meta_pool_entries - castle_extent_meta_pool_size) * PAGE_SIZE,
+                            0,
+                            &maps_cep))
         {
             castle_printk(LOG_WARN, "Failed to get %d freespace pages for meta extent pool.\n",
-                         (META_POOL_SIZE - castle_extent_meta_pool_size));
+                         (castle_meta_pool_entries - castle_extent_meta_pool_size));
             goto err_out_nofreespace;
         }
         /* Add these entries to the meta extent pool available list. */
-        for (i=castle_extent_meta_pool_size; i<META_POOL_SIZE; i++)
+        for (i=castle_extent_meta_pool_size; i<castle_meta_pool_entries; i++)
         {
             meta_pool_offset = (unsigned long)(maps_cep.offset + (i * PAGE_SIZE));
             meta_extent_pool[i].offset = meta_pool_offset;
             list_add_tail(&meta_extent_pool[i].list, &meta_pool_available);
         }
         debug("Initialising meta ext pool with %d allocated pages\n",
-              (META_POOL_SIZE - castle_extent_meta_pool_size));
+              (castle_meta_pool_entries - castle_extent_meta_pool_size));
     }
 
-    castle_extent_meta_pool_size = META_POOL_SIZE;
+    castle_extent_meta_pool_size = castle_meta_pool_entries;
 
 err_out_nofreespace:
     if (castle_extent_meta_pool_size)
