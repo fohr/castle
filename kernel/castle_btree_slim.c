@@ -325,7 +325,8 @@ static size_t intern_entry_size(const struct slim_intern_entry *entry)
 struct slim_header {
     /* align:   4 */
     /* offset:  0 */ uint8_t      revision;
-    /*          1 */ uint8_t      _pad[3];
+    /*          1 */ uint8_t      _pad;
+    /*          2 */ uint16_t     data_offset; /* from the start of the node */
     /*          4 */ uint32_t     dead_bytes;
     /*          8 */ uint32_t     free_bytes;
     /*         12 */ uint32_t     extent_entries[SLIM_MAX_EXTENTS];
@@ -334,7 +335,10 @@ struct slim_header {
     /*         64 */
 } PACKED;
 
-#define SLIM_HEADER_PTR(node) ((struct slim_header *) BTREE_NODE_PAYLOAD(node))
+/* half a kB limit on the total node header size; only needed for max_entries() */
+/* note that this includes the size of the node-independent castle_btree_node   */
+#define SLIM_HEADER_MAX                  512
+#define SLIM_HEADER_PTR(node)            ((struct slim_header *) BTREE_NODE_PAYLOAD(node))
 
 /*
  * Extent array manipulation for internal nodes.
@@ -448,8 +452,7 @@ static void intern_entry_extents_drop(struct slim_header *header, int low, int h
  */
 static size_t castle_slim_max_entries(size_t size)
 {
-    return (size * C_BLK_SIZE - sizeof(struct castle_btree_node) - sizeof(struct slim_header))
-        / LEAF_ENTRY_MAX_SIZE;
+    return (size * C_BLK_SIZE - SLIM_HEADER_MAX) / LEAF_ENTRY_MAX_SIZE;
 }
 
 /**
@@ -472,7 +475,7 @@ static int castle_slim_need_split(struct castle_btree_node *node, int split_type
                 avail_bytes < LEAF_ENTRY_MAX_SIZE :
                 avail_bytes < INTERN_ENTRY_MAX_SIZE * 2;
         case 1:                 /* key split */
-            return avail_bytes < (NODE_SIZE(node) - sizeof *node - sizeof *header) / 3;
+            return avail_bytes < (NODE_SIZE(node) - header->data_offset) / 3;
         default:
             BUG();
     }
@@ -611,7 +614,7 @@ static void castle_slim_compact(struct castle_btree_node *node)
 {
     uint32_t **offsets = castle_alloc(node->used * sizeof *offsets);
     struct slim_header *header = SLIM_HEADER_PTR(node);
-    char *base = (char *) node + sizeof *node + sizeof *header;
+    char *base = (char *) node + header->data_offset;
     int i;
 
     /* sort the entries in ascending offset order */
@@ -792,9 +795,10 @@ static void castle_slim_entry_add(struct castle_btree_node *node, int idx,
     /* initialize the node if necessary */
     if (unlikely(node->used == 0))
     {
-        header->revision   = 0;
-        header->dead_bytes = 0;
-        header->free_bytes = NODE_SIZE(node) - sizeof *node - sizeof *header;
+        header->revision    = 0;
+        header->data_offset = sizeof *node + sizeof *header;
+        header->dead_bytes  = 0;
+        header->free_bytes  = NODE_SIZE(node) - header->data_offset;
         if (!BTREE_NODE_IS_LEAF(node))
             intern_entry_extents_init(header);
     }
@@ -881,8 +885,8 @@ static void castle_slim_node_print(struct castle_btree_node *node)
 
     castle_printk(LOG_DEBUG, "node=%p, version=%u, used=%u, flags=%u\n",
                   node, node->version, node->used, node->flags);
-    castle_printk(LOG_DEBUG, "header=%p, dead_bytes=%u, free_bytes=%u\n",
-                  header, header->dead_bytes, header->free_bytes);
+    castle_printk(LOG_DEBUG, "header=%p, revision=%u, offset=%u, dead_bytes=%u, free_bytes=%u\n",
+                  header, header->revision, header->data_offset, header->dead_bytes, header->free_bytes);
 
     if (BTREE_NODE_IS_LEAF(node))
     {
@@ -939,7 +943,7 @@ static void castle_slim_node_validate(struct castle_btree_node *node)
 {
     struct slim_header *header = SLIM_HEADER_PTR(node);
     uint32_t **offsets;
-    size_t header_used_bytes = NODE_SIZE(node) - sizeof *node - sizeof *header
+    size_t header_used_bytes = NODE_SIZE(node) - header->data_offset
         - header->dead_bytes - header->free_bytes;
     size_t used_bytes = 0, dead_bytes = 0, free_bytes = 0;
     c_ver_t save_version;
@@ -991,8 +995,11 @@ static void castle_slim_node_validate(struct castle_btree_node *node)
     }
     castle_free(offsets);
 
+    /* slim header checks */
     if (header->revision != 0 && (failed = 1))
         castle_printk(LOG_ERROR, "error: unknown node revision %u\n", header->revision);
+    if (header->data_offset > SLIM_HEADER_MAX && (failed = 1))
+        castle_printk(LOG_ERROR, "error: header is too large at %u bytes\n", header->data_offset);
 
     /* size accounting checks */
     if (dead_bytes != header->dead_bytes && (failed = 1))
