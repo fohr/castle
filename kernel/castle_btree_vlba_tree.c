@@ -564,7 +564,6 @@ static int castle_vlba_tree_entry_get(struct castle_btree_node *node,
         (struct castle_vlba_tree_node*) BTREE_NODE_PAYLOAD(node);
     struct castle_vlba_tree_entry *entry =
                (struct castle_vlba_tree_entry *) VLBA_ENTRY_PTR(node, vlba_node, idx);
-    c_val_tup_t cvt;
 
     BUG_ON(idx < 0);
     BUG_ON(idx >= node->used);
@@ -585,8 +584,6 @@ static int castle_vlba_tree_entry_get(struct castle_btree_node *node,
         BUG_ON(!BTREE_NODE_IS_LEAF(node) && (CVT_LEAF_PTR(*cvt_p) || CVT_LEAF_VAL(*cvt_p)));
         BUG_ON(BTREE_NODE_IS_LEAF(node) && CVT_NODE(*cvt_p));
     }
-
-    cvt.type = entry->type;
 
     return entry->disabled;
 }
@@ -859,13 +856,12 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
     prev_len = 0;
     for (i=0; i<node->used; i++)
     {
-        uint32_t entry_offset, ent_len;
+        uint32_t entry_offset;
         struct castle_vlba_tree_entry *entry;
         uint8_t ret;
 
         entry_offset = vlba_node->key_idx[i];
         entry = (struct castle_vlba_tree_entry *)(EOF_VLBA_NODE(node) - entry_offset);
-        ent_len = (uint32_t)VLBA_ENTRY_LENGTH(entry);
 
         ret = (prev_offset == -1)?0:castle_vlba_tree_key_compare(&prev_entry->key, &entry->key);
         if ((prev_offset != -1) &&

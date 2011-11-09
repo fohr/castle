@@ -563,7 +563,6 @@ static c2_block_t* castle_btree_node_key_split(c_bvec_t *c_bvec,
     struct castle_component_tree *ct;
     struct castle_btree_node *node, *sec_node;
     struct castle_btree_type *btree;
-    uint16_t node_size;
     c2_block_t *c2b;
     uint8_t rev_level;
     int i, j, nr_moved, was_preallocated;
@@ -576,7 +575,6 @@ static c2_block_t* castle_btree_node_key_split(c_bvec_t *c_bvec,
     node      = c2b_bnode(orig_c2b);
     ct        = c_bvec->tree;
     btree     = castle_btree_type_get(ct->btree_type);
-    node_size = ct->node_sizes[rev_level];
     was_preallocated
               = castle_btree_node_was_preallocated(c_bvec->tree, rev_level);
     c2b       = castle_btree_node_create(ct,
@@ -744,7 +742,6 @@ static void castle_btree_node_under_key_insert(c2_block_t *parent_c2b,
 static void castle_btree_new_root_create(c_bvec_t *c_bvec, btree_t type)
 {
     c2_block_t *c2b;
-    struct castle_btree_node *node;
     struct castle_component_tree *ct;
 
     ct = c_bvec->tree;
@@ -758,7 +755,6 @@ static void castle_btree_new_root_create(c_bvec_t *c_bvec, btree_t type)
                                    0              /* version */,
                                    ct->tree_depth /* level */,
                                    0              /* wasn't preallocated */);
-    node = c2b_buffer(c2b);
     /* We should be under write lock here, check if we can read lock it (and BUG) */
     BUG_ON(down_read_trylock(&ct->lock));
     ct->root_node = c2b->cep;
@@ -775,7 +771,7 @@ static void castle_btree_new_root_create(c_bvec_t *c_bvec, btree_t type)
 
 static int castle_btree_node_split(c_bvec_t *c_bvec)
 {
-    struct castle_btree_node *node, *eff_node, *split_node, *parent_node;
+    struct castle_btree_node *node, *eff_node, *split_node;
     c2_block_t *eff_c2b, *split_c2b, *retain_c2b, *parent_c2b;
     struct castle_btree_type *btree;
     void *key = c_bvec->key;
@@ -857,7 +853,6 @@ static int castle_btree_node_split(c_bvec_t *c_bvec)
     /* Work out if we have a parent */
     parent_c2b  = c_bvec->btree_parent_node;
     BUG_ON(!parent_c2b);
-    parent_node = c2b_buffer(parent_c2b);
     /* Insert!
        This is a bit complex, due to number of different cases. Each is described below
        in some detail.
@@ -1407,12 +1402,10 @@ static void __castle_btree_submit(c_bvec_t *c_bvec,
     struct castle_component_tree *ct;
     struct castle_btree_type *btree;
     c2_block_t *c2b;
-    int ret;
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
 
     debug("%s::Asked for key: %p, in version 0x%x, on ct %d, reading ftree node" cep_fmt_str_nl,
             __FUNCTION__, c_bvec->key, c_bvec->version, c_bvec->tree->seq, cep2str(node_cep));
-    ret = -ENOMEM;
 
     ct = c_bvec->tree;
     btree = castle_btree_type_get(ct->btree_type);

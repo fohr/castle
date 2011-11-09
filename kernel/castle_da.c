@@ -2480,7 +2480,6 @@ void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
                             void *private)
 {
     struct castle_double_array *da;
-    struct castle_btree_type *btree;
 
     BUG_ON(!init_cb);
 
@@ -2488,7 +2487,6 @@ void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
     da = castle_da_hash_get(da_id);
     BUG_ON(!da);
     BUG_ON(!castle_version_is_ancestor(da->root_version, version));
-    btree = castle_btree_type_get(da->btree_type);
 
     /* Get CTs proxy structure. */
     iter->cts_proxy = castle_da_cts_proxy_get(da);
@@ -6968,7 +6966,7 @@ static int castle_da_merge_run(void *da_p)
 {
     struct castle_double_array *da = (struct castle_double_array *)da_p;
     struct castle_component_tree *in_trees[2];
-    int level, ignore, ret, nr_units;
+    int level, ignore, ret;
     struct castle_da_merge *merge = NULL;
     uint64_t nr_bytes;
     uint32_t nr_data_exts;
@@ -7099,7 +7097,6 @@ merge_do:
         BUG_ON(MERGE_ID_INVAL(in_trees[0]->merge_id) && nr_bytes == 0);
         nr_bytes = nr_bytes / (1 << level);
 
-        nr_units = 0;
         /* Do the merge.  If it fails, retry after 10s (unless it's a merge abort). */
         do {
             ret = castle_da_merge_do(merge, nr_bytes);
@@ -10274,11 +10271,11 @@ static void castle_da_queue_kick(struct work_struct *work)
 static size_t castle_da_cts_proxy_keys_size(struct castle_double_array *da)
 {
     struct castle_da_merge *last_merge;
-    int i, keys;
+    int i;
     size_t size;
 
     /* Evaluate all mergeable CTs in the DA (not level 0). */
-    for (i = 1, keys = size = 0, last_merge = NULL; i < MAX_DA_LEVEL; i++)
+    for (i = 1, size = 0, last_merge = NULL; i < MAX_DA_LEVEL; i++)
     {
         struct list_head *l;
 

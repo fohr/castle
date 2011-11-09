@@ -351,7 +351,7 @@ out:
     if (castle_attachments_store) castle_mstore_fini(castle_attachments_store);
     castle_attachments_store = NULL;
 
-    return 0;
+    return ret;
 }
 
 void castle_control_collection_attach(c_ver_t            version,

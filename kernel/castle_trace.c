@@ -265,7 +265,7 @@ static void castle_trace_tracepoints_unregister(void)
 
 int castle_trace_setup(char *dir_str)
 {
-    struct dentry *dir, *root;
+    struct dentry *dir;
     int ret;
 
     BUG_ON(!castle_ctrl_is_locked());
@@ -274,7 +274,6 @@ int castle_trace_setup(char *dir_str)
 
     __module_get(THIS_MODULE);
     dir = NULL;
-    root = NULL;
 
     /* Create tracing directory. */
     ret = -ENOENT;

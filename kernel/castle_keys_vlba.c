@@ -56,7 +56,6 @@ static c_vl_bkey_t* castle_object_btree_key_construct(const c_vl_bkey_t *k1,
                                                       uint32_t nr_dims_from_k1)
 {
     uint32_t key_len, nr_dims;
-    uint32_t nr_dims_from_k2;
     uint32_t k2_payload_len, offset, i;
     uint32_t payload_split_offset = 0;
     c_vl_bkey_t *out_key;
@@ -79,7 +78,6 @@ static c_vl_bkey_t* castle_object_btree_key_construct(const c_vl_bkey_t *k1,
     BUG_ON(nr_dims_from_k1 && (nr_dims_from_k1 > (k1->nr_dims - 1)));
 
     nr_dims = k2->nr_dims;
-    nr_dims_from_k2 = nr_dims - nr_dims_from_k1;
 
     /* Workout the length of the key. */
 

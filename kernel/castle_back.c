@@ -2044,18 +2044,17 @@ static void castle_back_iter_start(void *data)
     struct castle_back_conn *conn = op->conn;
     struct castle_back_stateful_op *stateful_op;
     struct castle_attachment *attachment;
-    castle_interface_token_t token;
     c_vl_bkey_t *start_key;
     c_vl_bkey_t *end_key;
     int err;
 
     stateful_debug("conn=%p op=%p\n", conn, op);
 
-    token = castle_back_stateful_op_get(conn,
-                                        &stateful_op,
-                                        op->cpu,
-                                        op->cpu_index,
-                                        castle_back_iter_expire);
+    castle_back_stateful_op_get(conn,
+                                &stateful_op,
+                                op->cpu,
+                                op->cpu_index,
+                                castle_back_iter_expire);
     if (!stateful_op)
     {
         error("castle_back: no more free stateful ops!\n");
@@ -2852,7 +2851,6 @@ static void castle_back_big_put(void *data)
     struct castle_back_conn *conn = op->conn;
     int err;
     struct castle_attachment *attachment;
-    castle_interface_token_t token;
     struct castle_back_stateful_op *stateful_op;
 
     debug("castle_back_big_put\n");
@@ -2865,11 +2863,11 @@ static void castle_back_big_put(void *data)
     }
 
     /* Get a new stateful op to handle big_put. */
-    token = castle_back_stateful_op_get(conn,
-                                        &stateful_op,
-                                        op->cpu,
-                                        op->cpu_index,
-                                        castle_back_big_put_expire);
+    castle_back_stateful_op_get(conn,
+                                &stateful_op,
+                                op->cpu,
+                                op->cpu_index,
+                                castle_back_big_put_expire);
 
     /* Couldn't find a free stateful op. */
     if (!stateful_op)
@@ -2960,7 +2958,6 @@ static void castle_back_timestamped_big_put(void *data)
     struct castle_back_conn *conn = op->conn;
     int err;
     struct castle_attachment *attachment;
-    castle_interface_token_t token;
     struct castle_back_stateful_op *stateful_op;
 
     debug("castle_back_timestamped_big_put\n");
@@ -2973,11 +2970,11 @@ static void castle_back_timestamped_big_put(void *data)
     }
 
     /* Get a new stateful op to handle timestamped_big_put. */
-    token = castle_back_stateful_op_get(conn,
-                                        &stateful_op,
-                                        op->cpu,
-                                        op->cpu_index,
-                                        castle_back_big_put_expire);
+    castle_back_stateful_op_get(conn,
+                                &stateful_op,
+                                op->cpu,
+                                op->cpu_index,
+                                castle_back_big_put_expire);
 
     /* Couldn't find a free stateful op. */
     if (!stateful_op)
@@ -3275,16 +3272,15 @@ static void castle_back_big_get(void *data)
     struct castle_back_conn *conn = op->conn;
     int err;
     struct castle_attachment *attachment;
-    castle_interface_token_t token;
     struct castle_back_stateful_op *stateful_op;
 
     debug("castle_back_big_get\n");
 
-    token = castle_back_stateful_op_get(conn,
-                                        &stateful_op,
-                                        op->cpu,
-                                        op->cpu_index,
-                                        castle_back_big_get_expire);
+    castle_back_stateful_op_get(conn,
+                                &stateful_op,
+                                op->cpu,
+                                op->cpu_index,
+                                castle_back_big_get_expire);
     if (!stateful_op)
     {
         error("castle_back: no more free stateful ops!\n");

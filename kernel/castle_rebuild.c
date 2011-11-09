@@ -76,7 +76,6 @@ static int castle_resubmit_run(void *unused)
     do {
         struct resubmit_c2b *rc2b;
         c2_block_t          *c2b;
-        int                 rw;
 
         wait_event_interruptible(resubmit_wq, c2bs_to_resubmit() || kthread_should_stop());
 
@@ -93,7 +92,6 @@ static int castle_resubmit_run(void *unused)
             list_del(&rc2b->list);
             spin_unlock_irq(&resubmit_list_lock);
             c2b = rc2b->c2b;
-            rw = rc2b->rw;
             /*
              * It is possible that I/O has been submitted for the chunk mapping for this
              * c2b. If that I/O is bound for a now dead slave then that I/O will be

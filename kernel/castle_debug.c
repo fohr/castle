@@ -374,12 +374,10 @@ static int castle_debug_run(void *unused)
     struct list_head *l;
     int something_printed, j, nr_bios;
     unsigned long flags, states_printed;
-    int cep_idx;
     int sleep_time = 2;
 
     do {
         spin_lock_irqsave(&bio_list_spinlock, flags);
-        cep_idx = 0;
         states_printed = 0;
         something_printed = 0;
         nr_bios = 0;

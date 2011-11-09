@@ -66,7 +66,6 @@ int castle_freespace_slave_superchunks_reserve(struct castle_slave  *cs,
                                                c_chk_cnt_t           nr_schks,
                                                c_res_pool_t         *pool)
 {
-    castle_freespace_t *freespace;
     c_chk_cnt_t free_schks;
     int ret = 0;
 
@@ -74,7 +73,7 @@ int castle_freespace_slave_superchunks_reserve(struct castle_slave  *cs,
     BUG_ON(!castle_extent_in_transaction());
 
     /* Get the superblock lock. */
-    freespace = freespace_sblk_get(cs);
+    freespace_sblk_get(cs);
 
     /* Work out how many free superchunks there are ATM. */
     free_schks = castle_freespace_free_superchunks(cs);
