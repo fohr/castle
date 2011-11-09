@@ -75,13 +75,19 @@ int castle_uint32_stack_construct(c_uint32_stack *stack, uint32_t size)
         ret = -ENOMEM;
         goto err0;
     }
+    castle_printk(LOG_DEBUG, "%s::alloc'd _stack %p of capacity %u on struct %p\n",
+            __FUNCTION__, stack->_stack, size, stack);
 
     /* Init stuff */
     stack->top      = 0;
     stack->_max_top = size;
-    return 0;
+
+    BUG_ON(ret != 0);
+    return ret;
 
 err0:
+    castle_printk(LOG_DEBUG, "%s::failed to construct on stack struct %p with capacity %u\n",
+            __FUNCTION__, stack, size);
     return ret;
 
 }
@@ -89,9 +95,9 @@ err0:
 void castle_uint32_stack_destroy(c_uint32_stack *stack)
 {
     BUG_ON(!stack);
-
-    castle_free(stack->_stack);
-    stack->_stack = NULL;
+    castle_printk(LOG_DEBUG, "%s::for struct %p, doing check_free on %p\n",
+            __FUNCTION__, stack, stack->_stack);
+    castle_check_free(stack->_stack);
 }
 
 void castle_uint32_stack_push(c_uint32_stack *stack, uint32_t new_element)
