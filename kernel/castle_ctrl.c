@@ -40,9 +40,11 @@ static DECLARE_WAIT_QUEUE_HEAD(castle_control_wait_q);
 
 c_mstore_t *castle_attachments_store = NULL;
 
+struct task_struct *ctrl_lock_holder = NULL;
 void castle_ctrl_lock(void)
 {
     mutex_lock(&castle_control_lock);
+    ctrl_lock_holder = current;
 }
 
 void castle_ctrl_unlock(void)
@@ -50,6 +52,7 @@ void castle_ctrl_unlock(void)
     /* if we BUG here, it means we just did a CASTLE_TRANSACTION_END without
        first doing a CASTLE_TRANSACTION_BEGIN. */
     BUG_ON(!castle_ctrl_is_locked());
+    ctrl_lock_holder = NULL;
     mutex_unlock(&castle_control_lock);
 }
 
