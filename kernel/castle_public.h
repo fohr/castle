@@ -10,6 +10,10 @@
 #include <linux/time.h>
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define CASTLE_PROTOCOL_VERSION 30 /* last updated by TR */
 
 #define PACKED               __attribute__((packed))
@@ -1001,5 +1005,9 @@ enum castle_error_codes
 {
     CASTLE_ERRORS
 };
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* __CASTLE_PUBLIC_H__ */
