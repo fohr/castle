@@ -2136,8 +2136,8 @@ static void castle_extents_meta_compact(int *force_checkpoint)
 
     if ((castle_meta_ext_compact_pct < 0) || (castle_meta_ext_compact_pct > 100))
         castle_meta_ext_compact_pct = META_EXT_COMPACT_DEFAULT_PCT;
-    if(castle_meta_ext_compact_pct && atomic64_read(&meta_ext_free.used) <
-            meta_ext_free.ext_size / (100 / castle_meta_ext_compact_pct))
+    if(castle_meta_ext_compact_pct && ((100 * atomic64_read(&meta_ext_free.used)) <
+            (meta_ext_free.ext_size * castle_meta_ext_compact_pct)))
     {
         castle_printk(LOG_INIT, "Less than %d percent meta extent used, not compacting.\n",
             castle_meta_ext_compact_pct);
