@@ -1109,7 +1109,7 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
  */
 void castle_cache_dirtytree_demote(c_ext_dirtytree_t *dirtytree)
 {
-    spin_lock_irq(&castle_cache_block_hash_lock);
+    spin_lock_irq(&castle_cache_block_lru_lock);
     if (likely(!RB_EMPTY_ROOT(&dirtytree->rb_root)))
     {
         atomic_dec(&castle_cache_extent_dirtylist_sizes[dirtytree->flush_prio]);
@@ -1118,7 +1118,7 @@ void castle_cache_dirtytree_demote(c_ext_dirtytree_t *dirtytree)
         list_add(&dirtytree->list, &castle_cache_extent_dirtylists[dirtytree->flush_prio]);
         atomic_inc(&castle_cache_extent_dirtylist_sizes[dirtytree->flush_prio]);
     }
-    spin_unlock_irq(&castle_cache_block_hash_lock);
+    spin_unlock_irq(&castle_cache_block_lru_lock);
 }
 
 /**
