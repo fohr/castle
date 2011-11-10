@@ -5063,6 +5063,8 @@ static void castle_da_merge_new_partition_activate(struct castle_da_merge *merge
     }
     castle_key_ptr_ref_cp(&merge->redirection_partition,
                           &merge->new_redirection_partition);
+    BUG_ON(merge->redirection_partition.node_size == 0 ||
+            merge->redirection_partition.node_size > 256);
     BUG_ON(!merge->redirection_partition.node_c2b);
     BUG_ON(!merge->redirection_partition.key);
     castle_key_ptr_destroy(&merge->new_redirection_partition);
@@ -9392,6 +9394,7 @@ static int castle_da_merge_deser_phase1(void)
             }
             merge->redirection_partition.node_c2b =
                 castle_cache_block_get_for_merge(entry->redirection_partition_node_cep, node_size);
+            merge->redirection_partition.node_size = node_size;
             write_lock_c2b(merge->redirection_partition.node_c2b);
             if(!c2b_uptodate(merge->redirection_partition.node_c2b))
                 BUG_ON(submit_c2b_sync(READ, merge->redirection_partition.node_c2b));
