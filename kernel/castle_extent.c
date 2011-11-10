@@ -5598,7 +5598,10 @@ void cleanup_extent(c_ext_t *ext, int update_seqno)
     spin_unlock(&ext->shadow_map_lock);
 
     if (ext->shadow_map)
+    {
         castle_vfree(ext->shadow_map);
+        ext->shadow_map = NULL;
+    }
 
     /* It is now safe to update the (LIVE) extent with the rebuild sequence number. */
     if (LIVE_EXTENT(ext) && update_seqno)
