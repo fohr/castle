@@ -5387,6 +5387,16 @@ aggressive:
                 list_move_tail(&dirtytree->list, &castle_cache_extent_dirtylists[prio]);
                 spin_unlock_irq(&castle_cache_block_lru_lock);
 
+                /* On non-aggressive scan, only flush extents with plenty of dirty
+                   blocks. This makes IO more efficient. */
+                if(!aggressive &&
+                   prio != DEAD_EXT_FLUSH_PRIO &&
+                   dirtytree->nr_pages < MIN_EFFICIENT_DIRTYTREE)
+                {
+                    castle_extent_dirtytree_put(dirtytree);
+                    continue;
+                }
+
                 /* We need to pass two reference counts to __castle_cache_extent_flush() one
                  * for global counting (for rate limiting) and another per extent cound to
                  * release references. */
@@ -5417,16 +5427,6 @@ aggressive:
 
                 /* Get the range of extent. */
                 castle_extent_mask_read_all(dirtytree->ext_id, &start_chk, &end_chk);
-
-                /* On non-aggressive scan, only flush extents with plenty of dirty
-                   blocks. This makes IO more efficient. */
-                if(!aggressive &&
-                   prio != DEAD_EXT_FLUSH_PRIO &&
-                   dirtytree->nr_pages < MIN_EFFICIENT_DIRTYTREE)
-                {
-                    castle_extent_dirtytree_put(dirtytree);
-                    continue;
-                }
 
                 /* Flushed will be set to an approximation of pages flushed. */
                 __castle_cache_extent_flush(dirtytree,                      /* dirtytree    */
