@@ -6357,6 +6357,16 @@ update_output_tree_state:
     {
         merge_mstore->redirection_partition_node_size = merge->redirection_partition.node_size;
         merge_mstore->redirection_partition_node_cep  = merge->redirection_partition.node_c2b->cep;
+
+        if(merge_mstore->redirection_partition_node_size == 0 ||
+                merge_mstore->redirection_partition_node_size > 256)
+        {
+            castle_printk(LOG_ERROR, "%s::redir_partition_node_cep="cep_fmt_str", node size=%u\n",
+                    __FUNCTION__,
+                    cep2str(merge_mstore->redirection_partition_node_cep),
+                    merge_mstore->redirection_partition_node_size);
+            BUG();
+        }
     }
 
 
@@ -9374,7 +9384,12 @@ static int castle_da_merge_deser_phase1(void)
 
             /* recover c2b containing partition key */
             node_size = entry->redirection_partition_node_size;
-            BUG_ON(node_size == 0 || node_size > 256);
+            if(node_size == 0 || node_size > 256)
+            {
+                castle_printk(LOG_ERROR, "%s::redir_partition_node_cep="cep_fmt_str", node size=%u\n",
+                    __FUNCTION__, cep2str(entry->redirection_partition_node_cep), node_size);
+                BUG();
+            }
             merge->redirection_partition.node_c2b =
                 castle_cache_block_get_for_merge(entry->redirection_partition_node_cep, node_size);
             write_lock_c2b(merge->redirection_partition.node_c2b);
