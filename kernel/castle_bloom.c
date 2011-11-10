@@ -511,72 +511,65 @@ static inline void castle_bloom_bits_set(castle_bloom_t *bf,
  * @param   bf      Bloom filter to update
  * @param   btree   Btree type the key belongs to (for key_hash())
  * @param   key     Key to insert
- *
- * @return  0       More space remains within current bloom chunk
- * @return  1       Advanced to new bloom chunk
  */
-int castle_bloom_add(castle_bloom_t *bf, struct castle_btree_type *btree, void *key)
+void castle_bloom_add(castle_bloom_t *bf, struct castle_btree_type *btree, void *key)
 {
     struct castle_bloom_build_params *bf_bp = bf->private;
-    int elems_mod, chunk_completed = 0;
+    int elems_mod, new_elems = 1;
     uint32_t hash, hash2;
 
-    /* User failed to provision sufficient space for the bloom filter. */
-    BUG_ON(bf_bp->elements_inserted == bf_bp->max_num_elements);
-
-    /* Trying to hash different key types. */
-    BUG_ON(btree != bf->btree);
+    BUG_ON(btree != bf->btree); /* don't hash different key types */
 
     elems_mod = bf_bp->elements_inserted % BLOOM_ELEMENTS_PER_CHUNK;
+
+    /* Start a new bloom chunk if necessary. */
     if (elems_mod == 0)
     {
-        /* Start a new bloom chunk. */
         BUG_ON(bf_bp->chunks_complete >= bf->num_chunks);
+
         castle_bloom_next_chunk(bf);
         castle_bloom_add_index_key(bf, bf->btree->max_key, BAIK_INSERT_KEY);
 
-        /* Reset stripped hash to force insertion into new chunk.  Required for
-         * correct search ordering. */
+        /* By resetting the stripped hash we guarantee the stripped key be
+         * (re)inserted into the new chunk, necessary for search ordering. */
         bf_bp->last_stripped_hash = 0;
     }
-    if (elems_mod == BLOOM_ELEMENTS_PER_CHUNK - 1
-            || bf_bp->elements_inserted == bf_bp->max_num_elements - 1)
-    {
-        /* Key being inserted will complete the current chunk. */
-        castle_bloom_add_index_key(bf, key, BAIK_REPLACE_LAST_KEY);
-        chunk_completed = 1;
-    }
 
-    /* Hash significant stripped dimensions of key. */
+    /* Add hash of current key to the bloom filter. */
+    hash  = bf->btree->key_hash(key, HASH_WHOLE_KEY, 0 /*seed*/);
+    hash2 = bf->btree->key_hash(key, HASH_WHOLE_KEY, hash /*seed*/);
+    castle_bloom_bits_set(bf, key, HASH_WHOLE_KEY, hash, hash2);
+
+    /* Add hash of current stripped key to the bloom filter. */
     if ((bf->btree->nr_dims(key)) > HASH_STRIPPED_DIMS)
     {
         hash = bf->btree->key_hash(key, HASH_STRIPPED_KEYS, 0);
         if (hash != bf_bp->last_stripped_hash)
         {
-            /* The significant stripped dimensions have changed since the last
-             * key inserted.  Add this new hash so it can be used for range
-             * queries. */
             hash2 = bf->btree->key_hash(key, HASH_STRIPPED_KEYS, hash /*seed*/);
             castle_bloom_bits_set(bf, key, HASH_STRIPPED_KEYS, hash, hash2);
             bf_bp->last_stripped_hash = hash;
-            if (!chunk_completed)
-                /* Hack to ensure the next key added to the bloom filter will
-                 * start a new chunk (see elems_mod above).  The significant
-                 * stripped dimensions hash must appear in the same chunk as
-                 * the chunk index key (to preserve correct search ordering).
-                 * The alternative is to build a stripped key and insert that
-                 * into the index. */
-                bf_bp->elements_inserted++;
+            new_elems++; // initialised to 1
         }
     }
 
-    /* Insert the current key into the bloom filter. */
-    hash  = bf->btree->key_hash(key, HASH_WHOLE_KEY, 0 /*seed*/);
-    hash2 = bf->btree->key_hash(key, HASH_WHOLE_KEY, hash /*seed*/);
-    castle_bloom_bits_set(bf, key, HASH_WHOLE_KEY, hash, hash2);
-    bf_bp->elements_inserted++;
+    /* Finalise the current chunk if full. */
+    if (elems_mod + new_elems >= BLOOM_ELEMENTS_PER_CHUNK)
+    {
+        castle_bloom_add_index_key(bf, key, BAIK_REPLACE_LAST_KEY);
 
-    return chunk_completed;
+        /* Tweak the number of hashes we just added if we would otherwise skip
+         * the creation of a new bloom chunk next time we enter this function.
+         * Tweaking down is fine, but tweaking up could result in us hitting
+         * the max_num_elements BUG_ON() at the top of this function. */
+        if (elems_mod + new_elems > BLOOM_ELEMENTS_PER_CHUNK)
+            new_elems--;
+        BUG_ON(elems_mod + new_elems != BLOOM_ELEMENTS_PER_CHUNK);
+    }
+
+    /* Update the number of elements in bloom filter. */
+    bf_bp->elements_inserted += new_elems;
+    BUG_ON(bf_bp->elements_inserted > bf_bp->max_num_elements);
 }
 
 /**** Lookup ****/

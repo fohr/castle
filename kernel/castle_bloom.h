@@ -46,7 +46,7 @@ int castle_bloom_create(castle_bloom_t *bf, c_da_t da_id, btree_t btree_type, ui
 void castle_bloom_complete(castle_bloom_t *bf);
 void castle_bloom_abort(castle_bloom_t *bf);
 void castle_bloom_destroy(castle_bloom_t *bf);
-int castle_bloom_add(castle_bloom_t *bf, struct castle_btree_type *btree, void *key);
+void castle_bloom_add(castle_bloom_t *bf, struct castle_btree_type *btree, void *key);
 
 int castle_bloom_key_exists(c_bloom_lookup_t *bl,
                             castle_bloom_t *bf,
