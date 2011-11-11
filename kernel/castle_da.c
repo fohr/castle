@@ -8784,21 +8784,9 @@ mstore_writeback:
     return 0;
 }
 
-static int castle_da_hash_count(struct castle_double_array *da, void *_count)
-{
-    uint32_t *count = _count;
-
-    (*count)++;
-    return 0;
-}
-
 uint32_t castle_da_count(void)
 {
-    uint32_t count = 0;
-
-    castle_da_hash_iterate(castle_da_hash_count, (void *)&count);
-
-    return count;
+    return castle_da_nr_entries;
 }
 
 /* assumes caller took serdes.mutex */
