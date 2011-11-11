@@ -4833,13 +4833,13 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err, int 
        won't correspond to serialised state. */
     castle_ct_large_objs_remove(&merge->new_large_objs);
 
-    //TODO@tr robustify this: if merge_init succeeded, we expect to have a tv_resolver iff
-    //        the DA was timestamped or the merge was "top-level".
+    /* Free up structures that are used by the dfs resolver. This will handle cleanup regardless of
+       what state the structure is in; i.e. if allocation failed (in which case merge_init would
+       have called merge_dealloc directly), or allocation succeeded and the structure was used. */
     if (merge->tv_resolver)
     {
         castle_dfs_resolver_destroy(merge->tv_resolver);
-        castle_free(merge->tv_resolver);
-        merge->tv_resolver = NULL;
+        castle_check_free(merge->tv_resolver);
     }
 
     if (castle_version_states_free(&merge->version_states) != EXIT_SUCCESS)

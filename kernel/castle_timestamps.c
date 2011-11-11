@@ -116,10 +116,11 @@ void castle_dfs_resolver_destroy(c_dfs_resolver *dfs_resolver)
     castle_printk(LOG_DEBUG, "%s::merge id %u\n", __FUNCTION__, dfs_resolver->merge->id);
 
     /* Destroy stack */
-    castle_uint32_stack_destroy(dfs_resolver->stack);
-
-    /* Dealloc stack base struct */
-    castle_check_free(dfs_resolver->stack);
+    if (dfs_resolver->stack)
+    {
+        castle_uint32_stack_destroy(dfs_resolver->stack);
+        castle_check_free(dfs_resolver->stack);
+    }
 
     /* Dealloc inclusion buffer */
     castle_check_free(dfs_resolver->inclusion_flag);
