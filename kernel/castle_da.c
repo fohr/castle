@@ -393,6 +393,86 @@ static inline void castle_da_deleted_set(struct castle_double_array *da)
     set_bit(DOUBLE_ARRAY_DELETED_BIT, &da->flags);
 }
 
+#ifdef CASTLE_DEBUG
+#define print_merge_state(_f, _a...) (castle_printk(LOG_DEVEL, "%s::[%p] " _f, __FUNCTION__, (void *)merge, ##_a))
+static void castle_da_merge_debug_lock_state_query(struct castle_da_merge *merge)
+{
+    uint8_t i;
+    BUG_ON(!merge);
+    print_merge_state("id = %u\n", merge->id);
+
+    /* output tree stuff */
+    for(i=0; i<MAX_BTREE_DEPTH; i++)
+    {
+        if (merge->levels[i].node_c2b)
+        {
+            if (c2b_write_locked(merge->levels[i].node_c2b))
+                print_merge_state("level %u node c2b %p locked by %s:%u\n",
+                                  i,
+                                  merge->levels[i].node_c2b,
+                                  merge->levels[i].node_c2b->file,
+                                  merge->levels[i].node_c2b->line);
+            else
+                print_merge_state("level %u node c2b %p not locked\n",
+                                  i,
+                                  merge->levels[i].node_c2b);
+
+        }
+    }
+
+    /* bloom filter stuff */
+    if (merge->out_tree->bloom_exists)
+    {
+        struct castle_bloom_build_params *bf_bp = merge->out_tree->bloom.private;
+        if (bf_bp)
+        {
+            if (bf_bp->chunk_c2b)
+            {
+                if (c2b_write_locked(bf_bp->chunk_c2b))
+                    print_merge_state("bloom chunk_c2b %p locked by %s:%u\n",
+                                      bf_bp->chunk_c2b,
+                                      bf_bp->chunk_c2b->file,
+                                      bf_bp->chunk_c2b->line);
+                else
+                    print_merge_state("bloom chunk_c2b %p not locked\n",
+                                      bf_bp->chunk_c2b);
+            }
+            else
+                print_merge_state("bloom chunk_c2b %p\n", bf_bp->chunk_c2b);
+
+            if (bf_bp->node_c2b)
+            {
+                if (c2b_write_locked(bf_bp->node_c2b))
+                    print_merge_state("bloom node_c2b %p locked by %s:%u\n",
+                                      bf_bp->node_c2b,
+                                      bf_bp->node_c2b->file,
+                                      bf_bp->node_c2b->line);
+                else
+                    print_merge_state("bloom node_c2b %p not locked\n",
+                                      bf_bp->node_c2b);
+            }
+            else
+                print_merge_state("bloom node_c2b %p\n", bf_bp->node_c2b);
+        }
+        else
+            print_merge_state("no bloom build params (weird...?)\n");
+    }
+    else
+        print_merge_state("no bloom filter\n");
+}
+#undef print_merge_state
+/* Place this anywhere that merge might go to sleep, to see what locks are taken. */
+#define castle_merge_debug_locks(_m)                                                               \
+do{                                                                                                \
+    castle_printk(LOG_DEVEL,                                                                       \
+            "%s::calling castle_da_merge_debug_lock_state_query on merge %p from ln %u\n",         \
+            __FUNCTION__, _m, __LINE__);                                                           \
+    castle_da_merge_debug_lock_state_query(_m);                                                    \
+} while(0);
+#else
+#define castle_merge_debug_locks(_f, ...) ((void)0)
+#endif
+
 /**********************************************************************************************/
 /* Iterators */
 struct castle_immut_iterator;
@@ -5269,6 +5349,7 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
             return -ESHUTDOWN;
 
         printk("******* Sleeping on LFS *****\n");
+        castle_merge_debug_locks(merge);
         msleep(1000);
     }
 
