@@ -394,6 +394,86 @@ static inline void castle_da_deleted_set(struct castle_double_array *da)
     set_bit(DOUBLE_ARRAY_DELETED_BIT, &da->flags);
 }
 
+#ifdef CASTLE_DEBUG
+#define print_merge_state(_f, _a...) (castle_printk(LOG_DEVEL, "%s::[%p] " _f, __FUNCTION__, (void *)merge, ##_a))
+static void castle_da_merge_debug_lock_state_query(struct castle_da_merge *merge)
+{
+    uint8_t i;
+    BUG_ON(!merge);
+    print_merge_state("id = %u\n", merge->id);
+
+    /* output tree stuff */
+    for(i=0; i<MAX_BTREE_DEPTH; i++)
+    {
+        if (merge->levels[i].node_c2b)
+        {
+            if (c2b_write_locked(merge->levels[i].node_c2b))
+                print_merge_state("level %u node c2b %p locked by %s:%u\n",
+                                  i,
+                                  merge->levels[i].node_c2b,
+                                  merge->levels[i].node_c2b->file,
+                                  merge->levels[i].node_c2b->line);
+            else
+                print_merge_state("level %u node c2b %p not locked\n",
+                                  i,
+                                  merge->levels[i].node_c2b);
+
+        }
+    }
+
+    /* bloom filter stuff */
+    if (merge->out_tree->bloom_exists)
+    {
+        struct castle_bloom_build_params *bf_bp = merge->out_tree->bloom.private;
+        if (bf_bp)
+        {
+            if (bf_bp->chunk_c2b)
+            {
+                if (c2b_write_locked(bf_bp->chunk_c2b))
+                    print_merge_state("bloom chunk_c2b %p locked by %s:%u\n",
+                                      bf_bp->chunk_c2b,
+                                      bf_bp->chunk_c2b->file,
+                                      bf_bp->chunk_c2b->line);
+                else
+                    print_merge_state("bloom chunk_c2b %p not locked\n",
+                                      bf_bp->chunk_c2b);
+            }
+            else
+                print_merge_state("bloom chunk_c2b %p\n", bf_bp->chunk_c2b);
+
+            if (bf_bp->node_c2b)
+            {
+                if (c2b_write_locked(bf_bp->node_c2b))
+                    print_merge_state("bloom node_c2b %p locked by %s:%u\n",
+                                      bf_bp->node_c2b,
+                                      bf_bp->node_c2b->file,
+                                      bf_bp->node_c2b->line);
+                else
+                    print_merge_state("bloom node_c2b %p not locked\n",
+                                      bf_bp->node_c2b);
+            }
+            else
+                print_merge_state("bloom node_c2b %p\n", bf_bp->node_c2b);
+        }
+        else
+            print_merge_state("no bloom build params (weird...?)\n");
+    }
+    else
+        print_merge_state("no bloom filter\n");
+}
+#undef print_merge_state
+/* Place this anywhere that merge might go to sleep, to see what locks are taken. */
+#define castle_merge_debug_locks(_m)                                                               \
+do{                                                                                                \
+    castle_printk(LOG_DEVEL,                                                                       \
+            "%s::calling castle_da_merge_debug_lock_state_query on merge %p from ln %u\n",         \
+            __FUNCTION__, _m, __LINE__);                                                           \
+    castle_da_merge_debug_lock_state_query(_m);                                                    \
+} while(0);
+#else
+#define castle_merge_debug_locks(_f, ...) ((void)0)
+#endif
+
 /**********************************************************************************************/
 /* Iterators */
 struct castle_immut_iterator;
@@ -1876,7 +1956,6 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
         cvt = comp_iter->cached_entry.cvt;
 
     /* Return the smallest entry */
-    //TODO@tr add an entry for user_timestamp so it doesn't have to be in the cvt
     if(key_p)     *key_p     = comp_iter->cached_entry.k;
     if(version_p) *version_p = comp_iter->cached_entry.v;
     if(cvt_p)     *cvt_p     = cvt;
@@ -4336,8 +4415,6 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     BUG_ON(atomic_read(&out_tree->write_ref_count) != 0);
 
     /* update list of large objects */
-    //TODO@tr have to splice LO list when partition key is advanced... so... shall we just advance
-    //   the partition key when serialising?
     serdes_state = atomic_read(&merge->serdes.valid);
     if(serdes_state > NULL_DAM_SERDES)
         mutex_lock(&merge->serdes.mutex);
@@ -4837,13 +4914,13 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err, int 
        won't correspond to serialised state. */
     castle_ct_large_objs_remove(&merge->new_large_objs);
 
-    //TODO@tr robustify this: if merge_init succeeded, we expect to have a tv_resolver iff
-    //        the DA was timestamped or the merge was "top-level".
+    /* Free up structures that are used by the dfs resolver. This will handle cleanup regardless of
+       what state the structure is in; i.e. if allocation failed (in which case merge_init would
+       have called merge_dealloc directly), or allocation succeeded and the structure was used. */
     if (merge->tv_resolver)
     {
         castle_dfs_resolver_destroy(merge->tv_resolver);
-        castle_free(merge->tv_resolver);
-        merge->tv_resolver = NULL;
+        castle_check_free(merge->tv_resolver);
     }
 
     if (castle_version_states_free(&merge->version_states) != EXIT_SUCCESS)
@@ -5273,6 +5350,7 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
             return -ESHUTDOWN;
 
         printk("******* Sleeping on LFS *****\n");
+        castle_merge_debug_locks(merge);
         msleep(1000);
     }
 
@@ -5344,7 +5422,6 @@ static int castle_da_merge_tv_resolver_flush(struct castle_da_merge *merge,
 
     void                    *tvr_key     = NULL;
     c_ver_t                  tvr_version = INVAL_VERSION;
-    castle_user_timestamp_t  tvr_u_ts    = 0;
     c_val_tup_t              tvr_cvt;
     CVT_INVALID_INIT(tvr_cvt);
 
@@ -5355,18 +5432,11 @@ static int castle_da_merge_tv_resolver_flush(struct castle_da_merge *merge,
     while(castle_dfs_resolver_entry_pop(merge->tv_resolver,
                                         &tvr_key,
                                         &tvr_cvt,
-                                        &tvr_version,
-                                        &tvr_u_ts))
+                                        &tvr_version))
     {
-        //TODO@tr get rid of the user_timestamp field in the cvt structure... but in the meantime,
-        //        use it to sanity check things here and there!
         BUG_ON(!tvr_key);
-        BUG_ON(tvr_u_ts != tvr_cvt.user_timestamp);
         BUG_ON(actual_pop_count == expected_pop_count);
         BUG_ON(!CVT_LEAF_VAL(tvr_cvt) && !CVT_LOCAL_COUNTER(tvr_cvt));
-
-        /* if this is the first pop, then this is a new key, else it's not a new key */
-        //merge->is_new_key = (actual_pop_count == 0);
         actual_pop_count++;
 
         ret = castle_da_entry_do(merge,
@@ -5427,7 +5497,7 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
                 if (ret != EXIT_SUCCESS)
                     goto err_out;
             }
-            castle_dfs_resolver_entry_add(merge->tv_resolver, key, cvt, version, cvt.user_timestamp);
+            castle_dfs_resolver_entry_add(merge->tv_resolver, key, cvt, version);
         }
         else
         {
@@ -6427,12 +6497,6 @@ update_output_tree_state:
     {
         struct castle_bloom_build_params *bf_bp = merge->out_tree->bloom.private;
         BUG_ON(!bf_bp);
-
-        //TODO@tr clean this up
-        /* just me testing a theory... */
-        /* if these ever BUG, it means we need to flush the bloom build param extents as well */
-        BUG_ON(bf_bp->chunk_cep.ext_id != bf_bp->node_cep.ext_id);
-        BUG_ON(bf_bp->chunk_cep.ext_id != merge->out_tree->bloom.ext_id);
 
         debug("%s::merge %p (da %d, level %d) bloom_build_param marshall.\n",
                 __FUNCTION__, merge, merge->da->id, merge->level);
@@ -7573,16 +7637,11 @@ static void castle_da_dealloc(struct castle_double_array *da)
     castle_kfree(da);
 }
 
-atomic_t ct_get_count;
-atomic_t ct_put_count;
 static struct castle_double_array* castle_da_alloc(c_da_t da_id, c_da_opts_t opts)
 {
     struct castle_double_array *da;
     int i = 0;
     int nr_cpus = castle_double_array_request_cpus();
-
-    atomic_set(&ct_get_count, 0);
-    atomic_set(&ct_put_count, 0);
 
     da = castle_zalloc(sizeof(struct castle_double_array), GFP_KERNEL);
     if(!da)
@@ -8318,18 +8377,6 @@ void castle_ct_get(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *
     BUG_ON(nr_refs != refs->nr_refs);
     for (i = 0; i < nr_refs; i++)
         BUG_ON(refs->refs[i] == INVAL_MASK_ID);
-
-/*    debug("%s::ct %d (%p), extents %d %d %d %d, refs %d, %d, %d, %d... %d\n",
-            __FUNCTION__, ct->seq, ct,
-            ct->internal_ext_free.ext_id,
-            ct->tree_ext_free.ext_id,
-            ct->data_ext_free.ext_id,
-            ct->bloom.ext_id,
-            refs->ref_id_internal,
-            refs->ref_id_tree,
-            refs->ref_id_data,
-            refs->ref_id_bloom,
-            atomic_inc_return(&ct_get_count));*/
 }
 
 /**
@@ -8811,21 +8858,9 @@ mstore_writeback:
     return 0;
 }
 
-static int castle_da_hash_count(struct castle_double_array *da, void *_count)
-{
-    uint32_t *count = _count;
-
-    (*count)++;
-    return 0;
-}
-
 uint32_t castle_da_count(void)
 {
-    uint32_t count = 0;
-
-    castle_da_hash_iterate(castle_da_hash_count, (void *)&count);
-
-    return count;
+    return castle_da_nr_entries;
 }
 
 /* assumes caller took serdes.mutex */
@@ -9606,9 +9641,6 @@ int castle_double_array_read(void)
     while(castle_mstore_iterator_has_next(iterator))
     {
         castle_mstore_iterator_next(iterator, &mstore_dentry, &key);
-        //TODO@tr clarify that it's okay that some things are pre-unmarshalled
-        //        with this da_alloc call, and some things are done with
-        //        the ensuing da_unmarshall call.
         da = castle_da_alloc(mstore_dentry.id, mstore_dentry.creation_opts);
         if(!da)
             goto error_out;
@@ -10824,8 +10856,9 @@ static int64_t castle_da_ct_timestamp_compare(struct castle_component_tree *ct,
         return ret;
     }
 
-    /* TODO@tr if we come up with something more fine-grained than the max timestamp of the entire ct,
-       here is where we would set max_ct_ts_for_cvt and calculate the new ret. */
+    /* Further work: If we come up with something more fine-grained than the max timestamp of all
+                     the entries in the ct, then here is probably where we would set an improved
+                     guess for max_ct_ts_for_cvt and calculate the new ret. */
 
     return ret;
 }
@@ -10998,13 +11031,13 @@ int castle_da_ct_read_complete_cvt_timestamp_check(c_bvec_t *c_bvec,
     get->resolve_counters = 0;
 
     /*
-    TODO@tr use suspicioun tags to indicate if we can safely terminate
-            the query (if get->cvt is non-suspicious candidate, and cvt
-            is ancestral, then we can stop)
+    Further work: Use suspicioun tags to indicate if we can safely terminate
+                  the query; If get->cvt is non-suspicious candidate, and cvt
+                  is ancestral, then we can stop.
     if(!CVT_INVALID(get->cvt) && !CVT_INVALID(cvt))
         if(!CVT_SUSPICIOUS(get->cvt) && castle_version_is_ancestor(get->cvt.version, cvt.version))
             return 1;
-    Note: doing this means we need the version as well as the timestamp of the cvt.
+    Note: doing this means we need the version of the cvt, which is not immediately available here.
     */
 
     if(CVT_INVALID(get->cvt))

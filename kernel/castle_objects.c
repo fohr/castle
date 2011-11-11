@@ -911,7 +911,10 @@ int castle_object_replace(struct castle_object_replace *replace,
         debug("%s::user provided timestamp %llu\n", __FUNCTION__, replace->user_timestamp);
     else
     {
-        //TODO@tr infer timestamp from attachment/version
+        /* Further work: If we decide to use suspicioun tags, then here we need to infer the
+                         implicit timestamp of this non-timestamped entry from user_timestamp
+                         state that we would be maintaining on the version tree - to be precise,
+                         instead of 0, we would use v->creation_user_ts. */
         replace->user_timestamp = 0;
     }
 

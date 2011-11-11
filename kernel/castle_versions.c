@@ -923,7 +923,6 @@ static struct castle_version* castle_version_add(c_ver_t version,
     atomic64_set(&v->live_stats.key_replaces, 0);
 
     /* Clean timestamp. */
-    //TODO@tr is this the proper way to init timevals? or should we use timerclear?
     memset(&v->creation_timestamp, 0, sizeof(struct timeval));
     memset(&v->immute_timestamp, 0, sizeof(struct timeval));
 

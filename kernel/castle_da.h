@@ -8,7 +8,6 @@
 #define NR_CASTLE_DA_WQS 1
 
 typedef struct {
-    //TODO@tr seems sensible to hold ext_id here as well?
     uint64_t    ext_used_bytes;       /* bytes currently used */
     uint64_t    ext_avail_bytes;      /* byets available from extent_grow calls */
 } growth_control_state_t;
