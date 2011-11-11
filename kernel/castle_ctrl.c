@@ -73,7 +73,7 @@ void castle_control_claim(uint32_t dev, int *ret, c_slave_uuid_t *id)
     else
     {
         *id  = (uint32_t)-1;
-        *ret = C_ERR_FAIL;
+        *ret = -EINVAL;
     }
 }
 
@@ -84,7 +84,7 @@ void castle_control_attach(c_ver_t version, int *ret, uint32_t *dev)
     if (!DA_INVAL(castle_version_da_id_get(version)))
     {
         castle_printk(LOG_WARN, "Couldn't attach device to collection.\n");
-        *ret = C_ERR_INVAL_PARAM;
+        *ret = -EINVAL;
         return;
     }
 
@@ -92,11 +92,11 @@ void castle_control_attach(c_ver_t version, int *ret, uint32_t *dev)
     cd = castle_device_init(version);
     if(!cd)
     {
-        *ret = C_ERR_INTERNAL;
+        *ret = -EINVAL;
         return;
     }
     *dev = new_encode_dev(MKDEV(cd->dev.gd->major, cd->dev.gd->first_minor));
-    *ret = C_ERR_SUCCESS;
+    *ret = 0;
 }
 
 void castle_control_detach(uint32_t dev, int *ret)
@@ -105,7 +105,7 @@ void castle_control_detach(uint32_t dev, int *ret)
     struct castle_attachment *cd = castle_device_find(dev_id);
 
     if(cd) castle_device_free(cd);
-    *ret = (cd ? C_ERR_SUCCESS : C_ERR_NODEV);
+    *ret = (cd ? 0 : -ENODEV);
 }
 
 /**
@@ -215,7 +215,7 @@ void castle_control_snapshot(uint32_t dev, int *ret, c_ver_t *version)
     if(!cd)
     {
         *version = -1;
-        *ret     = C_ERR_NODEV;
+        *ret     = -ENOENT;
         return;
     }
     down_write(&cd->lock);
@@ -227,7 +227,7 @@ void castle_control_snapshot(uint32_t dev, int *ret, c_ver_t *version)
     if(VERSION_INVAL(ver))
     {
         *version = -1;
-        *ret     = C_ERR_INVAL_VER;
+        *ret     = -EINVAL;
     }
     else
     {
@@ -238,7 +238,7 @@ void castle_control_snapshot(uint32_t dev, int *ret, c_ver_t *version)
         /* Release the old version */
         castle_version_detach(old_version);
         *version = old_version;
-        *ret     = C_ERR_SUCCESS;
+        *ret     = 0;
     }
     up_write(&cd->lock);
 
@@ -375,7 +375,7 @@ void castle_control_collection_attach(c_ver_t            version,
         {
             castle_printk(LOG_WARN, "Collection name %s already exists\n", ca->col.name);
             castle_kfree(name);
-            *ret = C_ERR_EXISTS;
+            *ret = -EEXIST;
             return;
         }
     }
@@ -384,7 +384,7 @@ void castle_control_collection_attach(c_ver_t            version,
     {
         castle_printk(LOG_WARN, "Version is already marked for deletion. Can't be attached\n");
         castle_kfree(name);
-        *ret = C_ERR_RUNNING;
+        *ret = -EINVAL;
         return;
     }
 
@@ -398,14 +398,14 @@ void castle_control_collection_attach(c_ver_t            version,
     if(!ca)
     {
         castle_printk(LOG_WARN, "Couldn't find collection for version: %u\n", version);
-        *ret = C_ERR_INVAL_PARAM;
+        *ret = -EINVAL;
         return;
     }
     castle_printk(LOG_USERINFO, "Creating new Collection Attachment %u (%s, %u)\n",
             ca->col.id, ca->col.name, ca->version);
 
     *collection = ca->col.id;
-    *ret = C_ERR_SUCCESS;
+    *ret = 0;
 }
 
 void castle_control_collection_reattach(c_collection_id_t  collection,
@@ -430,7 +430,7 @@ void castle_control_collection_reattach(c_collection_id_t  collection,
                           "Version %d is already marked for deletion. "
                           "Collection %d cannot be re-attached\n",
                           new_version, collection);
-        *ret = C_ERR_INVAL_VER;
+        *ret = -EINVAL;
         return;
     }
 
@@ -440,7 +440,7 @@ void castle_control_collection_reattach(c_collection_id_t  collection,
         castle_printk(LOG_WARN,
                       "Version %d is already attached. Collection %d cannot be re-attached\n",
                       new_version, collection);
-        *ret = C_ERR_EXISTS;
+        *ret = -EEXIST;
         return;
     }
 
@@ -451,7 +451,7 @@ void castle_control_collection_reattach(c_collection_id_t  collection,
         castle_printk(LOG_WARN,
                       "Collection %d cannot be re-attached, it cannot be found.\n",
                       collection);
-        *ret = C_ERR_INVAL_PARAM;
+        *ret = -ENODEV;
         return;
     }
     old_version = ca->version;
@@ -468,7 +468,7 @@ void castle_control_collection_reattach(c_collection_id_t  collection,
                       "Collection %d cannot be re-attached\n",
                       new_version, old_version, new_da_id, old_da_id, collection);
         castle_attachment_put(ca);
-        *ret = C_ERR_INVAL_PARAM;
+        *ret = -EBADE;
         return;
     }
 
@@ -494,7 +494,7 @@ void castle_control_collection_reattach(c_collection_id_t  collection,
     /* Put the temparary attachment reference. */
     castle_attachment_put(ca);
 
-    *ret = C_ERR_SUCCESS;
+    *ret = 0;
 }
 
 
@@ -504,7 +504,7 @@ void castle_control_collection_detach(c_collection_id_t  collection,
     struct castle_attachment *ca = castle_attachment_get(collection, READ);
     if (!ca)
     {
-        *ret = C_ERR_INVAL_PARAM;
+        *ret = -ENODEV;
         return;
     }
 
@@ -526,7 +526,7 @@ void castle_control_collection_detach(c_collection_id_t  collection,
     /* Get the lock again and finish the ioctl. */
     CASTLE_TRANSACTION_BEGIN;
 
-    *ret = C_ERR_SUCCESS;
+    *ret = 0;
 }
 
 void castle_control_collection_snapshot(c_collection_id_t collection,
@@ -610,7 +610,7 @@ void castle_control_collection_snapshot_delete(c_ver_t version,
 
 void castle_control_protocol_version(int *ret, uint32_t *version)
 {
-    *ret = C_ERR_SUCCESS;
+    *ret = 0;
     *version = CASTLE_PROTOCOL_VERSION;
 }
 
@@ -992,7 +992,6 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             if(err)
             {
                 castle_printk(LOG_WARN, "Invalid string provided for collection name.\n");
-                ioctl.collection_attach.ret = C_ERR_MEM_FAULT;
                 goto err;
             }
 
