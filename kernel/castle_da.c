@@ -12002,6 +12002,9 @@ static int castle_merge_thread_start(void *_data)
         prev_nr_bytes = merge->nr_bytes;
         ret = castle_da_merge_do(merge, merge_thread->cur_work_size);
 
+        merge_thread->cur_work_size = 0;
+        wmb();
+
         /* Check if merge completed successfully. */
         if (!ret)
         {
@@ -12023,7 +12026,6 @@ static int castle_merge_thread_start(void *_data)
                                               merge->nr_bytes - prev_nr_bytes, 0);
         }
 
-        merge_thread->cur_work_size = 0;
     } while(1);
 
     castle_printk(LOG_DEVEL, "Thread destroy: %u\n", merge_thread->id);
@@ -12370,9 +12372,9 @@ int castle_merge_do_work(c_merge_id_t merge_id, c_work_size_t work_size, c_work_
     merge_thread->cur_work_size = work_size;
     wmb();
 
-    wake_up_process(merge_thread->thread);
-
     *work_id = merge_id;
+
+    wake_up(&merge_thread->da->merge_waitq);
 
     return 0;
 
