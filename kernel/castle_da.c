@@ -7563,16 +7563,11 @@ static void castle_da_dealloc(struct castle_double_array *da)
     castle_kfree(da);
 }
 
-atomic_t ct_get_count;
-atomic_t ct_put_count;
 static struct castle_double_array* castle_da_alloc(c_da_t da_id, c_da_opts_t opts)
 {
     struct castle_double_array *da;
     int i = 0;
     int nr_cpus = castle_double_array_request_cpus();
-
-    atomic_set(&ct_get_count, 0);
-    atomic_set(&ct_put_count, 0);
 
     da = castle_zalloc(sizeof(struct castle_double_array), GFP_KERNEL);
     if(!da)
@@ -8308,18 +8303,6 @@ void castle_ct_get(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *
     BUG_ON(nr_refs != refs->nr_refs);
     for (i = 0; i < nr_refs; i++)
         BUG_ON(refs->refs[i] == INVAL_MASK_ID);
-
-/*    debug("%s::ct %d (%p), extents %d %d %d %d, refs %d, %d, %d, %d... %d\n",
-            __FUNCTION__, ct->seq, ct,
-            ct->internal_ext_free.ext_id,
-            ct->tree_ext_free.ext_id,
-            ct->data_ext_free.ext_id,
-            ct->bloom.ext_id,
-            refs->ref_id_internal,
-            refs->ref_id_tree,
-            refs->ref_id_data,
-            refs->ref_id_bloom,
-            atomic_inc_return(&ct_get_count));*/
 }
 
 /**
