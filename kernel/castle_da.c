@@ -85,8 +85,8 @@ static struct castle_mstore    *castle_data_exts_maps_store = NULL;
 static struct castle_mstore    *castle_dmser_store   = NULL;
 static struct castle_mstore    *castle_dmser_in_tree_store   = NULL;
        c_da_t                   castle_next_da_id    = 1;
-static atomic_t                 castle_next_tree_seq = ATOMIC(0);
-static atomic_t                 castle_next_tree_data_age = ATOMIC(0);
+static atomic64_t               castle_next_tree_seq = ATOMIC64(0);
+static atomic64_t               castle_next_tree_data_age = ATOMIC64(0);
 static int                      castle_da_exiting    = 0;
 
 static int                      castle_dynamic_driver_merge = 1;
@@ -278,36 +278,37 @@ tree_seq_t castle_da_next_ct_seq(void);
 static int castle_da_ct_compare(struct castle_component_tree *ct1,
                                 struct castle_component_tree *ct2)
 {
-    int ret = (int)(ct1->data_age - ct2->data_age);
+    /* Data age takes priority in sorting. */
+    if(ct1->data_age != ct2->data_age)
+        return ct1->data_age > ct2->data_age ? 1 : -1;
 
     /* Age of two trees could be equal only if they are T0s or if they are participating in a
-     * merge. */
-    if (ret == 0)
+     * merge. If they are T0, compare based on seq_id. */
+    if (ct1->level == 0)
     {
-        /* If they are T0, compare based on seq_id. */
-        if (ct1->level == 0)
-            return (int)(ct1->seq - ct2->seq);
-
-        /* If not, one of them should be output of the merge and other should be input of same
-         * merge. */
-        BUG_ON(ct1->merge != ct2->merge);
-
-        /* Treat output tree as the latest. We want it to be added before all input trees. */
-        if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct1->flags))
-        {
-            BUG_ON(!test_bit(CASTLE_CT_MERGE_INPUT_BIT, &ct2->flags));
-            return -1;
-        }
-        else if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct2->flags))
-        {
-            BUG_ON(!test_bit(CASTLE_CT_MERGE_INPUT_BIT, &ct1->flags));
-            return 1;
-        }
-        else
-            BUG();
+        /* Sequence numbers are 64bit unsigned values, be careful about subtracting them
+           and casting to int. Explicit comparisons are safer. */
+        return  ct1->seq == ct2->seq ? 0 :
+               (ct1->seq >  ct2->seq ? 1 : -1);
     }
 
-    return ret;
+    /* If not T0s, one of them should be output of a merge and other should be input of the same
+     * merge. */
+    BUG_ON(ct1->merge != ct2->merge);
+
+    /* Treat output tree as the latest. We want it to be added before all input trees. */
+    if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct1->flags))
+    {
+        BUG_ON(!test_bit(CASTLE_CT_MERGE_INPUT_BIT, &ct2->flags));
+        return -1;
+    }
+    else if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct2->flags))
+    {
+        BUG_ON(!test_bit(CASTLE_CT_MERGE_INPUT_BIT, &ct1->flags));
+        return 1;
+    }
+    else
+        BUG();
 }
 
 /* Update component tree size stats. We do maintain two counters. nr_bytes counter gets updated
@@ -2722,7 +2723,7 @@ static int castle_da_merge_cts_get(struct castle_double_array *da,
         /* Check that the tree has non-zero elements. */
         if(atomic64_read(&ct->item_count) == 0)
         {
-            castle_printk(LOG_DEBUG, "Found empty CT=%d, freeing it up.\n", ct->seq);
+            castle_printk(LOG_DEBUG, "Found empty CT=0x%llx, freeing it up.\n", ct->seq);
             /* No items in this CT, deallocate it by removing it from the DA,
                and dropping the ref. */
             CASTLE_TRANSACTION_BEGIN;
@@ -6228,14 +6229,6 @@ static void castle_da_merge_marshall(struct castle_dmserlist_entry *merge_mstore
     c_immut_iter_t *curr_immut;
     int lo_count=0;
 
-    /* Try to catch (at compile-time) any screwups to dmserlist structure; if we fail to compile
-       here, review struct castle_dmserlist_entry, MAX_BTREE_DEPTH, and
-       SIZEOF_CASTLE_DMSERLIST_ENTRY */
-    BUILD_BUG_ON( sizeof(struct castle_dmserlist_entry) != SIZEOF_CASTLE_DMSERLIST_ENTRY );
-    /* ditto the input tree merge state structure */
-    BUILD_BUG_ON( sizeof(struct castle_in_tree_merge_state_entry) !=
-            SIZEOF_CASTLE_IN_TREE_MERGE_STATE_ENTRY );
-
     BUG_ON(!merge);
     BUG_ON(!merge_mstore);
     BUG_ON(!merge->merged_iter->iterators);
@@ -7836,7 +7829,7 @@ static void castle_component_tree_promote(struct castle_double_array *da,
     ct->level++;
 
     BUG_ON(ct->level != 1);
-    ct->data_age = atomic_inc_return(&castle_next_tree_data_age);
+    ct->data_age = atomic64_inc_return(&castle_next_tree_data_age);
 
     castle_ct_stats_commit(ct);
 
@@ -9354,8 +9347,8 @@ static int castle_da_merge_deser_phase1(void)
         castle_da_merge_serdes_out_tree_check(entry, des_da, level);
 
         /* inc ct seq number if necessary */
-        if (merge->out_tree->seq >= atomic_read(&castle_next_tree_seq))
-            atomic_set(&castle_next_tree_seq, merge->out_tree->seq+1);
+        if (merge->out_tree->seq >= atomic64_read(&castle_next_tree_seq))
+            atomic64_set(&castle_next_tree_seq, merge->out_tree->seq+1);
 
         /* allocate space required for Stage 2 DES */
         merge->serdes.in_tree_mstore_entry_arr =
@@ -9532,7 +9525,7 @@ static int castle_da_ct_read(void)
 
     while(castle_mstore_iterator_has_next(iterator))
     {
-        uint32_t ct_seq;
+        uint64_t ct_seq;
         c_mstore_key_t key;
         struct castle_component_tree *ct;
         struct castle_double_array *da;
@@ -9557,13 +9550,13 @@ static int castle_da_ct_read(void)
 
         /* Calculate maximum CT sequence number. Be wary of T0 sequence numbers, they prefix
          * CPU indexes. */
-        ct_seq = ct->seq & ((1 << TREE_SEQ_SHIFT) - 1);
-        if (ct_seq >= atomic_read(&castle_next_tree_seq))
-            atomic_set(&castle_next_tree_seq, ct_seq+1);
+        ct_seq = ct->seq & ((1ULL << TREE_SEQ_SHIFT) - 1);
+        if (ct_seq >= atomic64_read(&castle_next_tree_seq))
+            atomic64_set(&castle_next_tree_seq, ct_seq+1);
 
         /* Calculate current data age. */
-        if (ct->data_age >= atomic_read(&castle_next_tree_data_age))
-            atomic_set(&castle_next_tree_data_age, ct->data_age+1);
+        if (ct->data_age >= atomic64_read(&castle_next_tree_data_age))
+            atomic64_set(&castle_next_tree_data_age, ct->data_age+1);
     }
 
     BUG_ON(ret);
@@ -9675,9 +9668,9 @@ int castle_double_array_read(void)
     /* Read data extent to CT mappings. Expects data extents and CTs in hash table. */
     castle_data_exts_maps_read(castle_data_exts_maps_store);
 
-    debug("castle_next_da_id = %d, castle_next_tree_id=%d\n",
+    debug("castle_next_da_id = %d, castle_next_tree_id=%lld\n",
             castle_next_da_id,
-            atomic_read(&castle_next_tree_seq));
+            atomic64_read(&castle_next_tree_seq));
 
     castle_da_merge_deser_phase2();
 
@@ -9747,7 +9740,7 @@ out:
 
 tree_seq_t castle_da_next_ct_seq(void)
 {
-    return atomic_inc_return(&castle_next_tree_seq);
+    return atomic64_inc_return(&castle_next_tree_seq);
 }
 
 struct castle_component_tree * castle_ct_init(struct castle_component_tree *ct,
@@ -9848,7 +9841,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     /* Allocate an id for the tree, init the ct. */
     ct->seq = (TREE_INVAL(seq)? castle_da_next_ct_seq(): seq);
 
-    if(ct->seq >= (1U<<TREE_SEQ_SHIFT))
+    if(ct->seq >= (1ULL<<TREE_SEQ_SHIFT))
     {
         castle_printk(LOG_ERROR, "Could not allocate a CT because of sequence # overflow.\n");
         castle_kfree(ct);
@@ -9909,8 +9902,8 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     /* RWCTs are present only at levels 0,1 in the DA.
      * Prefix these CTs with cpu_index to preserve operation ordering when
      * inserting into the DA trees list at RWCT levels. */
-    BUG_ON(sizeof(ct->seq) != 4);
-    ct->seq = (cpu_index << TREE_SEQ_SHIFT) + ct->seq;
+    BUILD_BUG_ON(sizeof(ct->seq) != 8);
+    ct->seq = ((tree_seq_t)cpu_index << TREE_SEQ_SHIFT) + ct->seq;
 
     /* Set callback based on LFS_VCT_T_ type. */
     if (lfs_type == LFS_VCT_T_T0)
@@ -12145,7 +12138,7 @@ static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_id
         }
 
         in_trees[i] = ct;
-        debug_gn("\tArray: 0x%x\n", array_ids[i]);
+        debug_gn("\tArray: 0x%llx\n", array_ids[i]);
     }
 
     return 0;

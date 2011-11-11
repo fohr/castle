@@ -8,7 +8,8 @@
 #include "castle_debug.h"
 #include "castle_cache.h"
 
-#define ATOMIC(_i)  ((atomic_t)ATOMIC_INIT(_i))
+#define ATOMIC(_i)    ((atomic_t)  ATOMIC_INIT(_i))
+#define ATOMIC64(_i)  ((atomic64_t)ATOMIC64_INIT(_i))
 
 /* Uses RW spinlock for synchronization. Use iterate_exclusive() for exclusive
  * access while iterating over the hash table. */

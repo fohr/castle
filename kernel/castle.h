@@ -77,7 +77,7 @@ typedef c_array_id_t tree_seq_t;
 #define INVAL_TREE          ((tree_seq_t)-1)
 #define TREE_GLOBAL(_t)     ((_t) == GLOBAL_TREE)
 #define TREE_INVAL(_t)      ((_t) == INVAL_TREE)
-#define TREE_SEQ_SHIFT      (24)                    /**< Shift for RWCTs (at levels 0,1)        */
+#define TREE_SEQ_SHIFT      (56)                    /**< Shift for RWCTs (at levels 0,1)        */
 
 #define INVAL_DA            ((c_da_t)-1)
 #define DA_INVAL(_da)       ((_da) == INVAL_DA)
@@ -267,6 +267,7 @@ struct castle_chunk_sequence {
     /*          8 */
 } PACKED;
 typedef struct castle_chunk_sequence c_chk_seq_t;
+STATIC_BUG_ON(sizeof(struct castle_chunk_sequence) != 8);
 #define INVAL_CHK_SEQ                ((c_chk_seq_t){0,0})
 #define CHK_SEQ_INVAL(_seq)          ((_seq).count == 0)
 #define CHK_SEQ_EQUAL(_seq1, _seq2)  (((_seq1).first_chk == (_seq2).first_chk) && \
@@ -281,6 +282,7 @@ struct castle_disk_chunk {
     /*          8 */
 } PACKED;
 typedef struct castle_disk_chunk c_disk_chk_t;
+STATIC_BUG_ON(sizeof(struct castle_disk_chunk) != 8);
 #define INVAL_DISK_CHK               ((c_disk_chk_t){INVAL_SLAVE_ID,0})
 #define DISK_CHK_INVAL(_chk)         (((_chk).slave_id == INVAL_SLAVE_ID) &&    \
                                       ((_chk).offset == 0))
@@ -300,6 +302,7 @@ struct castle_extent_position {
     /*         16 */
 } PACKED;
 typedef struct castle_extent_position c_ext_pos_t;
+STATIC_BUG_ON(sizeof(struct castle_extent_position) != 16);
 #define __INVAL_EXT_POS             {INVAL_EXT_ID,0}
 #define INVAL_EXT_POS               ((c_ext_pos_t) __INVAL_EXT_POS)
 #define EXT_POS_INVAL(_off)         ((_off).ext_id == INVAL_EXT_ID)
@@ -419,6 +422,7 @@ typedef struct castle_extent_freespace_byte_stream {
     /*         32 */ uint8_t         _unused[32];
     /*         64 */
 } PACKED c_ext_free_bs_t;
+STATIC_BUG_ON(sizeof(struct castle_extent_freespace_byte_stream) != 64);
 
 typedef struct castle_freespace {
     /* align:   4 */
@@ -431,6 +435,7 @@ typedef struct castle_freespace {
     /*         24 */ uint8_t         _unused[40];
     /*         64 */
 } PACKED castle_freespace_t;
+STATIC_BUG_ON(sizeof(struct castle_freespace) != 64);
 
 struct castle_elist_entry {
     /* align:   8 */
@@ -452,6 +457,7 @@ struct castle_elist_entry {
     /*         68 */ uint8_t         _unused[60];
     /*        128 */
 } PACKED;
+STATIC_BUG_ON(sizeof(struct castle_elist_entry) != 128);
 
 struct castle_plist_entry {
     /* align:   4 */
@@ -462,6 +468,7 @@ struct castle_plist_entry {
     /*         20 */ uint8_t          _unused[12];
     /*         32 */
 } PACKED;
+STATIC_BUG_ON(sizeof(struct castle_plist_entry) != 32);
 
 struct castle_rlist_entry {
     /* align:   4 */
@@ -476,20 +483,22 @@ struct castle_rlist_entry {
     /*        516 */ uint8_t            _unused[508];
     /*       1024 */
 } PACKED;
+STATIC_BUG_ON(sizeof(struct castle_rlist_entry) != 1024);
 
 struct castle_extents_superblock {
-    /* align:   8 */
+    /* align:     */
     /* offset:  0 */ c_ext_id_t                 ext_id_seq;
     /*          8 */ uint64_t                   nr_exts;
     /*         16 */ struct castle_elist_entry  micro_ext;
-    /*         80 */ struct castle_elist_entry  meta_ext;
-    /*        144 */ struct castle_elist_entry  mstore_ext[2];
-    /*        272 */ c_ext_free_bs_t            meta_ext_free_bs;
-    /*        336 */ c_disk_chk_t               micro_maps[MAX_NR_SLAVES];
-    /*        848 */ uint32_t                   current_rebuild_seqno;
-    /*        852 */ uint8_t                    _unused[172];
-    /*       1024 */
+    /*        144 */ struct castle_elist_entry  meta_ext;
+    /*        272 */ struct castle_elist_entry  mstore_ext[2];
+    /*        528 */ c_ext_free_bs_t            meta_ext_free_bs;
+    /*        592 */ c_disk_chk_t               micro_maps[MAX_NR_SLAVES];
+    /*       1104 */ uint32_t                   current_rebuild_seqno;
+    /*       1108 */ uint8_t                    _unused[940];
+    /*       2048 */
 } PACKED;
+STATIC_BUG_ON(sizeof(struct castle_extents_superblock) != 2048);
 
 struct castle_slave_superblock {
     /* align:   8 */
@@ -499,6 +508,7 @@ struct castle_slave_superblock {
     /*        196 */ uint8_t                               _unused[60];
     /*        256 */
 } PACKED;
+STATIC_BUG_ON(sizeof(struct castle_slave_superblock) != 256);
 
 struct castle_fs_superblock {
     /* align:   8 */
@@ -508,11 +518,12 @@ struct castle_fs_superblock {
     /*        136 */ uint32_t                                slaves[MAX_NR_SLAVES];
     /*        392 */ uint8_t                                 slaves_flags[MAX_NR_SLAVES];
     /*        456 */ struct castle_extents_superblock        extents_sb;
-    /*       1480 */ c_ext_pos_t                             mstore[16];
-    /*       1736 */ int                                     fs_in_rebuild;
-    /*       1740 */ uint8_t                                 _unused[308];
-    /*       2048 */
+    /*       2504 */ c_ext_pos_t                             mstore[16];
+    /*       2760 */ int                                     fs_in_rebuild;
+    /*       2764 */ uint8_t                                 _unused[308];
+    /*       3072 */
 } PACKED;
+STATIC_BUG_ON(sizeof(struct castle_fs_superblock) != 3072);
 
 /* Different CVT types. These are stored in btree nodes, so changes to those should be
    made in a backwards compatible way. */
@@ -555,6 +566,7 @@ struct castle_value_tuple {
     /*         32 */
 } PACKED;
 typedef struct castle_value_tuple c_val_tup_t;
+STATIC_BUG_ON(sizeof(struct castle_value_tuple) != 32);
 
 #define INVAL_VAL_TUP        ((c_val_tup_t){{CVT_TYPE_INVALID, 0}, {.cep = INVAL_EXT_POS}})
 
@@ -873,6 +885,7 @@ struct castle_btree_node {
     /*         64 */ uint8_t         payload[0];
     /*         64 */
 } PACKED;
+STATIC_BUG_ON(sizeof(struct castle_btree_node) != 64);
 
 #define BTREE_NODE_IS_LEAF(_node)        ((_node)->flags & BTREE_NODE_IS_LEAF_FLAG)
 #define BTREE_NODE_HAS_TIMESTAMPS(_node) ((_node)->flags & BTREE_NODE_HAS_TIMESTAMPS_FLAG)
@@ -1021,6 +1034,7 @@ struct castle_bbp_entry
     /*         66 */ uint32_t    last_stripped_hash;
     /*         70 */
 } PACKED;
+STATIC_BUG_ON(sizeof(struct castle_bbp_entry) != 70);
 
 /* Component tree flags bits. */
 #define CASTLE_CT_DYNAMIC_BIT           0   /* CT is dynamic. RW Tree.                          */
@@ -1140,6 +1154,7 @@ struct castle_dlist_entry {
     /*         25 */ uint8_t     _unused[231];
     /*        256 */
 } PACKED;
+STATIC_BUG_ON(sizeof(struct castle_dlist_entry) != 256);
 
 struct castle_clist_entry {
     /* align:   8 */
@@ -1161,18 +1176,19 @@ struct castle_clist_entry {
     /*        256 */ uint32_t        bloom_num_btree_nodes;
     /*        260 */ uint32_t        bloom_block_size_pages;
     /*        264 */ tree_seq_t      seq;
-    /*        268 */ uint8_t         bloom_exists;
-    /*        269 */ uint8_t         bloom_num_hashes;
-    /*        270 */ uint16_t        node_sizes[MAX_BTREE_DEPTH];
-    /*        290 */ tree_seq_t      data_age;
-    /*        294 */ uint32_t        nr_data_exts;
-    /*        298 */ uint64_t        nr_bytes;
-    /*        306 */ uint64_t        nr_drained_bytes;
-    /*        314 */ uint64_t        max_user_timestamp;
-    /*        322 */ uint64_t        min_user_timestamp;
-    /*        330 */ uint8_t         _unused[182];
+    /*        272 */ uint8_t         bloom_exists;
+    /*        273 */ uint8_t         bloom_num_hashes;
+    /*        274 */ uint16_t        node_sizes[MAX_BTREE_DEPTH];
+    /*        294 */ tree_seq_t      data_age;
+    /*        302 */ uint32_t        nr_data_exts;
+    /*        306 */ uint64_t        nr_bytes;
+    /*        314 */ uint64_t        nr_drained_bytes;
+    /*        322 */ uint64_t        max_user_timestamp;
+    /*        330 */ uint64_t        min_user_timestamp;
+    /*        338 */ uint8_t         _unused[174];
     /*        512 */
 } PACKED;
+STATIC_BUG_ON(sizeof(struct castle_clist_entry) != 512);
 
 /* A "convenience" struct to temporarily (for a short period) maintain a pointer to
    a key in some component tree */
@@ -1205,10 +1221,10 @@ struct castle_in_tree_merge_state_entry {
     /*         56 */ c_da_t                        da_id;
     /*         60 */ c_merge_id_t                  merge_id;
     /*         64 */ int32_t                       pos_in_merge_struct; /* cld use seq to infer this? */
-    /*         68 */ uint8_t                       alignment_pad[12];
+    /*         68 */ uint8_t                       alignment_pad[8];
     /*         80 */
 } PACKED;
-#define SIZEOF_CASTLE_IN_TREE_MERGE_STATE_ENTRY (80)
+STATIC_BUG_ON(sizeof(struct castle_in_tree_merge_state_entry) != 80);
 
 /** DA merge SERDES on-disk structure.
  *
@@ -1269,7 +1285,7 @@ struct castle_dmserlist_entry {
     /*       1032 */ uint32_t                         pool_id;
     /*       1036 */
 } PACKED;
-#define SIZEOF_CASTLE_DMSERLIST_ENTRY (1036)
+STATIC_BUG_ON(sizeof(struct castle_dmserlist_entry) != 1036);
 
 /**
  * Ondisk Serialized structure for castle versions.
@@ -1294,6 +1310,7 @@ struct castle_vlist_entry {
     /*        104 */ uint8_t      _unused[152];
     /*        256 */
 } PACKED;
+STATIC_BUG_ON(sizeof(struct castle_vlist_entry) != 256);
 
 #define MAX_NAME_SIZE 128
 struct castle_alist_entry {
@@ -1304,6 +1321,7 @@ struct castle_alist_entry {
     /*        136 */ uint8_t     _unused[120];
     /*        256 */
 } PACKED;
+STATIC_BUG_ON(sizeof(struct castle_alist_entry) != 256);
 
 #define MLIST_NODE_MAGIC  0x0000baca
 struct castle_mlist_node {
@@ -1316,15 +1334,17 @@ struct castle_mlist_node {
     /*         64 */ uint8_t     payload[0];
     /*         64 */
 } PACKED;
+STATIC_BUG_ON(sizeof(struct castle_mlist_node) != 64);
 
 struct castle_lolist_entry {
     /* align:   8 */
     /* offset:  0 */ c_ext_id_t  ext_id;
     /*          8 */ uint64_t    length;
     /*         16 */ tree_seq_t  ct_seq;
-    /*         20 */ uint8_t     _unused[12];
+    /*         24 */ uint8_t     _unused[8];
     /*         32 */
 } PACKED;
+STATIC_BUG_ON(sizeof(struct castle_lolist_entry) != 32);
 
 struct castle_dext_list_entry {
     /* align:   8 */
@@ -1334,6 +1354,7 @@ struct castle_dext_list_entry {
     /*         24 */ uint64_t    nr_drain_bytes;
     /*         32 */
 } PACKED;
+STATIC_BUG_ON(sizeof(struct castle_dext_list_entry) != 32);
 
 struct castle_dext_map_list_entry {
     /* align:   8 */
@@ -1341,11 +1362,12 @@ struct castle_dext_map_list_entry {
                         tree_seq_t      ct_seq;
                         c_merge_id_t    merge_id;
                      };
-    /*          4 */ c_ext_id_t  ext_id;
-    /*         12 */ uint8_t     is_merge;
-    /*         13 */ uint8_t     _unused[3];
-    /*         16 */
+    /*          8 */ c_ext_id_t  ext_id;
+    /*         16 */ uint8_t     is_merge;
+    /*         17 */ uint8_t     _unused[15];
+    /*         32 */
 } PACKED;
+STATIC_BUG_ON(sizeof(struct castle_dext_map_list_entry) != 32);
 
 enum {
     STATS_MSTORE_REBUILD_PROGRESS,
@@ -1360,6 +1382,7 @@ struct castle_slist_entry {
     /*        24 */ uint8_t     _unused[40];
     /*        64 */
 } PACKED;
+STATIC_BUG_ON(sizeof(struct castle_slist_entry) != 64);
 
 /* IO related structures */
 struct castle_bio_vec;

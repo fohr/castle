@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 30 /* last updated by TR */
+#define CASTLE_PROTOCOL_VERSION 31 /* last updated by GM */
 
 #define PACKED               __attribute__((packed))
 
@@ -186,7 +186,7 @@ enum {
 };
 
 /* Golden Nugget - Types */
-typedef uint32_t c_array_id_t;
+typedef uint64_t c_array_id_t;
 typedef uint32_t c_merge_id_t;
 typedef uint32_t c_thread_id_t;
 typedef uint32_t c_work_id_t;
@@ -914,7 +914,7 @@ struct castle_key_value_list {
 #define CASTLE_SLAVE_MAGIC1     (0x02061985)
 #define CASTLE_SLAVE_MAGIC2     (0x16071983)
 #define CASTLE_SLAVE_MAGIC3     (0x16061981)
-#define CASTLE_SLAVE_VERSION    (21)            /* Last changed by: GM */
+#define CASTLE_SLAVE_VERSION    (22)            /* Last changed by: GM */
 
 #define CASTLE_SLAVE_NEWDEV     (0x00000004)
 #define CASTLE_SLAVE_SSD        (0x00000008)

@@ -432,7 +432,7 @@ static ssize_t da_array_list_show(struct kobject *kobj,
             if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags) && ct->merge->level == 1)
                 continue;
 
-        snprintf(buf, PAGE_SIZE, "%s0x%x ", buf, ct->seq);
+        snprintf(buf, PAGE_SIZE, "%s0x%llx ", buf, ct->seq);
     }
 
     read_unlock(&da->lock);
@@ -1018,7 +1018,7 @@ static ssize_t ct_data_time_show(struct kobject *kobj,
 {
     struct castle_component_tree *ct = container_of(kobj, struct castle_component_tree, kobj);
 
-    return sprintf(buf, "0x%x\n", ct->data_age);
+    return sprintf(buf, "0x%llx\n", ct->data_age);
 }
 
 static struct castle_sysfs_entry ct_size =
@@ -1079,7 +1079,7 @@ int castle_sysfs_ct_add(struct castle_component_tree *ct)
     ret = kobject_tree_add(&ct->kobj,
                            &ct->da->arrays_kobj,
                            &castle_ct_ktype,
-                           "%x", ct->seq);
+                           "%llx", ct->seq);
     if (ret < 0)
         return ret;
 
@@ -1238,7 +1238,7 @@ static ssize_t merge_in_trees_show(struct kobject *kobj,
 
     for (i=0; i<merge->nr_trees; i++)
     {
-        offset += sprintf(buf+offset, "0x%x ", merge->in_trees[i]->seq);
+        offset += sprintf(buf+offset, "0x%llx ", merge->in_trees[i]->seq);
         BUG_ON(offset > PAGE_SIZE);
     }
 
@@ -1251,7 +1251,7 @@ static ssize_t merge_out_tree_show(struct kobject *kobj,
 {
     struct castle_da_merge *merge = container_of(kobj, struct castle_da_merge, kobj);
 
-    return sprintf(buf, "0x%x", merge->out_tree->seq);
+    return sprintf(buf, "0x%llx", merge->out_tree->seq);
 }
 
 static ssize_t merge_progress_show(struct kobject *kobj,
