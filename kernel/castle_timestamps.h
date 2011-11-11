@@ -6,20 +6,6 @@
 #include "castle_public.h"
 #include "castle_da.h"
 
-/* to compare same k entries */
-struct castle_da_entry_candidate_t{
-    //TODO@tr clean this up... we started using a full btree node to hold candidates, so only need
-    //        this struct to hold the inclusion bits.
-    /* no key, because this was designed for timestamp-version violation resolution, where we
-       always have the same key. */
-    //c_val_tup_t              cvt;
-    //c_ver_t                  version;
-    //castle_user_timestamp_t  u_ts;
-
-    int included;    /* to mark entries to be included in output stream */
-    //int discardable; /* used internally by resolver_process for tombstone discard */
-};
-
 typedef enum {
     DFS_RESOLVER_NULL = 0,
     DFS_RESOLVER_ENTRY_ADD,
@@ -62,14 +48,14 @@ typedef struct castle_dfs_resolver
     //void                   *key;
     struct castle_da_merge *merge; /* for btree->key_copy */
 
-    unsigned int top_index;   /* where to add entries; only change during entry add stage (now
+    unsigned int    top_index;   /* where to add entries; only change during entry add stage (now
                                  that we are using a btree node as a buffer, node->used should
                                  be the same). */
-    unsigned int curr_index;  /* iterator used for pop */
-    unsigned int _buffer_max; /* max entries; never change this after ctor! */
+    unsigned int    curr_index;  /* iterator used for pop */
+    unsigned int    _buffer_max; /* max entries; never change this after ctor! */
 
-    struct castle_da_entry_candidate_t           *inclusion_buffer;
-    c_uint32_stack                               *stack; /* for DFS walk */
+    int            *inclusion_flag;   /* bool array to flag which entries to include in output */
+    c_uint32_stack *stack;            /* for DFS walk */
 
     c_dfs_resolver_mode_t       mode;      /* current resolver cycle/state */
     c_dfs_resolver_functions_t  functions; /* what functions the resolver provides */
@@ -87,13 +73,11 @@ void castle_dfs_resolver_destroy(c_dfs_resolver *dfs_resolver);
 int castle_dfs_resolver_entry_add(c_dfs_resolver *dfs_resolver,
                                   void *key,
                                   c_val_tup_t cvt,
-                                  c_ver_t version,
-                                  castle_user_timestamp_t u_ts);
+                                  c_ver_t version);
 int castle_dfs_resolver_entry_pop(c_dfs_resolver *dfs_resolver,
                                   void **key_p,
                                   c_val_tup_t *cvt_p,
-                                  c_ver_t *version_p,
-                                  castle_user_timestamp_t *u_ts_p);
+                                  c_ver_t *version_p);
 uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver);
 int castle_dfs_resolver_is_new_key_check(c_dfs_resolver *dfs_resolver, void *key);
 

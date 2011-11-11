@@ -51,9 +51,8 @@ int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da
     /* Allocate the inclusion flag buffer */
     BUG_ON(!merge->out_btree);
     max_entries = merge->out_btree->max_entries(new_node_size);
-    dfs_resolver->inclusion_buffer = castle_alloc(sizeof(struct castle_da_entry_candidate_t) *
-                                                        max_entries);
-    if(!dfs_resolver->inclusion_buffer)
+    dfs_resolver->inclusion_flag = castle_alloc(sizeof(int) * max_entries);
+    if(!dfs_resolver->inclusion_flag)
     {
         ret = -ENOMEM;
         goto error;
@@ -90,7 +89,7 @@ int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da
         int i;
         for(i=0; i<dfs_resolver->_buffer_max; i++)
         {
-            dfs_resolver->inclusion_buffer[i].included = 2;
+            dfs_resolver->inclusion_flag[i] = 2;
         }
     }
 #endif
@@ -123,7 +122,7 @@ void castle_dfs_resolver_destroy(c_dfs_resolver *dfs_resolver)
     castle_check_free(dfs_resolver->stack);
 
     /* Dealloc inclusion buffer */
-    castle_check_free(dfs_resolver->inclusion_buffer);
+    castle_check_free(dfs_resolver->inclusion_flag);
 
     /* Dealloc btree node buffer */
     castle_check_free(dfs_resolver->buffer_node);
@@ -133,8 +132,7 @@ void castle_dfs_resolver_destroy(c_dfs_resolver *dfs_resolver)
 int castle_dfs_resolver_entry_add(c_dfs_resolver *dfs_resolver,
                                   void *key,
                                   c_val_tup_t cvt,
-                                  c_ver_t version,
-                                  castle_user_timestamp_t u_ts)
+                                  c_ver_t version)
 {
     struct castle_btree_type *btree;
 
@@ -158,21 +156,6 @@ int castle_dfs_resolver_entry_add(c_dfs_resolver *dfs_resolver,
                 __FUNCTION__,
                 dfs_resolver->merge->id);
         dfs_resolver->mode = DFS_RESOLVER_ENTRY_ADD;
-
-#if 0
-        /* if we already have a key, dealloc it. */
-        if( dfs_resolver->key )
-            castle_free(dfs_resolver->key);
-
-        dfs_resolver->key = btree->key_copy(key, NULL, NULL);
-        if(!dfs_resolver->key)
-        {
-            castle_printk(LOG_WARN, "%s::failed to allocate space for key!\n", __FUNCTION__);
-            BUG();
-            WARN_ON(1);
-            return -ENOMEM;
-        }
-#endif
     }
     else
     {
@@ -187,12 +170,6 @@ int castle_dfs_resolver_entry_add(c_dfs_resolver *dfs_resolver,
     BUG_ON(dfs_resolver->top_index == dfs_resolver->_buffer_max);
 
     /* finally, add to the buffer */
-#if 0
-    dfs_resolver->buffer[dfs_resolver->top_index].cvt     = cvt;
-    dfs_resolver->buffer[dfs_resolver->top_index].version = version;
-    dfs_resolver->buffer[dfs_resolver->top_index].u_ts    = u_ts;
-#endif
-
     btree->entry_add(dfs_resolver->buffer_node, dfs_resolver->top_index, key, version, cvt);
 
     debug("%s::merge id %u adding entry %llu with version %u timestamp %llu of key : ",
@@ -217,8 +194,7 @@ int castle_dfs_resolver_entry_add(c_dfs_resolver *dfs_resolver,
 int castle_dfs_resolver_entry_pop(c_dfs_resolver *dfs_resolver,
                                   void **key_p,
                                   c_val_tup_t *cvt_p,
-                                  c_ver_t *version_p,
-                                  castle_user_timestamp_t *u_ts_p)
+                                  c_ver_t *version_p)
 {
     struct castle_btree_type *btree;
 
@@ -226,7 +202,6 @@ int castle_dfs_resolver_entry_pop(c_dfs_resolver *dfs_resolver,
     BUG_ON(!key_p);
     BUG_ON(!cvt_p);
     BUG_ON(!version_p);
-    BUG_ON(!u_ts_p);
 
     btree = dfs_resolver->merge->out_btree;
     BUG_ON(!btree);
@@ -253,7 +228,7 @@ int castle_dfs_resolver_entry_pop(c_dfs_resolver *dfs_resolver,
         goto no_more_entries;
 
     /* skip over excluded entries */
-    while(dfs_resolver->inclusion_buffer[dfs_resolver->curr_index].included == 0)
+    while(dfs_resolver->inclusion_flag[dfs_resolver->curr_index] == 0)
     {
         /* The locally "oldest" entry must be included; there is no v-order older entry
            to deprecate it (UNLESS we are discarding tombstones...) */
@@ -266,30 +241,21 @@ int castle_dfs_resolver_entry_pop(c_dfs_resolver *dfs_resolver,
             goto no_more_entries;
     }
 
-    BUG_ON(dfs_resolver->inclusion_buffer[dfs_resolver->curr_index].included != 1);
+    BUG_ON(dfs_resolver->inclusion_flag[dfs_resolver->curr_index] != 1);
 
     /* Pop the entry */
-
-#if 0
-    *key_p     = dfs_resolver->key;
-    *cvt_p     = dfs_resolver->buffer[dfs_resolver->curr_index].cvt;
-    *version_p = dfs_resolver->buffer[dfs_resolver->curr_index].version;
-    *u_ts_p    = dfs_resolver->buffer[dfs_resolver->curr_index].u_ts;
-#endif
-
     btree->entry_get(dfs_resolver->buffer_node,
                      dfs_resolver->curr_index,
                      key_p,
                      version_p,
                      cvt_p);
-    *u_ts_p    = cvt_p->user_timestamp;
 
     debug("%s::merge id %u popping entry %llu with version %u timestamp %llu of key : ",
             __FUNCTION__,
             dfs_resolver->merge->id,
             dfs_resolver->curr_index,
             *version_p,
-            *u_ts_p);
+            cvt->user_timestamp);
     //dfs_resolver->merge->out_btree->key_print(LOG_DEBUG, *key_p);
     debug("\n");
 
@@ -504,7 +470,7 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
         if(entry_included)
         {
             castle_uint32_stack_push(dfs_resolver->stack, i);
-            dfs_resolver->inclusion_buffer[i].included = 1;
+            dfs_resolver->inclusion_flag[i] = 1;
             entries_included++;
 #ifdef DEBUG
             DEBUG_castle_dfs_resolver_stack_check(dfs_resolver->stack)
@@ -515,7 +481,7 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
             /* Top of the stack is never excluded, unless we are discarding tombstones */
             BUG_ON( !( dfs_resolver->functions & DFS_RESOLVE_TOMBSTONES ) &&
                     dfs_resolver->stack->top == 0);
-            dfs_resolver->inclusion_buffer[i].included = 0;
+            dfs_resolver->inclusion_flag[i] = 0;
             entries_excluded++;
         }
     }//for each entry (reverse iter)
@@ -568,7 +534,7 @@ static void castle_dfs_resolver_reset(c_dfs_resolver *dfs_resolver)
         int i;
         for(i=0; i<dfs_resolver->_buffer_max; i++)
         {
-            dfs_resolver->inclusion_buffer[i].included = 2;
+            dfs_resolver->inclusion_flag[i] = 2;
         }
     }
 #endif

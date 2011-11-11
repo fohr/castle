@@ -1875,7 +1875,6 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
         cvt = comp_iter->cached_entry.cvt;
 
     /* Return the smallest entry */
-    //TODO@tr add an entry for user_timestamp so it doesn't have to be in the cvt
     if(key_p)     *key_p     = comp_iter->cached_entry.k;
     if(version_p) *version_p = comp_iter->cached_entry.v;
     if(cvt_p)     *cvt_p     = cvt;
@@ -4335,8 +4334,6 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
     BUG_ON(atomic_read(&out_tree->write_ref_count) != 0);
 
     /* update list of large objects */
-    //TODO@tr have to splice LO list when partition key is advanced... so... shall we just advance
-    //   the partition key when serialising?
     serdes_state = atomic_read(&merge->serdes.valid);
     if(serdes_state > NULL_DAM_SERDES)
         mutex_lock(&merge->serdes.mutex);
@@ -5343,7 +5340,6 @@ static int castle_da_merge_tv_resolver_flush(struct castle_da_merge *merge,
 
     void                    *tvr_key     = NULL;
     c_ver_t                  tvr_version = INVAL_VERSION;
-    castle_user_timestamp_t  tvr_u_ts    = 0;
     c_val_tup_t              tvr_cvt;
     CVT_INVALID_INIT(tvr_cvt);
 
@@ -5354,18 +5350,11 @@ static int castle_da_merge_tv_resolver_flush(struct castle_da_merge *merge,
     while(castle_dfs_resolver_entry_pop(merge->tv_resolver,
                                         &tvr_key,
                                         &tvr_cvt,
-                                        &tvr_version,
-                                        &tvr_u_ts))
+                                        &tvr_version))
     {
-        //TODO@tr get rid of the user_timestamp field in the cvt structure... but in the meantime,
-        //        use it to sanity check things here and there!
         BUG_ON(!tvr_key);
-        BUG_ON(tvr_u_ts != tvr_cvt.user_timestamp);
         BUG_ON(actual_pop_count == expected_pop_count);
         BUG_ON(!CVT_LEAF_VAL(tvr_cvt) && !CVT_LOCAL_COUNTER(tvr_cvt));
-
-        /* if this is the first pop, then this is a new key, else it's not a new key */
-        //merge->is_new_key = (actual_pop_count == 0);
         actual_pop_count++;
 
         ret = castle_da_entry_do(merge,
@@ -5426,7 +5415,7 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
                 if (ret != EXIT_SUCCESS)
                     goto err_out;
             }
-            castle_dfs_resolver_entry_add(merge->tv_resolver, key, cvt, version, cvt.user_timestamp);
+            castle_dfs_resolver_entry_add(merge->tv_resolver, key, cvt, version);
         }
         else
         {
@@ -6434,12 +6423,6 @@ update_output_tree_state:
     {
         struct castle_bloom_build_params *bf_bp = merge->out_tree->bloom.private;
         BUG_ON(!bf_bp);
-
-        //TODO@tr clean this up
-        /* just me testing a theory... */
-        /* if these ever BUG, it means we need to flush the bloom build param extents as well */
-        BUG_ON(bf_bp->chunk_cep.ext_id != bf_bp->node_cep.ext_id);
-        BUG_ON(bf_bp->chunk_cep.ext_id != merge->out_tree->bloom.ext_id);
 
         debug("%s::merge %p (da %d, level %d) bloom_build_param marshall.\n",
                 __FUNCTION__, merge, merge->da->id, merge->level);
@@ -9613,9 +9596,6 @@ int castle_double_array_read(void)
     while(castle_mstore_iterator_has_next(iterator))
     {
         castle_mstore_iterator_next(iterator, &mstore_dentry, &key);
-        //TODO@tr clarify that it's okay that some things are pre-unmarshalled
-        //        with this da_alloc call, and some things are done with
-        //        the ensuing da_unmarshall call.
         da = castle_da_alloc(mstore_dentry.id, mstore_dentry.creation_opts);
         if(!da)
             goto error_out;
@@ -10831,8 +10811,9 @@ static int64_t castle_da_ct_timestamp_compare(struct castle_component_tree *ct,
         return ret;
     }
 
-    /* TODO@tr if we come up with something more fine-grained than the max timestamp of the entire ct,
-       here is where we would set max_ct_ts_for_cvt and calculate the new ret. */
+    /* Further work: If we come up with something more fine-grained than the max timestamp of all
+                     the entries in the ct, then here is probably where we would set an improved
+                     guess for max_ct_ts_for_cvt and calculate the new ret. */
 
     return ret;
 }
@@ -11005,13 +10986,13 @@ int castle_da_ct_read_complete_cvt_timestamp_check(c_bvec_t *c_bvec,
     get->resolve_counters = 0;
 
     /*
-    TODO@tr use suspicioun tags to indicate if we can safely terminate
-            the query (if get->cvt is non-suspicious candidate, and cvt
-            is ancestral, then we can stop)
+    Further work: Use suspicioun tags to indicate if we can safely terminate
+                  the query; If get->cvt is non-suspicious candidate, and cvt
+                  is ancestral, then we can stop.
     if(!CVT_INVALID(get->cvt) && !CVT_INVALID(cvt))
         if(!CVT_SUSPICIOUS(get->cvt) && castle_version_is_ancestor(get->cvt.version, cvt.version))
             return 1;
-    Note: doing this means we need the version as well as the timestamp of the cvt.
+    Note: doing this means we need the version of the cvt, which is not immediately available here.
     */
 
     if(CVT_INVALID(get->cvt))

@@ -551,7 +551,7 @@ struct castle_value_tuple {
     /*          8 */     uint8_t      *val_p;
     /*          8 */     int64_t       counter;
     /*         24 */ };
-    /*         24 */ castle_user_timestamp_t user_timestamp; //TODO@tr this is just here temporarily, will get rid of it soon...
+    /*         24 */ castle_user_timestamp_t user_timestamp;
     /*         32 */
 } PACKED;
 typedef struct castle_value_tuple c_val_tup_t;
