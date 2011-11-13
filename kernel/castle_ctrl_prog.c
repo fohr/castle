@@ -95,7 +95,7 @@ int castle_ctrl_prog_ioctl(cctrl_ioctl_t *ioctl)
             castle_printk(LOG_DEBUG, "Heartbeat, from pid=%d\n", castle_ctrl_prog_curr_pid_get());
             if(castle_ctrl_prog_state != CTRL_PROG_PRESENT)
             {
-                ioctl->ctrl_prog_register.ret = C_ERR_EXISTS;
+                ioctl->ctrl_prog_register.ret = C_ERR_INVAL;
                 break;
             }
             if(castle_ctrl_prog_curr_pid_get() != castle_ctrl_prog_pid)
