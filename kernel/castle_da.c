@@ -5293,6 +5293,29 @@ static int castle_da_merge_space_reserve(struct castle_da_merge *merge, c_val_tu
     return 0;
 }
 
+/* Give up locks before the merge goes to "sleep" so it doesn't block anything else,
+   like checkpoint thread. */
+static void castle_merge_sleep_prepare(struct castle_da_merge *merge)
+{
+    if (merge->levels[0].node_c2b)
+    {
+        castle_printk(LOG_DEBUG, "%s::[%p] merge id %u, unlocking leaf node c2b "cep_fmt_str_nl,
+                __FUNCTION__, merge, merge->id, cep2str(merge->levels[0].node_c2b->cep));
+        dirty_c2b(merge->levels[0].node_c2b);
+        write_unlock_c2b(merge->levels[0].node_c2b);
+    }
+}
+/* Retake locks after returning from a "sleep", so merge finds things as it expects to. */
+static void castle_merge_sleep_return(struct castle_da_merge *merge)
+{
+    if (merge->levels[0].node_c2b)
+    {
+        castle_printk(LOG_DEBUG, "%s::[%p] merge id %u, relocking leaf node c2b "cep_fmt_str_nl,
+                __FUNCTION__, merge, merge->id, cep2str(merge->levels[0].node_c2b->cep));
+        write_lock_c2b(merge->levels[0].node_c2b);
+    }
+}
+
 static int castle_da_entry_do(struct castle_da_merge *merge,
                               void *key,
                               c_val_tup_t cvt,
@@ -5350,8 +5373,10 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
             return -ESHUTDOWN;
 
         printk("******* Sleeping on LFS *****\n");
+        castle_merge_sleep_prepare(merge);
         castle_merge_debug_locks(merge);
         msleep(1000);
+        castle_merge_sleep_return(merge);
     }
 
     /* Add entry to the output btree.
@@ -6843,8 +6868,7 @@ static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_bytes)
     /* Do the merge. */
 
     /* relock output ct active leaf c2b, as unit_do expects to find it */
-    if (merge->levels[0].node_c2b)
-        write_lock_c2b(merge->levels[0].node_c2b);
+    castle_merge_sleep_return(merge);
 
     /* ditto the in-progress bloom filter */
     //TODO@tr fix this up (lock removal underway)
@@ -6929,11 +6953,7 @@ complete_merge_do:
     debug_merges("%s::MERGE END with ret %d - DA %d L %d, produced out ct seq %d \n",
         __FUNCTION__, ret, da->id, level, out_tree_id);
 
-    if (merge->levels[0].node_c2b)
-    {
-        dirty_c2b(merge->levels[0].node_c2b);
-        write_unlock_c2b(merge->levels[0].node_c2b);
-    }
+    castle_merge_sleep_prepare(merge);
 
     //TODO@tr lock removal underway; clean this up once complete.
     //if (merge->out_tree->bloom_exists)
