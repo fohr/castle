@@ -26,6 +26,11 @@
 
 #define FAULT_CODE FREESPACE_FAULT
 
+static int castle_slaves_size = 0;      /**< Size to allocate to new slaves in chunks.
+                                             0 => Maximum available space.                  */
+module_param(castle_slaves_size, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_slaves_size, "Size to allocate to new slaves (chunks)");
+
 castle_freespace_t * freespace_sblk_get(struct castle_slave *cs)
 {
     mutex_lock(&cs->freespace_lock);
@@ -438,6 +443,8 @@ int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
         debug("Initialising new device\n");
         memset(freespace, 0, sizeof(castle_freespace_t));
         freespace->disk_size   = disk_sz / C_CHK_SIZE - FREE_SPACE_START;
+        if (castle_slaves_size && castle_slaves_size < freespace->disk_size)
+            freespace->disk_size = castle_slaves_size;
         freespace->disk_size  -= (freespace->disk_size % CHKS_PER_SLOT);
         freespace->max_entries = (freespace->disk_size / CHKS_PER_SLOT) + 1;
         /* Now, double the max_entries, which guarantees that freespace
