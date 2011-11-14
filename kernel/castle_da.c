@@ -3699,12 +3699,14 @@ static int castle_da_merge_extent_grow(struct castle_da_merge *merge,
     {
         c_chk_cnt_t start, end;
         int ret;
+        uint64_t old_avail_bytes = state->ext_avail_bytes;
 
         if ((ret = castle_extent_grow(ext_id, growth_rate_chunks)))
             return ret;
 
-        //TODO@tr watch out for overflow
         state->ext_avail_bytes  += growth_rate_chunks * C_CHK_SIZE;
+        BUG_ON(state->ext_avail_bytes < old_avail_bytes); /* overflow? */
+
         space_remaining_bytes    = state->ext_avail_bytes - state->ext_used_bytes;
 
         /* sanity check extent */
@@ -5718,7 +5720,6 @@ deser_done:
        to discard non-queriable tombstones, or both. */
     if( castle_da_user_timestamping_check(merge->da) || (merge->out_tree->data_age == 1) )
     {
-        //TODO@tr make sure error_out dealloc's things properly!
         merge->tv_resolver = castle_zalloc(sizeof(c_dfs_resolver), GFP_KERNEL);
         if(!merge->tv_resolver)
             goto error_out;
@@ -6476,7 +6477,6 @@ update_output_tree_state:
         if(merge->levels[i].node_c2b)
         {
             struct castle_btree_node *node;
-            int relock_current_leaf = 0;
 
             BUG_ON(EXT_POS_INVAL(merge->levels[i].node_c2b->cep));
             merge_mstore->levels[i].node_c2b_cep = merge->levels[i].node_c2b->cep;
@@ -6495,22 +6495,20 @@ update_output_tree_state:
             /* dirty the incomplete node so it will be flushed at next checkpoint */
             if(i > 0)
             {
-                //TODO@tr clean this up: we should know for sure wether merge would have this locked or not!
-                /* potential for deadlock here! to avoid it, we have to temporarily unlock the
-                   current leaf node before we try to lock an internal node */
+                /* Potential for deadlock here! To avoid it, we have to temporarily unlock the
+                   current leaf node before we try to lock an internal node. */
                 if(merge->levels[0].node_c2b)
-                    if(c2b_write_locked(merge->levels[0].node_c2b))
-                    {
-                        write_unlock_c2b(merge->levels[0].node_c2b);
-                        relock_current_leaf = 1;
-                    }
+                {
+                    dirty_c2b(merge->levels[0].node_c2b);
+                    write_unlock_c2b(merge->levels[0].node_c2b);
+                }
                 write_lock_c2b(merge->levels[i].node_c2b);
             }
             dirty_c2b(merge->levels[i].node_c2b);
             if(i > 0)
             {
                 write_unlock_c2b(merge->levels[i].node_c2b);
-                if(relock_current_leaf)
+                if(merge->levels[0].node_c2b)
                     write_lock_c2b(merge->levels[0].node_c2b);
             }
         }//fi
@@ -6867,23 +6865,8 @@ static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_bytes)
 
     /* Do the merge. */
 
-    /* relock output ct active leaf c2b, as unit_do expects to find it */
+    /* returning from "sleep", retake locks, so merge finds things as it expects to */
     castle_merge_sleep_return(merge);
-
-    /* ditto the in-progress bloom filter */
-    //TODO@tr fix this up (lock removal underway)
-    if (merge->out_tree->bloom_exists)
-    {
-        struct castle_bloom_build_params *bf_bp =  merge->out_tree->bloom.private;
-
-        if (bf_bp)
-        {
-            //if (bf_bp->chunk_c2b)
-            //    write_lock_c2b(bf_bp->chunk_c2b);
-            //if (bf_bp->node_c2b)
-            //    write_lock_c2b(bf_bp->node_c2b);
-        }
-    }
 
     /* Check for castle stop and merge abort */
     if (castle_merges_abortable && exit_cond)
@@ -6954,26 +6937,6 @@ complete_merge_do:
         __FUNCTION__, ret, da->id, level, out_tree_id);
 
     castle_merge_sleep_prepare(merge);
-
-    //TODO@tr lock removal underway; clean this up once complete.
-    //if (merge->out_tree->bloom_exists)
-    //{
-    //    struct castle_bloom_build_params *bf_bp =  merge->out_tree->bloom.private;
-
-    //    if (bf_bp)
-    //    {
-    //        if (bf_bp->chunk_c2b)
-    //        {
-    //            if(c2b_write_locked(bf_bp->chunk_c2b))
-    //                BUG();
-    //        }
-    //        if (bf_bp->node_c2b)
-    //        {
-    //            if(c2b_write_locked(bf_bp->node_c2b))
-    //                BUG();
-    //        }
-    //    }
-    //}
 
     /* Successfully completed current unit of work. */
     if (ret == EAGAIN)
