@@ -141,7 +141,8 @@ struct castle_back_iterator
     c_vl_bkey_t                  *saved_key;        /**< Saved key when buffer filled up.   */
     c_val_tup_t                   saved_val;        /**< Saved value when buffer filled up. */
     castle_object_iterator_t     *iterator;         /**< Iterator structure.                */
-    struct castle_key_value_list *kv_list_tail;     /**< Tail of kv_list in userspace buf.  */
+    struct castle_key_value_list *kv_list_tail;     /**< Pointer to last entry in buffer.   */
+    struct castle_key_value_list *kv_list_next;     /**< Pointer to kv_list_tail->next.     */
     uint32_t                      kv_list_size;     /**< Bytes used by kv_list.             */
     uint32_t                      buf_len;          /**< Bytes in buffer kv_list can fill.  */
     uint64_t                      nr_keys;          /**< Stats: number of keys.             */
@@ -1096,24 +1097,35 @@ err0: return err;
 }
 
 /**
- * if doesn't fit into the buffer, *buf_used will be set to 0
+ * Copy key to buffer pointed at by key_dst and update buf_used.
+ *
+ * @param   kas_key     Pointer to key to copy (KAS)
+ * @param   kas_key_dst Where key should be copied (KAS)
+ * @param   key_dst_len Bytes remaining in key_dst buffer
+ *
+ * @return  0 => Not enough space in key_dst buffer to copy in key
+ * @return  * => Number of Bytes used in key_dst as a result of key copy
  */
-static void castle_back_key_kernel_to_user(c_vl_bkey_t                 *kernel_key,
-                                           struct castle_back_buffer   *buf,
-                                           unsigned long                user_buf,
-                                           uint32_t                     buf_len,
-                                           uint32_t                    *buf_used)
+static inline uint32_t castle_back_key_kernel_to_user(c_vl_bkey_t *kas_key,
+                                                      char *kas_key_dst,
+                                                      uint32_t key_dst_len)
 {
-    size_t blen = buf_len;
+    size_t blen = key_dst_len;
 
 #ifdef DEBUG
-    debug("castle_back_key_kernel_to_user copying key:\n");
-    vl_bkey_print(LOG_DEBUG, kernel_key);
-    debug("user_buf = %p\n", (void *)user_buf);
+    castle_printk(LOG_DEBUG, "%s: Copying key=%p to user buffer KAS ptr=%p "
+            "key_dst_len=%u key=\n",
+            __FUNCTION__, kas_key, kas_key_dst, key_dst_len);
+    vl_bkey_print(LOG_DEBUG, kas_key);
 #endif
 
-    *buf_used = castle_dup_or_copy(kernel_key, kernel_key->length + 4,
-                                   castle_back_user_to_kernel(buf, user_buf), &blen) ? blen : 0;
+    if (castle_dup_or_copy(kas_key,
+                           kas_key->length + 4,
+                           kas_key_dst,
+                           &blen))
+        return blen;
+    else
+        return 0;
 }
 
 /**
@@ -1175,33 +1187,36 @@ static void castle_back_iter_fetch_object(c_val_tup_t *cvt, char *buf)
  * into this reserved space so the out-of-line object can be fetched prior to
  * the buffer being despatched to the userland.
  *
- * @param   buf_len                 Size of the userspace buffer
- * @param   buf_used                Amount of userspace buffer already used
- * @param   this_v_used     [out]   0 => Value doesn't fit in the buffer
- *                                  * => Bytes used by value
- * @param   get_ool         [in]    0 => Copy only inline values
- *                                  * => Fetch out-of-line values
+ * @param   kas_val             Pointer to value to copy (KAS)
+ * @param   kas_val_dst         Where val should be copied (KAS)
+ * @param   uas_val_dst         Where val should be copied (UAS)
+ * @param   buf_len             Total size of val_dst buffer (note val_dst is
+ *                              not the start of the buffer)
+ * @param   buf_used            Bytes already used in val_dst buffer
+ * @param   this_v_used [out]   0 => Value doesn't fit in val_dst buffer
+ *                              * => Bytes used copying value in val_dst
+ * @param   get_ool             Whether to fetch out-of-line values
  *
  * @return  0 && *this_v_used==0    => Value doesn't fit in the buffer
  *          *                       => Size of the value
  */
-static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *val,
-                                               struct castle_back_buffer *buf,
-                                               unsigned long user_buf,
+static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *kas_val,
+                                               char *kas_val_dst,
+                                               char *uas_val_dst,
                                                uint32_t buf_len,
                                                uint32_t buf_used,
                                                uint32_t *this_v_used,
                                                c_collection_id_t collection_id,
                                                int get_ool)
 {
-    struct castle_iter_val *val_copy;
+    struct castle_iter_val *val_copy = (struct castle_iter_val *)kas_val_dst;
     uint32_t length, val_length, rem_buf_len;
 
-    rem_buf_len = buf_len - buf_used; /* Space available in buf */
+    rem_buf_len = buf_len - buf_used; /* Space available in val_dst */
 
-    if (CVT_INLINE(*val)
-            || (get_ool && CVT_ON_DISK(*val) && (val->length < buf_len)))
-        val_length = val->length;
+    if (CVT_INLINE(*kas_val)
+            || (get_ool && CVT_ON_DISK(*kas_val) && (kas_val->length < buf_len)))
+        val_length = kas_val->length;
     else
         val_length = 0;
 
@@ -1210,30 +1225,29 @@ static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *val,
 
     if (rem_buf_len < length)
     {
-        /* Not enough space remaining in buf. */
+        /* Not enough space remaining in val_dst. */
         *this_v_used = 0;
         return 0;
     }
 
-    val_copy = (struct castle_iter_val *)castle_back_user_to_kernel(buf, user_buf);
-    val_copy->type   = castle_back_val_type_kernel_to_user(*val);
-    val_copy->length = val->length;
+    val_copy->type   = castle_back_val_type_kernel_to_user(*kas_val);
+    val_copy->length = kas_val->length;
 
     if (val_length)
     {
         /* Copy the value into the userspace buffer. */
-        val_copy->val = (uint8_t *)(user_buf + sizeof(struct castle_iter_val));
+        val_copy->val = uas_val_dst + sizeof(struct castle_iter_val);
 
-        if (CVT_INLINE(*val))
+        if (CVT_INLINE(*kas_val))
             /* Copy from CVT. */
-            memcpy((uint8_t *)castle_back_user_to_kernel(buf, val_copy->val),
-                    CVT_INLINE_VAL_PTR(*val),
-                    val->length);
+            memcpy(kas_val_dst + sizeof(struct castle_iter_val),
+                    CVT_INLINE_VAL_PTR(*kas_val),
+                    kas_val->length);
         else
         {
             /* Fetch from data extent. */
-            castle_back_iter_fetch_object(val,
-                    (uint8_t *)castle_back_user_to_kernel(buf, val_copy->val));
+            castle_back_iter_fetch_object(kas_val,
+                    kas_val_dst + sizeof(struct castle_iter_val));
             val_copy->type = CASTLE_VALUE_TYPE_INLINE;
         }
     }
@@ -2154,6 +2168,7 @@ err0: castle_back_reply(op, err, 0, 0, 0);
 /**
  * Copy kernelspace key and value to userspace key-value list.
  *
+ * @param   kv_list     Pointer to tail of key-value list in kernel address space
  * @param   buf_len     Size of the userspace buffer
  * @param   buf_used    Amount of userspace buffer already used
  *
@@ -2187,14 +2202,14 @@ static uint32_t castle_back_save_key_value_to_list(struct castle_back_stateful_o
         goto err0;
     }
 
+    /* kv_list->key should point to the end of the current castle_key_value_list
+     * structure (UAS).  Key passed in should be copied to this offset within
+     * the buffer (KAS). */
     kv_list->key = (c_vl_bkey_t *)castle_back_kernel_to_user(back_buf,
             (unsigned long)kv_list + this_kv_used);
-
-    castle_back_key_kernel_to_user(key,
-                                   back_buf,
-                                   (unsigned long)kv_list->key,
-                                   rem_buf_len - this_kv_used,
-                                   &key_len);
+    key_len = castle_back_key_kernel_to_user(key,
+                                             (char *)kv_list + this_kv_used,
+                                             rem_buf_len - this_kv_used);
     if (key_len == 0)
     {
         this_kv_used = 0;
@@ -2206,10 +2221,15 @@ static uint32_t castle_back_save_key_value_to_list(struct castle_back_stateful_o
         kv_list->val = NULL;
     else
     {
-        kv_list->val = (struct castle_iter_val *)((unsigned long)kv_list->key + key_len);
-        cvt_len = castle_back_val_kernel_to_user(val,                           /* val          */
-                                                 back_buf,                      /* buf          */
-                                                 (unsigned long)kv_list->val,   /* user_buf     */
+        /* kv_list->val should point to the buffer immediately following the end
+         * of the current kv-list entry's key (UAS).  The value should then be
+         * copied to this offset within the buffer (KAS). */
+        char *uas_val = (char *)castle_back_kernel_to_user(back_buf,
+                (unsigned long)kv_list + this_kv_used);
+        kv_list->val = (struct castle_iter_val *)uas_val;
+        cvt_len = castle_back_val_kernel_to_user(val,                           /* kas_val      */
+                                                 (char *)kv_list + this_kv_used,/* kas_val_dst  */
+                                                 uas_val,                       /* uas_val_dst  */
                                                  buf_len,                       /* buf_len      */
                                                  buf_used + this_kv_used,       /* buf_used     */
                                                  &val_len,                      /* this_v_used  */
@@ -2258,10 +2278,10 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
                                           void *data)
 {
     struct castle_back_stateful_op *stateful_op;
+    struct castle_key_value_list *kv_list_cur;
     struct castle_back_conn *conn;
     struct castle_back_op *op;
     uint32_t cur_len;
-    struct castle_key_value_list *kv_list_cur;
     uint32_t buf_len, buf_used;
 
     BUG_ON(!data);
@@ -2276,19 +2296,14 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
     if (err)
         goto err0;
 
-    if (stateful_op->iterator.kv_list_size == 0)
-    {
-        kv_list_cur = stateful_op->iterator.kv_list_tail;
-        /* Set key to NULL to signify empty list if there are no results. */
-        stateful_op->iterator.kv_list_tail->key = NULL;
-    }
-    else
-        kv_list_cur = castle_back_user_to_kernel(op->buf,
-                stateful_op->iterator.kv_list_tail->next);
+    /* kv_list_cur will be the next empty entry in the key-value list. */
+    kv_list_cur = stateful_op->iterator.kv_list_next;
 
     /* If we've been passed a NULL key, the iterator has completed. */
     if (key == NULL)
     {
+        /* Update previous element's next pointer to indicate that the
+         * iterator has terminated with no more values to return. */
         stateful_op->iterator.kv_list_tail->next = NULL;
 
         /* Iterator has finished.  Fake up an iter_finish request and pass it
@@ -2310,9 +2325,9 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
     }
 
     /* The iterator has returned a key.  Try and add it to the list. */
-    buf_len = stateful_op->iterator.buf_len;
+    buf_len  = stateful_op->iterator.buf_len;
     buf_used = stateful_op->iterator.kv_list_size;
-    cur_len = castle_back_save_key_value_to_list(stateful_op,   /* stateful_op      */
+    cur_len  = castle_back_save_key_value_to_list(stateful_op,  /* stateful_op      */
                         kv_list_cur,                            /* kv_list          */
                         key,                                    /* key              */
                         val,                                    /* val              */
@@ -2321,13 +2336,14 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
                         buf_len,                                /* buf_len          */
                         buf_used);                              /* buf_used         */
 
-    /* Was the buffer too small to save the key-value pair? */
     if (cur_len == 0)
     {
-        /* Yes, buffer too small.  Update the final list->next to point to the
-         * start of the buffer so the userspace knows the iterator has more. */
-        stateful_op->iterator.kv_list_tail->next = (struct castle_key_value_list *)
-                                                                    op->buf->user_addr;
+        /* The buffer was too small to save the key-value pair.
+         *
+         * Update previous element's next pointer to indicate that
+         * the iterator has terminated with more values to return. */
+        stateful_op->iterator.kv_list_tail->next =
+            (struct castle_key_value_list *)op->buf->user_addr;
 
         stateful_op->iterator.saved_key = castle_dup_or_copy(key, key->length + 4, NULL, NULL);
         if (!stateful_op->iterator.saved_key)
@@ -2355,11 +2371,16 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
         return 0;
     }
 
-    /* We successfully added the key-value pair to the list.  Update pointer to
-     * the next element on the list for next iteration. */
+    /* Key-value pair successfully added to the list.
+     *
+     * Update the current element's next pointer to point to the next (currently
+     * empty) element in the list.  Also maintain the various kernel address
+     * space pointers to the current and next element in the iterator. */
     kv_list_cur->next = (struct castle_key_value_list *)
-            castle_back_kernel_to_user(op->buf, ((unsigned long)kv_list_cur + cur_len));
-    stateful_op->iterator.kv_list_tail = kv_list_cur;
+        castle_back_kernel_to_user(op->buf, ((unsigned long)kv_list_cur + cur_len));
+    stateful_op->iterator.kv_list_tail  = kv_list_cur;
+    stateful_op->iterator.kv_list_next  = (struct castle_key_value_list *)
+                                                ((char *)kv_list_cur + cur_len);
     stateful_op->iterator.kv_list_size += cur_len;
 
     /* We were successful, inform caller to continue iterating. */
@@ -2397,16 +2418,17 @@ static void __castle_back_iter_next(void *data)
     stateful_debug("op=%p "stateful_op_fmt_str" iterator=%p iterator.saved_key=%p\n",
             op, stateful_op2str(stateful_op), iterator, stateful_op->iterator.saved_key);
 
+    stateful_op->iterator.buf_len      = op->req.iter_next.buffer_len;
+    stateful_op->iterator.kv_list_size = 0;
     stateful_op->iterator.kv_list_tail = castle_back_user_to_kernel(op->buf,
             op->req.iter_next.buffer_ptr);
-    stateful_op->iterator.kv_list_size = 0;
-    stateful_op->iterator.buf_len = op->req.iter_next.buffer_len;
+    stateful_op->iterator.kv_list_next = stateful_op->iterator.kv_list_tail;
 
     kv_list_head = stateful_op->iterator.kv_list_tail;
     kv_list_head->next = NULL;
-    kv_list_head->key = NULL;
+    kv_list_head->key  = NULL;
+    buf_len  = op->req.iter_next.buffer_len;
     buf_used = 0;
-    buf_len = op->req.iter_next.buffer_len;
 
 #ifdef DEBUG
     stateful_debug("iter_next start_key\n");
