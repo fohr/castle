@@ -1006,6 +1006,15 @@ enum castle_error_codes
     CASTLE_ERRORS
 };
 
+/* castle_slave flags bits */
+#define CASTLE_SLAVE_OOS_BIT             0 /* Slave is out-of-service */
+#define CASTLE_SLAVE_EVACUATE_BIT        1 /* Slave is being, or has been, evacuated */
+#define CASTLE_SLAVE_GHOST_BIT           2 /* Slave is missing or invalid (on reboot) */
+#define CASTLE_SLAVE_REMAPPED_BIT        3 /* Slave has been remapped */
+#define CASTLE_SLAVE_CLAIMING_BIT        4 /* Slave is not yet available for use (in castle_claim) */
+#define CASTLE_SLAVE_BDCLAIMED_BIT       5 /* Slave has been bd_claim'ed. */
+#define CASTLE_SLAVE_ORDERED_SUPP_BIT    6 /* Slave has been bd_claim'ed. */
+
 #ifdef __cplusplus
 }
 #endif
