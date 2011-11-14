@@ -986,26 +986,47 @@ void castle_norm_key_print(int level, const struct castle_norm_key *key)
         const unsigned char *data;
         size_t len = castle_norm_key_len_get(key, &data);
         size_t n_dim = castle_norm_key_dim_get(&data);
-        size_t buf_len = len * 2 + n_dim * 3 + 2; /* this is very conservative */
+        size_t buf_len = len * 2 + n_dim * 4 + 2; /* conservative estimate */
         char *buf = castle_alloc(buf_len), *p = buf;
-        unsigned int dim, i;
+        unsigned int dim, i, pos;
 
         *p++ = '[';
         for (dim = 0; dim < n_dim; ++dim)
         {
             STRIDE_INIT_VARS;
-            size_t pos = 0;
+
+            if (data[stride] == KEY_MARKER_MINUS_INFINITY ||
+                data[stride] == KEY_MARKER_PLUS_INFINITY)
+            {
+                sprintf(p, data[stride] == KEY_MARKER_MINUS_INFINITY ? "-inf," : "+inf,");
+                p += 5;
+                continue;
+            }
+
+            pos = 0;
             *p++ = '0';
             *p++ = 'x';
             do
             {
-                for (i = 0; i < stride; ++i)
+                unsigned int seg_bytes = stride;
+                int next = 0;
+
+                if (data[stride] != KEY_MARKER_CONTINUES)
+                {
+                    seg_bytes = (data[stride] - KEY_MARKER_END_BASE) / 2;
+                    next = (data[stride] - KEY_MARKER_END_BASE) % 2;
+                }
+
+                for (i = 0; i < seg_bytes; ++i)
                 {
                     sprintf(p, "%.2x", *data++);
                     p += 2;
                 }
                 pos += stride;
                 STRIDE_CHECK_BOUND(pos);
+
+                if (next)
+                    *p++ = '+';
             }
             while (*data++ == KEY_MARKER_CONTINUES);
             *p++ = ',';
