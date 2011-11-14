@@ -16,7 +16,11 @@ extern "C" {
 
 #define CASTLE_PROTOCOL_VERSION 31 /* last updated by GM */
 
+#ifdef SWIG
+#define PACKED               //overide gcc intrinsics for SWIG
+#else
 #define PACKED               __attribute__((packed))
+#endif
 
 #ifndef __KERNEL__
 #define PAGE_SIZE 4096
@@ -962,6 +966,7 @@ struct castle_fs_superblock_public {
  * 500                          - CASTLE_ERROR_MAX - don't increase is too much. Error string
  *                                array will take more space.
  */
+#define CASTLE_ERROR_MAX_NUM 500
 #define CASTLE_ERRORS                                                                           \
     CASTLE_ERROR_CODE(0, C_ERR_SUCCESS, "Operation Succeeded.")                                 \
     CASTLE_ERROR_CODE(1, C_ERR_NOSPC, "Not enough space available on disk.")                    \
@@ -995,7 +1000,7 @@ struct castle_fs_superblock_public {
                                                                                                 \
     CASTLE_ERROR_CODE(201, C_ERR_INVAL_DA, "Invalid version tree.")                             \
                                                                                                 \
-    CASTLE_ERROR_CODE(500, CASTLE_ERROR_MAX, "Invalid error code from kernel.")                 \
+    CASTLE_ERROR_CODE(CASTLE_ERROR_MAX_NUM, CASTLE_ERROR_MAX, "Invalid error code from kernel.") \
 
 
 
@@ -1013,7 +1018,7 @@ enum castle_error_codes
 #define CASTLE_SLAVE_REMAPPED_BIT        3 /* Slave has been remapped */
 #define CASTLE_SLAVE_CLAIMING_BIT        4 /* Slave is not yet available for use (in castle_claim) */
 #define CASTLE_SLAVE_BDCLAIMED_BIT       5 /* Slave has been bd_claim'ed. */
-#define CASTLE_SLAVE_ORDERED_SUPP_BIT    6 /* Slave has been bd_claim'ed. */
+#define CASTLE_SLAVE_ORDERED_SUPP_BIT    6 /* Slave supports ordered writes. */
 
 #ifdef __cplusplus
 }
