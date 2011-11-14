@@ -499,6 +499,9 @@ typedef struct castle_immut_iterator {
     castle_immut_iter_node_start  node_start; /**< callback handler to fire whenever iterator moves
                                                    to a new node within the btree                 */
     void                         *private;
+
+
+    /////TODO get rid of this struct
     struct {
         c_ext_pos_t                   tree_cep;
         c_ext_pos_t                   data_cep;

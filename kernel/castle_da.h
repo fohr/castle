@@ -81,6 +81,8 @@ struct castle_da_merge {
 
     struct castle_key_ptr_t       new_redirection_partition;
 
+    ///////TODO move the iterators shrinkable_ext_boundary stuff here
+
     /* partition update copies extent boundaries from immut_iter_t into ... */
     c_ext_pos_t                  *in_tree_shrink_activatable_cep;
     /* partition activate copies the above into... */
