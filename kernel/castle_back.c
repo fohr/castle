@@ -2463,10 +2463,12 @@ static void __castle_back_iter_next(void *data)
 
         stateful_op->iterator.saved_key = NULL;
 
-        stateful_op->iterator.kv_list_size = buf_used;
-
         kv_list_head->next = (struct castle_key_value_list *)
-                    castle_back_kernel_to_user(op->buf, ((unsigned long)kv_list_head + buf_used));
+            castle_back_kernel_to_user(op->buf, ((unsigned long)kv_list_head + buf_used));
+        stateful_op->iterator.kv_list_tail = kv_list_head;
+        stateful_op->iterator.kv_list_next = (struct castle_key_value_list *)
+                                                ((char *)kv_list_head + buf_used);
+        stateful_op->iterator.kv_list_size = buf_used;
     }
 
     castle_object_iter_next(iterator, castle_back_iter_next_callback, stateful_op);
