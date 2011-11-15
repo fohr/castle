@@ -3343,7 +3343,6 @@ static void castle_extent_resource_release(void *data)
     c_ext_id_t ext_id = ext->ext_id;
     struct list_head *pos, *tmp;
     int nr_blocks;
-    int ref_cnt;
 
     /* Should be in transaction. */
     BUG_ON(!castle_extent_in_transaction());
@@ -3401,12 +3400,7 @@ static void castle_extent_resource_release(void *data)
     /* We have already freed-up all the space, consequently marked all dirty c2bs in
      * that space as clean, there shouldn't be any more references on dirty tree,
      * other than the live extent reference. */
-    ref_cnt = atomic_read(&ext->dirtytree->ref_cnt);
-    if (ref_cnt != 1)
-        castle_printk(LOG_DEVEL, "%s: ext=%p dirtytree=%p ref_cnt=%d\n",
-                __FUNCTION__, ext, ext->dirtytree, ref_cnt);
     BUG_ON(atomic_read(&ext->dirtytree->ref_cnt) != 1);
-    BUG_ON(ref_cnt != 1);
 
     /* Drop 'extent exists' reference on c2b dirtytree. */
     castle_cache_dirtytree_demote(ext->dirtytree);
@@ -4373,9 +4367,7 @@ void castle_extent_dirtytree_get(c_ext_dirtytree_t *dirtytree)
  */
 void __castle_extent_dirtytree_put(c_ext_dirtytree_t *dirtytree, int check_hash)
 {
-    int ref_cnt = atomic_dec_return(&dirtytree->ref_cnt);
-
-    if (unlikely(ref_cnt == 0))
+    if (unlikely(atomic_dec_return(&dirtytree->ref_cnt) == 0))
     {
         if (check_hash)
             /* cannot be in hash now */
@@ -4383,8 +4375,6 @@ void __castle_extent_dirtytree_put(c_ext_dirtytree_t *dirtytree, int check_hash)
         BUG_ON(!RB_EMPTY_ROOT(&dirtytree->rb_root));    /* must be empty */
         castle_kfree(dirtytree);
     }
-    else if (ref_cnt > 1)
-        BUG_ON(RB_EMPTY_ROOT(&dirtytree->rb_root));
 }
 
 /**
