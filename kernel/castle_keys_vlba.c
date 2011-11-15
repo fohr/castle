@@ -214,13 +214,12 @@ int castle_object_btree_key_compare(const c_vl_bkey_t *key1, const c_vl_bkey_t *
     return 0;
 }
 
-static c_vl_bkey_t *castle_object_btree_key_dim_inc(c_vl_bkey_t *key, int dim)
+static void castle_object_btree_key_dim_inc(c_vl_bkey_t *key, int dim)
 {
     uint32_t flags = KEY_DIMENSION_FLAGS(key->dim_head[dim]);
     uint32_t offset = KEY_DIMENSION_OFFSET(key->dim_head[dim]);
 
     key->dim_head[dim] = KEY_DIMENSION_HEADER(offset, flags | KEY_DIMENSION_NEXT_FLAG);
-    return key;
 }
 
 c_vl_bkey_t *castle_object_btree_key_copy(const c_vl_bkey_t *src,
@@ -239,7 +238,8 @@ c_vl_bkey_t *castle_object_btree_key_next(const c_vl_bkey_t *src,
         return NULL;
 
     /* Increment the least significant dimension */
-    return castle_object_btree_key_dim_inc(new_key, new_key->nr_dims-1);
+    castle_object_btree_key_dim_inc(new_key, new_key->nr_dims-1);
+    return new_key;
 }
 
 /* Checks if the btree key is within the bounds imposed by start/end object keys.
@@ -309,6 +309,27 @@ static int castle_object_btree_key_bounds_check(const c_vl_bkey_t *key,
     return 0;
 }
 
+static c_vl_bkey_t* castle_object_btree_key_skip(const c_vl_bkey_t *old_key,
+                                                 const c_vl_bkey_t *start,
+                                                 int offending_dim,
+                                                 int out_of_range)
+{
+    c_vl_bkey_t *new_key;
+
+    new_key = castle_object_btree_key_construct(old_key,
+                                                start,
+                                                offending_dim);
+    if(!new_key)
+        return NULL;
+
+    /* If the offending dimension was out_of_range than the bounds, we need to set
+       the NEXT_FLAG for it */
+    if(out_of_range > 0)
+        castle_object_btree_key_dim_inc(new_key, offending_dim - 1);
+
+    return new_key;
+}
+
 c_vl_bkey_t* castle_object_btree_key_hypercube_next(const c_vl_bkey_t *key,
                                                     const c_vl_bkey_t *start,
                                                     const c_vl_bkey_t *end)
@@ -317,13 +338,10 @@ c_vl_bkey_t* castle_object_btree_key_hypercube_next(const c_vl_bkey_t *key,
     out_of_range = castle_object_btree_key_bounds_check(key, start, end, &offending_dim);
     if (out_of_range)
     {
-        BUG_ON(out_of_range < 0);
         if (offending_dim > 0)
-        {
-            c_vl_bkey_t *new_key = castle_object_btree_key_construct(key, start, offending_dim);
-            return new_key ? castle_object_btree_key_dim_inc(new_key, offending_dim-1) : NULL;
-        }
-        else return (c_vl_bkey_t *) end;
+            return castle_object_btree_key_skip(key, start, offending_dim, out_of_range);
+        else
+            return (c_vl_bkey_t *) end;
     }
     else return (c_vl_bkey_t *) key;
 }

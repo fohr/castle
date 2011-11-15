@@ -760,11 +760,14 @@ struct castle_norm_key *castle_norm_key_hypercube_next(const struct castle_norm_
     out_of_range = castle_norm_key_bounds_check(key, low, high, &offending_dim);
     if (out_of_range)
     {
-        BUG_ON(out_of_range < 0);
         if (offending_dim > 0)
         {
             struct castle_norm_key *result = castle_norm_key_meld(key, low, offending_dim);
-            return result ? castle_norm_key_dim_inc(result, offending_dim-1) : NULL;
+            if (!result)
+                return NULL;
+            if (out_of_range > 0)
+                castle_norm_key_dim_inc(result, offending_dim-1);
+            return result;
         }
         else return (struct castle_norm_key *) high;
     }
