@@ -5289,7 +5289,6 @@ static int castle_cache_flush(void *unused)
 #define MIN_FLUSH_FREQ  5                     /* Min flush rate: 5*128pgs/s = 2.5MB/s */
     int exiting, target_dirty_pgs, dirty_pgs, to_flush, last_flush, i, prio, aggressive;
     atomic_t in_flight = ATOMIC(0);
-    c_ext_inflight_t *data;
     c_chk_cnt_t start_chk;
     c_chk_cnt_t end_chk;
 
@@ -5373,6 +5372,11 @@ aggressive:
 
             while((--i >= 0) && (to_flush > 0))
             {
+                c_ext_mask_id_t mask_id = INVAL_MASK_ID;
+                c_ext_inflight_t *data = NULL;
+
+                might_resched();
+
                 /* Get next per-extent dirtytree to flush. */
                 spin_lock_irq(&castle_cache_block_lru_lock);
 
@@ -5385,17 +5389,28 @@ aggressive:
                 /* Move it to the end of the list. So that next time a different
                    extent will be considered next time around. */
                 list_move_tail(&dirtytree->list, &castle_cache_extent_dirtylists[prio]);
+
+                /* Take a reference on the extent with the lock held. Otherwise, it is
+                 * possible that extent could have been freed and marked all the dirty_c2bs
+                 * clean before taking reference on extent. */
+                mask_id = castle_extent_get_all(dirtytree->ext_id);
+                if (MASK_ID_INVAL(mask_id))
+                    castle_extent_dirtytree_put(dirtytree);
+
                 spin_unlock_irq(&castle_cache_block_lru_lock);
+
+                /* Check if extent is already dead. This shouldn't happen as before we delete
+                 * the extent, we get rid off all dirty pages. It could happen only if after last
+                 * link is gone. */
+                if (MASK_ID_INVAL(mask_id))
+                    continue;
 
                 /* On non-aggressive scan, only flush extents with plenty of dirty
                    blocks. This makes IO more efficient. */
                 if(!aggressive &&
                    prio != DEAD_EXT_FLUSH_PRIO &&
                    dirtytree->nr_pages < MIN_EFFICIENT_DIRTYTREE)
-                {
-                    castle_extent_dirtytree_put(dirtytree);
-                    continue;
-                }
+                    goto err_out;
 
                 /* We need to pass two reference counts to __castle_cache_extent_flush() one
                  * for global counting (for rate limiting) and another per extent cound to
@@ -5404,26 +5419,14 @@ aggressive:
                 if (!data)
                 {
                     castle_printk(LOG_DEVEL, "Failed to allocate space for flush element.\n");
-                    castle_extent_dirtytree_put(dirtytree);
-                    continue;
+                    goto err_out;
                 }
                 data->in_flight = &in_flight;
                 /* Give an initial reference, to handle end_io(c2b) being called before issuing all
                  * submit_c2b(). */
                 atomic_set(&data->ext_in_flight, 1);
 
-                /* Get a reference on extent with all outstanding masks. */
-                data->mask_id = castle_extent_get_all(dirtytree->ext_id);
-
-                /* Check if extent is already dead. This shouldn't happen as before we delete
-                 * the extent, we get rid off all dirty pages. It could happen only if after last
-                 * link is gone. */
-                if (MASK_ID_INVAL(data->mask_id))
-                {
-                    castle_extent_dirtytree_put(dirtytree);
-                    kmem_cache_free(castle_flush_cache, data);
-                    continue;
-                }
+                data->mask_id = mask_id;
 
                 /* Get the range of extent. */
                 castle_extent_mask_read_all(dirtytree->ext_id, &start_chk, &end_chk);
@@ -5438,17 +5441,23 @@ aggressive:
                                             &flushed,                       /* flushed_p    */
                                             0);                             /* waitlock     */
 
+                to_flush -= flushed;
+
                 /* If per extent inflight count reached 0, time to release the reference. All
                  * io's completed or failed, or nothing scheudled for flush. */
                 if (!atomic_dec_return(&data->ext_in_flight))
-                {
-                    castle_extent_put_all(data->mask_id);
-                    kmem_cache_free(castle_flush_cache, data);
-                }
+                    goto err_out;
 
                 castle_extent_dirtytree_put(dirtytree);
 
-                to_flush -= flushed;
+                continue;
+
+err_out:
+                castle_extent_dirtytree_put(dirtytree);
+                if (!MASK_ID_INVAL(mask_id))
+                    castle_extent_put_all(mask_id);
+                if (data)
+                    kmem_cache_free(castle_flush_cache, data);
             }
         }
 
