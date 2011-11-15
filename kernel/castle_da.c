@@ -2232,8 +2232,12 @@ void castle_da_rq_iter_cancel(c_da_rq_iter_t *iter)
 static void _castle_da_rq_iter_init(c_da_rq_iter_t *iter)
 {
     struct castle_iterator_type **iters_types = NULL;
+    struct castle_btree_type *btree;
     void **iters = NULL;
     int nr_iters, i;
+
+    /* Work out the btree type used by this DA. */
+    btree = castle_btree_type_get(iter->da->btree_type);
 
     /* Count how many relevant CTs there are. */
     for (i = 0, nr_iters = 0; i < iter->cts_proxy->nr_cts; i++)
@@ -2274,16 +2278,24 @@ static void _castle_da_rq_iter_init(c_da_rq_iter_t *iter)
                 ct_end_key      = iter->end_key;
                 break;
             case REDIR_INTREE:
-                /* Input tree, start at key_next(partition key).
-                 * Prior keys are handled by the output tree. */
-                ct_start_key    = proxy_ct->pk_next;
-                ct_end_key      = iter->end_key;
+                /* Input tree, start at key_next(partition key), or at start_key
+                 * whichever greater.
+                 * Prior keys (if queried for) are handled by the output tree. */
+                if(btree->key_compare(iter->start_key, proxy_ct->pk_next) >= 0)
+                    ct_start_key = iter->start_key;
+                else
+                    ct_start_key = proxy_ct->pk_next;
+                ct_end_key       = iter->end_key;
                 break;
             case REDIR_OUTTREE:
-                /* Output tree, end at partition key.  Later keys are
-                 * handled by the input trees. */
+                /* Output tree, end at partition key or at end key, whichever
+                 * smaller.
+                 * Later keys are handled by the input trees. */
                 ct_start_key    = iter->start_key;
-                ct_end_key      = proxy_ct->pk;
+                if(btree->key_compare(iter->end_key, proxy_ct->pk) >= 0)
+                    ct_end_key  = proxy_ct->pk;
+                else
+                    ct_end_key  = iter->end_key;
                 break;
             default:
                 BUG();
@@ -2304,7 +2316,7 @@ static void _castle_da_rq_iter_init(c_da_rq_iter_t *iter)
 
     /* Initialise merged iterator. */
     iter->merged_iter.nr_iters = iter->nr_iters;
-    iter->merged_iter.btree    = castle_btree_type_get(iter->da->btree_type);
+    iter->merged_iter.btree    = btree;
     castle_ct_merged_iter_init(&iter->merged_iter, iters, iters_types, NULL, iter->da);
     castle_ct_merged_iter_register_cb(&iter->merged_iter, castle_da_rq_iter_end_io, iter);
 
