@@ -769,7 +769,11 @@ struct castle_norm_key *castle_norm_key_hypercube_next(const struct castle_norm_
                 castle_norm_key_dim_inc(result, offending_dim-1);
             return result;
         }
-        else return (struct castle_norm_key *) high;
+        else
+        {
+            BUG_ON(out_of_range < 0);
+            return (struct castle_norm_key *) high;
+        }
     }
     else return (struct castle_norm_key *) key;
 }
