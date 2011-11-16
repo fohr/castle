@@ -1420,8 +1420,11 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
 
         /* Turn tombstones into invalid CVTs. */
         CVT_INVALID_INIT(get->cvt);
-        get->reply_start(get, err, 0, NULL, 0);
         castle_object_bvec_key_dealloc(c_bvec);
+        /* WARNING: after reply_start() its unsafe to access the attachment
+           (since the ref may be dropped). Its also unsafe to bvec_key_dealloc()
+           since that function uses the attachment. */
+        get->reply_start(get, err, 0, NULL, 0);
         castle_utils_bio_free(c_bvec->c_bio);
     }
 
