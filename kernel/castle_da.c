@@ -4499,11 +4499,11 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
                     __FUNCTION__,
                     merge->da->id,
                     merge->level,
-                    merge->out_tree->tree_ext_free.ext_id,
+                    out_tree->tree_ext_free.ext_id,
                     last_used_chunk,
                     merge->growth_control_tree.ext_used_bytes,
                     merge->growth_control_tree.ext_avail_bytes);
-            castle_extent_truncate(merge->out_tree->tree_ext_free.ext_id, last_used_chunk);
+            castle_extent_truncate(out_tree->tree_ext_free.ext_id, last_used_chunk);
         }
 
         if(merge->growth_control_data.ext_avail_bytes -
@@ -4515,11 +4515,11 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
                     __FUNCTION__,
                     merge->da->id,
                     merge->level,
-                    merge->out_tree->data_ext_free.ext_id,
+                    out_tree->data_ext_free.ext_id,
                     last_used_chunk,
                     merge->growth_control_data.ext_used_bytes,
                     merge->growth_control_data.ext_avail_bytes);
-            castle_extent_truncate(merge->out_tree->data_ext_free.ext_id, last_used_chunk);
+            castle_extent_truncate(out_tree->data_ext_free.ext_id, last_used_chunk);
         }
     }
 
