@@ -224,7 +224,9 @@ char *castle_da_wqs_names[NR_CASTLE_DA_WQS] = {"castle_da0"};
 
 static int castle_da_merge_check(struct castle_da_merge *merge, void *da);
 static void castle_ct_stats_commit(struct castle_component_tree *ct);
-static int castle_data_ext_should_drain(c_ext_id_t ext_id, struct castle_da_merge *merge);
+static signed int castle_data_ext_should_drain(c_ext_id_t ext_id, struct castle_da_merge *merge);
+static signed int castle_tree_ext_index_lookup(struct castle_component_tree *ct,
+                                               struct castle_da_merge *merge);
 static void castle_data_ext_size_get(c_ext_id_t ext_id, uint64_t *nr_bytes,
                                      uint64_t *nr_drain_bytes, uint64_t *nr_entries);
 static int castle_merge_thread_create(c_thread_id_t *thread_id, struct castle_double_array *da);
@@ -500,17 +502,61 @@ typedef struct castle_immut_iterator {
                                                    to a new node within the btree                 */
     void                         *private;
 
-
-    /////TODO get rid of this struct
-    struct {
-        c_ext_pos_t                   tree_cep;
-        c_ext_pos_t                   data_cep;
-        c_ext_pos_t                   latest_mo_cep;
-        int                           valid_and_fresh;
-    } shrinkable_ext_boundary;
     struct castle_da_merge *merge; /* use this pointer to determine if the merge is
                                       doing partial merges */
 } c_immut_iter_t;
+
+/**
+ * Check if ext_id is drainable, and if so return an array index according to merge->drain_exts
+ * ordering.
+ *
+ * @param [in]  ext_id    Data extent ID.
+ * @param [in]  merge     merge structure pointer, which contains drain_exts list.
+ *
+ * @return >= 0 index
+ *         -1   exent not found in drain_exts list
+ */
+static signed int castle_data_ext_should_drain(c_ext_id_t ext_id,
+                                               struct castle_da_merge *merge)
+{
+    int i;
+
+    /* The list contains all extents that are not to be merged. */
+    for (i=0; i<merge->nr_drain_exts; i++)
+        if (merge->drain_exts[i] == ext_id)
+            return i;
+
+    return -1;
+}
+
+/**
+ * Check if ct is on the merge->in_trees list, and if so return the array index.
+ *
+ * @param [in]  ct        cct pointer.
+ * @param [in]  merge     merge structure pointer, which contains in_trees list.
+ *
+ * @return >= 0 index
+ *         -1   ct not found in in_trees list
+ *
+ * @note   Currently this function is only used by an iterator to identify the
+ *         array index to use to propogate a valid extent boundary for the purpose
+ *         of eventual shrinking. Though this resulted in less data structure sprawl,
+ *         we could avoid calling this function by saving the index id somewhere because
+ *         it would never change. Nevertheless, in practical terms, the cost of this
+ *         is not high because we only call this on iter_next_node, and the size of the
+ *         list is usually quite small (typically 4 entries).
+ */
+static signed int castle_tree_ext_index_lookup(struct castle_component_tree *ct,
+                                               struct castle_da_merge *merge)
+{
+    int i;
+
+    for (i=0; i<merge->nr_trees; i++)
+        if (merge->in_trees[i] == ct)
+            return i;
+
+    return -1;
+}
 
 static int castle_ct_immut_iter_entry_find(c_immut_iter_t *iter,
                                            struct castle_btree_node *node,
@@ -713,13 +759,15 @@ static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
         return;
     if(MERGE_CHECKPOINTABLE(merge))
     {
-        iter->shrinkable_ext_boundary.tree_cep = iter->curr_c2b->cep;
-        iter->shrinkable_ext_boundary.data_cep = iter->shrinkable_ext_boundary.latest_mo_cep;
-        if(likely(iter->shrinkable_ext_boundary.tree_cep.offset!=0))
-            iter->shrinkable_ext_boundary.tree_cep.offset--;
-        if(likely(iter->shrinkable_ext_boundary.data_cep.offset!=0))
-            iter->shrinkable_ext_boundary.data_cep.offset--;
-        iter->shrinkable_ext_boundary.valid_and_fresh = 1;
+        /* set tree valid extent boundaries */
+        int index = castle_tree_ext_index_lookup(iter->tree, iter->merge);
+        BUG_ON(index < 0); /* Must have found the ct in the merge list */
+        iter->merge->shrinkable_extent_boundaries.tree[index] = iter->curr_c2b->cep;
+
+        /* propogate latest MO ceps as valid extent boundaries */
+        memcpy(merge->shrinkable_extent_boundaries.data,
+               merge->latest_mo_cep,
+               sizeof(c_ext_pos_t) * merge->nr_drain_exts);
     }
     iter->tree->curr_merge_c2b_cep = iter->curr_c2b->cep;
 }
@@ -781,7 +829,11 @@ static void castle_ct_immut_iter_next(c_immut_iter_t *iter,
                                                       0 /* Drain. */);
 
     if( (MERGE_CHECKPOINTABLE(merge)) && (CVT_MEDIUM_OBJECT(*cvt_p)) )
-            iter->shrinkable_ext_boundary.latest_mo_cep = cvt_p->cep;
+    {
+        int index = castle_data_ext_should_drain(cvt_p->cep.ext_id, iter->merge);
+        if (likely(index >= 0))
+            iter->merge->latest_mo_cep[index] = cvt_p->cep;
+    }
 
 }
 
@@ -843,11 +895,6 @@ static void castle_ct_immut_iter_init(c_immut_iter_t *iter,
     iter->private   = private;
     iter->async_iter.end_io = NULL;
     iter->async_iter.iter_type = &castle_ct_immut_iter;
-
-    iter->shrinkable_ext_boundary.tree_cep        = INVAL_EXT_POS;
-    iter->shrinkable_ext_boundary.data_cep        = INVAL_EXT_POS;
-    iter->shrinkable_ext_boundary.latest_mo_cep   = INVAL_EXT_POS;
-    iter->shrinkable_ext_boundary.valid_and_fresh = 0;
 
     first_node_cep.ext_id = iter->tree->tree_ext_free.ext_id;
     first_node_cep.offset = 0;
@@ -3566,7 +3613,7 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
         tree_size += atomic64_read(&ct->tree_ext_free.used);
 
         for (j=0; j<ct->nr_data_exts; j++)
-            if (castle_data_ext_should_drain(ct->data_exts[j], merge))
+            if (castle_data_ext_should_drain(ct->data_exts[j], merge) >= 0)
                 data_size += atomic64_read(&castle_data_exts_hash_get(ct->data_exts[j])->nr_bytes);
 
         bloom_size += atomic64_read(&merge->in_trees[i]->item_count);
@@ -3784,7 +3831,7 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
     BUG_ON(BLOCK_OFFSET(old_cep.offset) != 0);
 
     /* Don't copy if data extent is marked not to merge. */
-    if (!castle_data_ext_should_drain(old_cvt.cep.ext_id, merge))
+    if (castle_data_ext_should_drain(old_cvt.cep.ext_id, merge) == -1)
         return old_cvt;
 
     /* Should have a valid data extent. */
@@ -4868,10 +4915,12 @@ static void castle_da_merge_partial_merge_cleanup(struct castle_da_merge *merge,
 
     if (MERGE_CHECKPOINTABLE(merge))
     {
-        castle_kfree(merge->in_tree_shrink_activatable_cep);
-        castle_kfree(merge->in_tree_shrinkable_cep);
-        castle_kfree(merge->serdes.shrinkable_cep);
-        merge->serdes.shrinkable_cep = NULL;
+        castle_check_free(merge->shrinkable_extent_boundaries.tree);
+        castle_check_free(merge->latest_mo_cep);
+        castle_check_free(merge->shrinkable_extent_boundaries.data);
+        castle_check_free(merge->in_tree_shrink_activatable_cep);
+        castle_check_free(merge->in_tree_shrinkable_cep);
+        castle_check_free(merge->serdes.shrinkable_cep);
     }
 }
 
@@ -5181,9 +5230,9 @@ static void castle_da_merge_new_partition_activate(struct castle_da_merge *merge
 
     memcpy(merge->in_tree_shrinkable_cep,
             merge->in_tree_shrink_activatable_cep,
-            sizeof(c_ext_pos_t) * merge->nr_trees * 2);
+            sizeof(c_ext_pos_t) * (merge->nr_trees + merge->nr_drain_exts ));
 
-    for(i=0; i<merge->nr_trees * 2; i++)
+    for(i=0; i<(merge->nr_trees +merge->nr_drain_exts); i++)
         if(!EXT_POS_INVAL(merge->in_tree_shrinkable_cep[i]))
         {
             castle_printk(LOG_DEBUG, "%s::activating shrink partition "cep_fmt_str_nl,
@@ -5197,9 +5246,9 @@ static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
 {
     int i;
     uint16_t expected_node_size;
-    struct component_iterator *curr_comp;
-    c_immut_iter_t *curr_immut;
     struct castle_btree_node *node;
+    unsigned int cep_arr_index = 0;
+    unsigned int max_cep_arr_index = merge->nr_trees + merge->nr_drain_exts;
 
     BUG_ON(!merge);
     BUG_ON(!node_c2b);
@@ -5230,36 +5279,40 @@ static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
     BUG_ON(!merge->merged_iter->iterators);
     atomic64_inc(&merge->da->stats.partial_merges.partition_updates);
 
-    curr_comp = merge->merged_iter->iterators;
+
+
+    /* pack all shrinkable extent boundaries into a single list */
+    /* first the tree extents... */
     for(i = 0; i < merge->nr_trees; i++)
     {
-        BUG_ON(castle_da_iter_type_get(merge->in_trees[i]) != &castle_ct_immut_iter);
-        BUG_ON(!curr_comp);
-        curr_immut = (c_immut_iter_t *)curr_comp->iterator;
-        BUG_ON(!curr_immut);
-
-        merge->in_tree_shrink_activatable_cep[i*2]     = INVAL_EXT_POS;
-        merge->in_tree_shrink_activatable_cep[(i*2)+1] = INVAL_EXT_POS;
-
-        if(likely(curr_immut->shrinkable_ext_boundary.valid_and_fresh))
+        c_ext_pos_t *cep_source_arr = merge->shrinkable_extent_boundaries.tree;
+        BUG_ON(!cep_source_arr);
+        if ( !EXT_POS_INVAL(cep_source_arr[i]) )
         {
-            merge->in_tree_shrink_activatable_cep[i*2] =
-                curr_immut->shrinkable_ext_boundary.tree_cep;
-
-            /* Don't shrink data extent, unless it is marked for drain. */
-            if (castle_data_ext_should_drain(curr_immut->shrinkable_ext_boundary.data_cep.ext_id,
-                                             merge))
-                merge->in_tree_shrink_activatable_cep[(i*2)+1] =
-                            curr_immut->shrinkable_ext_boundary.data_cep;
-
-            curr_immut->shrinkable_ext_boundary.valid_and_fresh = 0;
-            debug("%s::[da %d level %d] scheduling shrink of "cep_fmt_str" and "cep_fmt_str"\n",
-                    __FUNCTION__, merge->da->id, merge->level,
-                    cep2str(merge->in_tree_shrink_activatable_cep[i*2]),
-                    cep2str(merge->in_tree_shrink_activatable_cep[(i*2)+1]));
+            merge->in_tree_shrink_activatable_cep[cep_arr_index++] =
+                cep_source_arr[i];
+            cep_source_arr[i] = INVAL_EXT_POS;
+            BUG_ON(cep_arr_index > max_cep_arr_index);
         }
-        curr_comp++;
     }
+    /* then the data extents... */
+    for(i = 0; i < merge->nr_drain_exts; i++)
+    {
+        c_ext_pos_t *cep_source_arr = merge->shrinkable_extent_boundaries.data;
+        BUG_ON(!cep_source_arr);
+        if ( !EXT_POS_INVAL(cep_source_arr[i]) )
+        {
+            merge->in_tree_shrink_activatable_cep[cep_arr_index++] =
+                cep_source_arr[i];
+            cep_source_arr[i] = INVAL_EXT_POS;
+            BUG_ON(cep_arr_index > max_cep_arr_index);
+        }
+    }
+    /* and explicitly set the remaining spots to INVAL, so we will not attempt to call
+       extent_shrink on garbage. */
+    for(i=cep_arr_index; i<max_cep_arr_index; i++)
+        merge->in_tree_shrink_activatable_cep[i] = INVAL_EXT_POS;
+
     castle_da_merge_new_partition_activate(merge);
 }
 
@@ -5291,7 +5344,7 @@ static int castle_da_merge_space_reserve(struct castle_da_merge *merge, c_val_tu
 
     /* If not a medium object or if this extent nor marked to drain, nothing else to be
      * done, just return. */
-    if (!CVT_MEDIUM_OBJECT(cvt) || !castle_data_ext_should_drain(cvt.cep.ext_id, merge))
+    if ( !CVT_MEDIUM_OBJECT(cvt) || (castle_data_ext_should_drain(cvt.cep.ext_id, merge) == -1) )
         return 0;
 
     /* Calculate space needed for the medium object. 4K aligned. */
@@ -5932,32 +5985,64 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
     merge->redirection_partition.node_c2b     = NULL;
     merge->redirection_partition.key          = NULL;
 
+    merge->shrinkable_extent_boundaries.tree  = NULL;
+    merge->latest_mo_cep                      = NULL;
+    merge->shrinkable_extent_boundaries.data  = NULL;
+    merge->in_tree_shrinkable_cep             = NULL;
+    merge->serdes.shrinkable_cep              = NULL;
+    merge->in_tree_shrink_activatable_cep     = NULL;
+
     if(MERGE_CHECKPOINTABLE(merge))
     {
+        /* When an iterator moves to a leaf node new node boundary, a new s.e.b is set. */
+        BUG_ON(nr_trees <= 0);
+        merge->shrinkable_extent_boundaries.tree =
+            castle_alloc(sizeof(c_ext_pos_t) * (nr_trees));
+        if(!merge->shrinkable_extent_boundaries.tree)
+            goto error_out;
+        for(i=0; i<nr_trees; i++)
+            merge->shrinkable_extent_boundaries.tree[i] = INVAL_EXT_POS;
+
+        if (nr_drain_exts > 0)
+        {
+            /* When an iterator sees a new medium object, the latest_mo_cep is updated */
+            merge->latest_mo_cep =
+                castle_alloc(sizeof(c_ext_pos_t) * (nr_drain_exts));
+            if(!merge->latest_mo_cep)
+                goto error_out;
+            for(i=0; i<nr_drain_exts; i++)
+                merge->latest_mo_cep[i] = INVAL_EXT_POS;
+
+            /* When an iterator sets a new s.e.b, the latest_mo_cep array is copied, thus ticking the
+               state pipeline. */
+            merge->shrinkable_extent_boundaries.data =
+                castle_alloc(sizeof(c_ext_pos_t) * (nr_drain_exts));
+            if(!merge->shrinkable_extent_boundaries.data)
+                goto error_out;
+            for(i=0; i<nr_drain_exts; i++)
+                merge->shrinkable_extent_boundaries.data[i] = INVAL_EXT_POS;
+        }
+
+        /* We allocate space for 1 leaf node extent per tree, plus all the medium object
+           extents we can eat. */
         merge->in_tree_shrinkable_cep =
-            castle_malloc(sizeof(c_ext_pos_t) * nr_trees * 2, GFP_KERNEL);
+            castle_alloc(sizeof(c_ext_pos_t) * (nr_drain_exts + nr_trees));
         if(!merge->in_tree_shrinkable_cep)
             goto error_out;
 
         merge->serdes.shrinkable_cep =
-            castle_malloc(sizeof(c_ext_pos_t) * nr_trees * 2, GFP_KERNEL);
+            castle_alloc(sizeof(c_ext_pos_t) * (nr_drain_exts + nr_trees));
         if(!merge->serdes.shrinkable_cep)
             goto error_out;
 
         merge->in_tree_shrink_activatable_cep =
-            castle_malloc(sizeof(c_ext_pos_t) * nr_trees * 2, GFP_KERNEL);
+            castle_alloc(sizeof(c_ext_pos_t) * (nr_drain_exts + nr_trees));
         if(!merge->in_tree_shrink_activatable_cep)
             goto error_out;
 
-        for(i=0; i<nr_trees*2; i++)
+        for(i=0; i<(nr_drain_exts + nr_trees); i++)
             merge->in_tree_shrinkable_cep[i] = merge->serdes.shrinkable_cep[i] =
                                     merge->in_tree_shrink_activatable_cep[i] = INVAL_EXT_POS;
-    }
-    else
-    {
-        merge->in_tree_shrinkable_cep          = NULL;
-        merge->serdes.shrinkable_cep           = NULL;
-        merge->in_tree_shrink_activatable_cep  = NULL;
     }
 
     merge->growth_control_tree.ext_used_bytes  = 0;
@@ -5984,13 +6069,17 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
 error_out:
     BUG_ON(!ret);
 
-    castle_check_kfree(merge->in_tree_shrink_activatable_cep);
-    castle_check_kfree(merge->serdes.shrinkable_cep);
-    castle_check_kfree(merge->in_tree_shrinkable_cep);
-    castle_check_kfree(merge->snapshot_delete.need_parent);
-    castle_check_kfree(merge->snapshot_delete.occupied);
+    castle_check_free(merge->shrinkable_extent_boundaries.tree);
+    castle_check_free(merge->latest_mo_cep);
+    castle_check_free(merge->shrinkable_extent_boundaries.data);
+    castle_check_free(merge->in_tree_shrink_activatable_cep);
+    castle_check_free(merge->serdes.shrinkable_cep);
+    castle_check_free(merge->in_tree_shrinkable_cep);
+
+    castle_check_free(merge->snapshot_delete.need_parent);
+    castle_check_free(merge->snapshot_delete.occupied);
     castle_version_states_free(&merge->version_states);
-    castle_check_kfree(merge->in_trees);
+    castle_check_free(merge->in_trees);
     castle_kfree(merge);
 
     debug_merges("Failed a merge with ret=%d\n", ret);
@@ -6249,7 +6338,7 @@ alloc_fail_1:
             for (i=0; i<merge->nr_trees; i++)
                 castle_ct_stats_commit(merge->in_trees[i]);
 
-            for(i=0; i<merge->nr_trees*2; i++)
+            for(i=0; i < (merge->nr_trees + merge->nr_drain_exts); i++)
                 debug("%s::[da %d level %d] scheduling shrink of "cep_fmt_str"\n",
                         __FUNCTION__, merge->da->id, merge->level,
                         cep2str(merge->in_tree_shrinkable_cep[i]));
@@ -6257,9 +6346,9 @@ alloc_fail_1:
             /* Commit cep shrink list */
             memcpy(merge->serdes.shrinkable_cep,
                    merge->in_tree_shrinkable_cep,
-                   sizeof(c_ext_pos_t) * merge->nr_trees * 2);
+                   sizeof(c_ext_pos_t) * (merge->nr_trees +merge->nr_drain_exts));
 
-            for(i=0; i<merge->nr_trees*2; i++)
+            for(i=0; i < (merge->nr_trees + merge->nr_drain_exts); i++)
             {
                 if(EXT_POS_INVAL(merge->serdes.shrinkable_cep[i]))
                     continue;
@@ -8050,18 +8139,6 @@ static void castle_ct_stats_commit(struct castle_component_tree *ct)
     castle_data_extent_stats_commit(ct);
 }
 
-static int castle_data_ext_should_drain(c_ext_id_t ext_id, struct castle_da_merge *merge)
-{
-    int i;
-
-    /* The list contains all extents that are not to be merged. */
-    for (i=0; i<merge->nr_drain_exts; i++)
-        if (merge->drain_exts[i] == ext_id)
-            return 1;
-
-    return 0;
-}
-
 /**
  * Create data extent object and add to the sysfs. This could be called for either during
  * creation or unmarshall.
@@ -8943,11 +9020,13 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge)
         /* == shrink extents == */
         if(merge->serdes.shrinkable_cep)
         {
-            for(i=0; i<merge_mstore->nr_trees * 2; i++)
+            for(i=0; i < (merge_mstore->nr_trees + merge_mstore->nr_drain_exts); i++)
             {
                 /* If this extent is data extent and marked not to merge. Don't shrink it. */
                 if(!EXT_POS_INVAL(merge->serdes.shrinkable_cep[i]))
                 {
+                    castle_printk(LOG_DEBUG, "%s::calling shrink on cep "cep_fmt_str_nl,
+                            __FUNCTION__, cep2str(merge->serdes.shrinkable_cep[i]));
                     castle_extent_shrink(merge->serdes.shrinkable_cep[i].ext_id,
                                          merge->serdes.shrinkable_cep[i].offset/C_CHK_SIZE);
                     atomic64_inc(&merge->da->stats.partial_merges.extent_shrinks);

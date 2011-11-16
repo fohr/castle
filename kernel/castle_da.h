@@ -79,21 +79,30 @@ struct castle_da_merge {
     uint32_t                      skipped_count;        /**< Count of entries from deleted
                                                              versions.                          */
 
-    struct castle_key_ptr_t       new_redirection_partition;
+    /* ----- extent shrink pipeline ----- */
+    /* iterators */
+    c_ext_pos_t                      *latest_mo_cep;
+    struct {
+        /* drainable MO extents: */
+        c_ext_pos_t                  *data; /* this holds a snapshot of latest_mo_cep */
+        c_ext_pos_t                  *tree;
+    } shrinkable_extent_boundaries;
 
-    ///////TODO move the iterators shrinkable_ext_boundary stuff here
-
-    /* partition update copies extent boundaries from immut_iter_t into ... */
+    /* partition update copies extent boundaries from immut_iter into ... */
     c_ext_pos_t                  *in_tree_shrink_activatable_cep;
     /* partition activate copies the above into... */
     c_ext_pos_t                  *in_tree_shrinkable_cep;
 
+    /* extent growth control */
     growth_control_state_t        growth_control_tree; /* btree leaf node extent growth control */
     growth_control_state_t        growth_control_data; /* medium objects extent growth control */
 
-    /* Members copied from castel_double_array.levels */
+    /* partition key update pipeline */
+    struct castle_key_ptr_t       new_redirection_partition;
     struct castle_key_ptr_t       redirection_partition; /**< The key used to decide if a query
                                                               should be redirected to output ct */
+
+
 
     /* Merge serialisation/deserialisation */
     struct {
