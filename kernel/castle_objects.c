@@ -1264,9 +1264,10 @@ out:
         get, cep2str(c2b->cep));
     put_c2b(c2b);
 
+    /* free the key via the proxy btree_type */
+    castle_btree_type_get(c_bvec->cts_proxy->btree_type)->key_dealloc(c_bvec->key);
     castle_da_cts_proxy_put(c_bvec->cts_proxy); /* castle_da_ct_read_complete() */
     castle_object_reference_release(cvt);
-    castle_object_bvec_key_dealloc(c_bvec);
     castle_utils_bio_free(c_bvec->c_bio);
 }
 
