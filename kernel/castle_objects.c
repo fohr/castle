@@ -1421,11 +1421,11 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
         /* Turn tombstones into invalid CVTs. */
         CVT_INVALID_INIT(get->cvt);
         castle_object_bvec_key_dealloc(c_bvec);
+        castle_utils_bio_free(c_bvec->c_bio);
         /* WARNING: after reply_start() its unsafe to access the attachment
            (since the ref may be dropped). Its also unsafe to bvec_key_dealloc()
            since that function uses the attachment. */
         get->reply_start(get, err, 0, NULL, 0);
-        castle_utils_bio_free(c_bvec->c_bio);
     }
 
     /* Inline values and local (all) counters. */
@@ -1437,14 +1437,17 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
 
         /* For INLINE values reference on CT is already released. Not safe to depend on ct pointer. */
         atomic64_add(cvt.length, &(castle_da_ptr_get(c_bvec->c_bio->attachment)->read_data_bytes));
+        castle_object_bvec_key_dealloc(c_bvec);
+        castle_utils_bio_free(c_bvec->c_bio);
+        /* WARNING: after reply_start() its unsafe to access the attachment
+           (since the ref may be dropped). Its also unsafe to bvec_key_dealloc()
+           since that function uses the attachment. */
         get->reply_start(get,
                          0,
                          cvt.length,
                          CVT_INLINE_VAL_PTR(cvt),
                          cvt.length);
         CVT_INLINE_FREE(cvt);
-        castle_object_bvec_key_dealloc(c_bvec);
-        castle_utils_bio_free(c_bvec->c_bio);
 
         FAULT(GET_FAULT);
     }
