@@ -5380,6 +5380,16 @@ aggressive:
                 /* Get next per-extent dirtytree to flush. */
                 spin_lock_irq(&castle_cache_block_lru_lock);
 
+                /* The dirtylist might have became empty once between us reading
+                   its size, and taking the lru lock. Check for that. */
+                if(list_empty(&castle_cache_extent_dirtylists[prio]))
+                {
+                    spin_unlock_irq(&castle_cache_block_lru_lock);
+                    /* Exit the loop early. */
+                    i=0;
+                    continue;
+                }
+
                 dirtytree = list_entry(castle_cache_extent_dirtylists[prio].next,
                         c_ext_dirtytree_t, list);
                 /* Get dirtytree ref under castle_cache_block_lru_lock.  Prevents
