@@ -4734,10 +4734,6 @@ static void castle_da_merge_cts_release(struct castle_da_merge *merge, int err)
     /* Merge Failed and out_tree is valid. */
     else if (out_tree)
     {
-        /* There shouldn't be any parallel reads on it. */
-        BUG_ON(atomic_read(&out_tree->ref_count) != 1);
-        BUG_ON(atomic_read(&out_tree->write_ref_count) != 0);
-
         /* Abort (i.e. free) incomplete bloom filter */
         if (out_tree->bloom_exists)
             castle_bloom_abort(&out_tree->bloom);
@@ -4760,6 +4756,13 @@ static void castle_da_merge_trees_cleanup(struct castle_da_merge *merge, int err
 
     /* Any operations on DA tree lists should be a transaction. */
     BUG_ON(!CASTLE_IN_TRANSACTION);
+
+    /* On error, there shouldn't be any parallel reads on it. */
+    if (out_tree && err)
+    {
+        BUG_ON(atomic_read(&out_tree->ref_count) != 1);
+        BUG_ON(atomic_read(&out_tree->write_ref_count) != 0);
+    }
 
     /* Delete the old trees from DA list.
        Note 1: Old trees may still be used by IOs and will only be destroyed on the last ct_put.
@@ -11908,9 +11911,14 @@ int castle_double_array_destroy(c_da_t da_id)
 
     castle_sysfs_da_del(da);
 
+    /* Invalidate, if there are any outstanding proxy references. */
+    BUG_ON(da->cts_proxy && (atomic_read(&da->cts_proxy->ref_cnt) != 1));
+    castle_da_cts_proxy_invalidate(da);
+
     castle_printk(LOG_USERINFO, "Marking DA %u for deletion\n", da_id);
     /* Set the destruction bit, which will stop further merges. */
     castle_da_deleted_set(da);
+
     /* Restart the merge threads, so that they get to exit, and drop their da refs. */
     castle_da_merge_restart(da, NULL);
 
