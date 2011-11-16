@@ -3398,9 +3398,8 @@ static void castle_extent_resource_release(void *data)
     castle_extents_hash_remove(ext);
 
     /* We have already freed-up all the space, consequently marked all dirty c2bs in
-     * that space as clean, there shouldn't be any more references on dirty tree,
-     * other than the live extent reference. */
-    BUG_ON(atomic_read(&ext->dirtytree->ref_cnt) != 1);
+     * that space as clean, there shouldn't be any more dirty c2bs. */
+    BUG_ON(ext->dirtytree->nr_pages);
 
     /* Drop 'extent exists' reference on c2b dirtytree. */
     castle_cache_dirtytree_demote(ext->dirtytree);

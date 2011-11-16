@@ -5390,20 +5390,14 @@ aggressive:
                    extent will be considered next time around. */
                 list_move_tail(&dirtytree->list, &castle_cache_extent_dirtylists[prio]);
 
-                /* Take a reference on the extent with the lock held. Otherwise, it is
-                 * possible that extent could have been freed and marked all the dirty_c2bs
-                 * clean before taking reference on extent. */
-                mask_id = castle_extent_get_all(dirtytree->ext_id);
-                if (MASK_ID_INVAL(mask_id))
-                    castle_extent_dirtytree_put(dirtytree);
-
                 spin_unlock_irq(&castle_cache_block_lru_lock);
 
+                mask_id = castle_extent_get_all(dirtytree->ext_id);
                 /* Check if extent is already dead. This shouldn't happen as before we delete
                  * the extent, we get rid off all dirty pages. It could happen only if after last
                  * link is gone. */
                 if (MASK_ID_INVAL(mask_id))
-                    continue;
+                    goto err_out;
 
                 /* On non-aggressive scan, only flush extents with plenty of dirty
                    blocks. This makes IO more efficient. */
