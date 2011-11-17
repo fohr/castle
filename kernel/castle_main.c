@@ -1665,7 +1665,8 @@ void castle_release_device(struct castle_slave *cs)
 void castle_release(struct castle_slave *cs)
 {
     BUG_ON(!cs);
-    castle_sysfs_slave_del(cs);
+    if (test_bit(CASTLE_SLAVE_SYSFS_BIT, &cs->flags))
+        castle_sysfs_slave_del(cs);
     /* Ghost slaves are only partially initialised, and have no bdev. */
     if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &cs->flags))
         castle_release_device(cs);
