@@ -27,9 +27,17 @@ static const uint32_t OBJ_TOMBSTONE = ((uint32_t)-1);
 /**********************************************************************************************/
 /* Helper functions */
 
-inline static void castle_object_bvec_key_dealloc(struct castle_bio_vec *c_bvec)
+/* this is unsafe to use after we've replied to the backend */
+inline static void castle_object_bvec_attach_key_dealloc(struct castle_bio_vec *c_bvec)
 {
     castle_double_array_btree_type_get(c_bvec->c_bio->attachment)->key_dealloc(c_bvec->key);
+    c_bvec->key = NULL;
+}
+
+/* this is unsafe to use if we're not guaranteed to have a proxy structure */
+inline static void castle_object_bvec_proxy_key_dealloc(struct castle_bio_vec *c_bvec)
+{
+    castle_btree_type_get(c_bvec->cts_proxy->btree_type)->key_dealloc(c_bvec->key);
     c_bvec->key = NULL;
 }
 
@@ -486,7 +494,7 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     BUG_ON(atomic_read(&c_bvec->reserv_nodes) != 0);
 
     /* Free the packed key and the bio. */
-    castle_object_bvec_key_dealloc(c_bvec);
+    castle_object_bvec_attach_key_dealloc(c_bvec);
     castle_utils_bio_free(c_bio);
 
     /* Tell the client everything is finished. */
@@ -1265,7 +1273,7 @@ out:
     put_c2b(c2b);
 
     /* free the key via the proxy btree_type */
-    castle_btree_type_get(c_bvec->cts_proxy->btree_type)->key_dealloc(c_bvec->key);
+    castle_object_bvec_proxy_key_dealloc(c_bvec);
     castle_da_cts_proxy_put(c_bvec->cts_proxy); /* castle_da_ct_read_complete() */
     castle_object_reference_release(cvt);
     castle_utils_bio_free(c_bvec->c_bio);
@@ -1421,10 +1429,10 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
 
         /* Turn tombstones into invalid CVTs. */
         CVT_INVALID_INIT(get->cvt);
-        castle_object_bvec_key_dealloc(c_bvec);
+        castle_object_bvec_attach_key_dealloc(c_bvec);
         castle_utils_bio_free(c_bvec->c_bio);
         /* WARNING: after reply_start() its unsafe to access the attachment
-           (since the ref may be dropped). Its also unsafe to bvec_key_dealloc()
+           (since the ref may be dropped). Its also unsafe to bvec_attach_key_dealloc()
            since that function uses the attachment. */
         get->reply_start(get, err, 0, NULL, 0);
     }
@@ -1438,10 +1446,10 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
 
         /* For INLINE values reference on CT is already released. Not safe to depend on ct pointer. */
         atomic64_add(cvt.length, &(castle_da_ptr_get(c_bvec->c_bio->attachment)->read_data_bytes));
-        castle_object_bvec_key_dealloc(c_bvec);
+        castle_object_bvec_attach_key_dealloc(c_bvec);
         castle_utils_bio_free(c_bvec->c_bio);
         /* WARNING: after reply_start() its unsafe to access the attachment
-           (since the ref may be dropped). Its also unsafe to bvec_key_dealloc()
+           (since the ref may be dropped). Its also unsafe to bvec_attach_key_dealloc()
            since that function uses the attachment. */
         get->reply_start(get,
                          0,
@@ -1672,7 +1680,7 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
     if (!err && CVT_INLINE(cvt))
         atomic64_add(cvt.length, &(castle_da_ptr_get(c_bvec->c_bio->attachment)->read_data_bytes));
 
-    castle_object_bvec_key_dealloc(c_bvec);
+    castle_object_bvec_attach_key_dealloc(c_bvec);
     castle_utils_bio_free(c_bvec->c_bio);
 
     /* Deal with error case, or non-existent value. */
