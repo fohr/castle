@@ -389,10 +389,10 @@ static USED char *castle_ext_type_str[] = {
 /* This type determines the way, this extent has to be handled in case of Low Free-Space (LFS)
  * situation. */
 typedef enum {
-    LFS_VCT_T_T0_GRP,
-    LFS_VCT_T_T0,
-    LFS_VCT_T_MERGE,
-    LFS_VCT_T_INVALID
+    LFS_VCT_T_T0_GRP,       /**< Intent to allocate freespace for many T0s.                 */
+    LFS_VCT_T_T0,           /**< Intent to allocate freespace for a single T0.              */
+    LFS_VCT_T_MERGE,        /**< Intent to allocate freespace for a merge.                  */
+    LFS_VCT_T_INVALID       /**< Intent to allocate freespace for unspecified use.          */
 } c_lfs_vct_type_t;
 
 #define LFS_VCT_T_MAX_TYPE LFS_VCT_T_INVALID
@@ -2275,15 +2275,17 @@ struct castle_da_cts_proxy_all_invalidate {
 
 /* Low free space structure being used by each merge in DA. */
 struct castle_da_lfs_ct_t {
-    uint8_t             space_reserved;     /**< Reserved space from low space handler  */
-    uint8_t             rwct;               /**< Whether allocating RWCT or not         */
-    struct castle_double_array *da;         /**< Double-array */
+    struct castle_double_array *da;                 /**< Doubling array.                        */
+    uint8_t                     space_reserved;     /**< Reserved space from low space handler. */
+    uint8_t                     rwct;               /**< Whether allocating RWCT or not.        */
+
+    /* Following members for use by LFS_VCT_T_MERGE only. */
     struct {
-        c_chk_cnt_t     size;               /**< Size of the extent to be reserved      */
-        c_ext_id_t      ext_id;             /**< ID to be set after space is reserved   */
+        c_chk_cnt_t     size;               /**< Size of the extent to be reserved.     */
+        c_ext_id_t      ext_id;             /**< ID to be set after space is reserved.  */
     } internal_ext, tree_ext, data_ext;
-    int                 leafs_on_ssds;
-    int                 internals_on_ssds;
+    int                         leafs_on_ssds;
+    int                         internals_on_ssds;
 };
 
 /* Possible states of merge serialisation control atomics in da->levels[].merge.serdes,

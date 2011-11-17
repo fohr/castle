@@ -211,12 +211,14 @@ static void castle_da_cts_proxy_invalidate(struct castle_double_array *da);
 static int __castle_da_rwct_create(struct castle_double_array *da,
                                    int cpu_index,
                                    int in_tran,
-                                   c_lfs_vct_type_t lfs_type);
+                                   c_lfs_vct_type_t lfs_type,
+                                   int lfs_check);
 static int castle_da_rwct_create(struct castle_double_array *da,
                                  int cpu_index,
                                  int in_tran,
                                  c_lfs_vct_type_t lfs_type);
 static int castle_da_no_disk_space(struct castle_double_array *da);
+static int castle_da_all_rwcts_create(struct castle_double_array *da, int in_tran, int lfs_check);
 void castle_da_next_ct_read(c_bvec_t *c_bvec);
 
 struct workqueue_struct *castle_da_wqs[NR_CASTLE_DA_WQS];
@@ -3359,9 +3361,10 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
                                                                    EXT_T_T0_LEAF_NODES :
                                                                    EXT_T_LEAF_NODES,
                                                               lfs->tree_ext.size,
-                                                              0,
-                                                              1,
-                                                              lfs_data, lfs_callback);
+                                                              0, /*ext_size*/
+                                                              1, /*in_tran*/
+                                                              lfs_data,
+                                                              lfs_callback);
             castle_printk(LOG_DEBUG, "%s::growable tree extent %d\n", __FUNCTION__,
                     lfs->tree_ext.ext_id);
         }
@@ -3372,8 +3375,9 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
                                                             EXT_T_T0_LEAF_NODES :
                                                             EXT_T_LEAF_NODES,
                                                        lfs->tree_ext.size,
-                                                       1,
-                                                       lfs_data, lfs_callback);
+                                                       1, /*in_tran*/
+                                                       lfs_data,
+                                                       lfs_callback);
     }
 
     if (EXT_ID_INVAL(lfs->tree_ext.ext_id))
@@ -3470,6 +3474,37 @@ no_space:
     debug("Failed to allocate from realloc\n");
 
     return -ENOSPC;
+}
+
+/**
+ * Low freespace event handled for creation of all T0 RWCTs.
+ *
+ * Called as a result of a T0 creation failure during castle_da_all_rwcts_create().
+ *
+ * @param   data    castle_da_lfs_ct_t pointer
+ *
+ * @return  0       We always return success regardless of whether
+ *                  castle_da_all_rwcts_create() succeeds.  If an extent fails
+ *                  to be correctly allocate a further LFS handler with this
+ *                  callback will be registered
+ *
+ * @also castle_da_all_rwcts_create()
+ */
+static int castle_da_lfs_all_rwcts_callback(void *data)
+{
+    struct castle_da_lfs_ct_t *lfs = data;
+    struct castle_double_array *da = lfs->da;
+
+    /* Reset LFS structure now as it will be reused in all_rwcts_create(). */
+    castle_da_lfs_ct_reset(lfs);
+    castle_da_all_rwcts_create(da, 0 /*in_tran*/, 0 /*lfs_check*/);
+    /* Decrement lfs_victim_count - if all_rwcts_create() failed it will have
+     * been incremented, if it succeeded, we may be re-enabling inserts on
+     * this doubling-array.  Ensure we do it after all_rwcts_create() to
+     * prevent races. */
+    atomic_dec(&da->lfs_victim_count);
+
+    return 0;
 }
 
 /**
@@ -8552,7 +8587,11 @@ static void __castle_da_level0_modified_promote(struct work_struct *work)
         {
             castle_printk(LOG_INFO, "Promote for DA 0x%x level 0 RWCT seq %u (has %ld items)\n",
                     da->id, ct->seq, atomic64_read(&ct->item_count));
-            __castle_da_rwct_create(da, cpu_index, 0 /*in_tran*/, LFS_VCT_T_INVALID);
+            __castle_da_rwct_create(da,
+                                    cpu_index,
+                                    0 /*in_tran*/,
+                                    LFS_VCT_T_INVALID,
+                                    1 /*lfs_check*/);
         }
 
         castle_ct_put(ct, 1 /*write*/, NULL);
@@ -9193,14 +9232,15 @@ void castle_double_arrays_pre_writeback(void)
  * the old CT promoted in an atomic fashion (da->lock held).  This means we are
  * guaranteed to have none or all of the CTs at level 0.
  *
- * @param [inout] DA Double-Array structure
- * @param [in] type of the Low Free Space structure - Set to LFS_T_VCT_INVALID,
- *             if no need to handle low free space events.
+ * @param   da          Doubling array to create T0 CTs for
+ * @param   in_tran     Whether CASTLE_TRANSACTION_LOCK is held
+ * @param   lfs_check   Whether to perform LFS checks before attempting allocations
  *
  * @also castle_double_array_start()
  * @also castle_da_rwct_create()
+ * @also castle_da_lfs_all_rwcts_callback()
  */
-static int castle_da_all_rwcts_create(struct castle_double_array *da, c_lfs_vct_type_t lfs_type)
+static int castle_da_all_rwcts_create(struct castle_double_array *da, int in_tran, int lfs_check)
 {
     struct list_head *l, *p;
     LIST_HEAD(list);
@@ -9236,7 +9276,11 @@ static int castle_da_all_rwcts_create(struct castle_double_array *da, c_lfs_vct_
     /* No RWCTs at level 0 in this DA.  Create on per request-handling CPU. */
     for (cpu_index = 0; cpu_index < castle_double_array_request_cpus(); cpu_index++)
     {
-        if (__castle_da_rwct_create(da, cpu_index, 1 /*in_tran*/, lfs_type) != EXIT_SUCCESS)
+        if (__castle_da_rwct_create(da,
+                                    cpu_index,
+                                    in_tran,
+                                    LFS_VCT_T_T0_GRP,
+                                    lfs_check) != EXIT_SUCCESS)
         {
             castle_printk(LOG_WARN, "Failed to create T0 %d for DA %u\n", cpu_index, da->id);
             goto err_out;
@@ -9278,7 +9322,7 @@ err_out:
  */
 static int castle_da_rwct_init(struct castle_double_array *da, void *unused)
 {
-    castle_da_all_rwcts_create(da, LFS_VCT_T_INVALID);
+    castle_da_all_rwcts_create(da, 1 /*in_tran*/, 1 /*lfs_check*/);
 
     return 0;
 }
@@ -9954,6 +9998,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
  * @param cpu_index Offset within list to insert newly allocated CT
  * @param in_tran   Set if the caller is already within CASTLE_TRANSACTION
  * @param lfs_type  Type of the low free space event handler. Set it to LFS_VCT_T_INVALID.
+ * @param lfs_check Whether to perform LFS checks before attempting allocations
  *
  * Holds the DA growing lock while:
  *
@@ -9966,8 +10011,11 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
  * @also castle_ct_alloc()
  * @also castle_ext_fs_init()
  */
-static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index, int in_tran,
-                                   c_lfs_vct_type_t lfs_type)
+static int __castle_da_rwct_create(struct castle_double_array *da,
+                                   int cpu_index,
+                                   int in_tran,
+                                   c_lfs_vct_type_t lfs_type,
+                                   int lfs_check)
 {
     struct castle_component_tree *ct, *old_ct;
     struct list_head *l = NULL;
@@ -9980,7 +10028,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     void *lfs_data;
     struct castle_da_lfs_ct_t *lfs = &da->t0_lfs[cpu_index];
 
-    if (castle_da_no_disk_space(da))
+    if (lfs_check && castle_da_no_disk_space(da))
         return -ENOSPC;
 
     /* Caller must have set the DA's growing bit. */
@@ -9997,18 +10045,23 @@ static int __castle_da_rwct_create(struct castle_double_array *da, int cpu_index
     ct->seq = ((tree_seq_t)cpu_index << TREE_SEQ_SHIFT) + ct->seq;
 
     /* Set callback based on LFS_VCT_T_ type. */
-    if (lfs_type == LFS_VCT_T_T0)
+    switch (lfs_type)
     {
-        lfs_callback = castle_da_lfs_rwct_callback;
-        lfs_data = lfs;
+        case LFS_VCT_T_T0_GRP:
+            lfs_callback = castle_da_lfs_all_rwcts_callback;
+            lfs_data     = lfs;
+            break;
+        case LFS_VCT_T_T0:
+            lfs_callback = castle_da_lfs_rwct_callback;
+            lfs_data     = lfs;
+            break;
+        case LFS_VCT_T_INVALID:
+            lfs_callback = NULL;
+            lfs_data     = NULL;
+            break;
+        default:
+            BUG();
     }
-    else
-    {
-        BUG_ON(lfs_type != LFS_VCT_T_INVALID);
-        lfs_callback = NULL;
-        lfs_data = NULL;
-    }
-
 
     /* If the space is not already reserved for the T0, allocate it from freespace. */
     if (!lfs->space_reserved)
@@ -10120,7 +10173,9 @@ no_space:
  *
  * @also __castle_da_rwct_create()
  */
-static int castle_da_rwct_create(struct castle_double_array *da, int cpu_index, int in_tran,
+static int castle_da_rwct_create(struct castle_double_array *da,
+                                 int cpu_index,
+                                 int in_tran,
                                  c_lfs_vct_type_t lfs_type)
 {
     int ret;
@@ -10137,7 +10192,7 @@ static int castle_da_rwct_create(struct castle_double_array *da, int cpu_index, 
             msleep(1); /* @TODO use out_of_line_wait_on_bit(_lock)() here instead */
         return -EAGAIN;
     }
-    ret = __castle_da_rwct_create(da, cpu_index, in_tran, lfs_type);
+    ret = __castle_da_rwct_create(da, cpu_index, in_tran, lfs_type, 1 /*lfs_check*/);
     castle_da_growing_rw_clear(da);
 
     return ret;
@@ -10173,7 +10228,7 @@ int castle_double_array_make(c_da_t da_id, c_ver_t root_version, c_da_opts_t opt
     castle_sysfs_da_add(da);
 
     /* Allocate all T0 RWCTs. */
-    ret = castle_da_all_rwcts_create(da, LFS_VCT_T_INVALID);
+    ret = castle_da_all_rwcts_create(da, 1 /*in_tran*/, 1 /*lfs_check*/);
     if (ret != EXIT_SUCCESS)
     {
         castle_printk(LOG_WARN, "Exiting from failed ct create.\n");
@@ -10260,7 +10315,6 @@ static struct castle_component_tree* castle_da_rwct_acquire(struct castle_double
 {
     struct castle_component_tree *ct;
     int ret;
-
 
 again:
     if (castle_da_no_disk_space(da))
@@ -11461,7 +11515,7 @@ static void castle_da_reserve(struct castle_double_array *da, c_bvec_t *c_bvec)
     uint64_t value_len, req_btree_space, req_medium_space;
     int ret;
 
-    if(castle_da_no_disk_space(da))
+    if (castle_da_no_disk_space(da))
     {
         c_bvec->queue_complete(c_bvec, -ENOSPC);
         return;
