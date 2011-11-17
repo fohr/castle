@@ -6632,8 +6632,9 @@ static int castle_periodic_checkpoint(void *unused)
 
         if (castle_checkpoint_syncing)
         {
-            BUG_ON(atomic_read(&castle_extents_presyncvar) == 1);
-            atomic_inc(&castle_extents_presyncvar);
+            atomic_set(&castle_extents_postsyncvar, 0);
+            BUG_ON(atomic_read(&castle_extents_presyncvar));
+            atomic_set(&castle_extents_presyncvar, 1);
             wake_up(&process_syncpoint_waitq);
             wait_event_interruptible(process_syncpoint_waitq, atomic_read(&castle_extents_presyncvar) == 0);
         }
@@ -6670,8 +6671,9 @@ static int castle_periodic_checkpoint(void *unused)
 
         if (castle_checkpoint_syncing)
         {
-            BUG_ON(atomic_read(&castle_extents_postsyncvar) == 1);
-            atomic_inc(&castle_extents_postsyncvar);
+            BUG_ON(atomic_read(&castle_extents_postsyncvar));
+            atomic_set(&castle_extents_postsyncvar, 1);
+            wake_up(&process_syncpoint_waitq);
         }
 
         /* All meta extent pool frozen entries can now be freed. */

@@ -6071,7 +6071,7 @@ finishing:
                 if (process_exiting)
                     wait_event_interruptible(process_syncpoint_waitq, atomic_read(&castle_extents_presyncvar) == 1);
 
-                if (atomic_read(&castle_extents_presyncvar) == 1)
+                if (atomic_read(&castle_extents_presyncvar))
                 {
                     /*
                      * Checkpoint has indicated it is about to update freespace. Move all current
@@ -6110,7 +6110,8 @@ finishing:
                     if (list_empty(&extent_list))
                         rebuild_read_chunks = rebuild_write_chunks = 0;
 
-                    atomic_dec(&castle_extents_presyncvar);
+                    BUG_ON(atomic_read(&castle_extents_postsyncvar));
+                    atomic_set(&castle_extents_presyncvar, 0);
                     wake_up(&process_syncpoint_waitq);
                 }
 
@@ -6190,13 +6191,11 @@ retry:
                 }
 
                 if (process_exiting)
-                {
                     wait_event_interruptible(process_syncpoint_waitq, atomic_read(&castle_extents_postsyncvar) == 1);
-                }
 
-                if (atomic_read(&castle_extents_postsyncvar) == 1)
+                if (atomic_read(&castle_extents_postsyncvar))
                 {
-                    atomic_dec(&castle_extents_postsyncvar);
+                    atomic_set(&castle_extents_postsyncvar, 0);
                     list_for_each_safe(writeback_entry, wtmp, &writeback_list)
                     {
                         writeback_info_t *winfop;
