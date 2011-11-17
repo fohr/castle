@@ -2777,6 +2777,12 @@ static void castle_back_big_put_complete(struct castle_object_replace *replace, 
         if (op->req.tag == CASTLE_RING_PUT_CHUNK && op->buf)
             castle_back_buffer_put(stateful_op->conn, op->buf);
 
+        /* If we receive -EEXIST here, it must be because we tried to insert an object into a T0 that
+           already contains an object with the same key but newer timestamp (see c_o_replace_cvt_get);
+           the entry is dropped, and we choose to be quiet about it by pretending there was no error. */
+        if(err==-EEXIST)
+            err=0;
+
         castle_back_reply(op, err, stateful_op->token, 0, 0);
         stateful_op->curr_op = NULL;
     }

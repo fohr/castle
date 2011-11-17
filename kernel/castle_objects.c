@@ -644,7 +644,7 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
         *new_cvt = INVAL_VAL_TUP;
         *cvt = *new_cvt;
         atomic64_inc(&c_bvec->tree->da->stats.user_timestamps.t0_discards);
-        debug(LOG_DEVEL, "%s::dropping an insert because it's timestamp (%llu) "
+        debug("%s::dropping an insert because it's timestamp (%llu) "
                 "is \"older\" than the timestamp of an existing entry (%llu).\n",
                 __FUNCTION__, replace->user_timestamp, existing_object_user_timestamp);
         return -EEXIST; /* existential crisis */
