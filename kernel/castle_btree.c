@@ -363,7 +363,7 @@ static int castle_btree_node_space_get(struct castle_component_tree *ct,
     /* Otherwise we are allocating space for a leaf node. We always preallocate it,
        except when working with the global ct. */
     BUG_ON(rev_level != 0);
-    BUG_ON((ct->tree_depth > 0) &&
+    BUG_ON((atomic_read(&ct->tree_depth) > 0) &&
            (!was_preallocated ^ (ct == &castle_global_tree)));
 
     ret = castle_ext_freespace_get(&ct->tree_ext_free,
@@ -751,16 +751,16 @@ static void castle_btree_new_root_create(c_bvec_t *c_bvec, btree_t type)
             c_bvec->version);
     BUG_ON(c_bvec->btree_parent_node);
     /* Internal nodes (and the root node always is), are never preallocated. */
-    BUG_ON(castle_btree_node_was_preallocated(c_bvec->tree, ct->tree_depth));
+    BUG_ON(castle_btree_node_was_preallocated(c_bvec->tree, atomic_read(&ct->tree_depth)));
     /* Create the node */
     c2b = castle_btree_node_create(ct,
                                    0              /* version */,
-                                   ct->tree_depth /* level */,
+                                   atomic_read(&ct->tree_depth) /* level */,
                                    0              /* wasn't preallocated */);
     /* We should be under write lock here, check if we can read lock it (and BUG) */
     BUG_ON(down_read_trylock(&ct->lock));
     ct->root_node = c2b->cep;
-    ct->tree_depth++;
+    atomic_inc(&ct->tree_depth);
     /* If all succeeded save the new node as the parent in bvec */
     c_bvec->btree_parent_node = c2b;
     /* Release the version lock (c2b_forget will no longer do that,
@@ -1485,7 +1485,7 @@ static void _castle_btree_submit(struct work_struct *work)
     /* This will lock the component tree. */
     root_cep = castle_btree_root_get(c_bvec);
     /* Number of levels in the tree can be read safely now */
-    c_bvec->btree_levels = ct->tree_depth;
+    c_bvec->btree_levels = atomic_read(&ct->tree_depth);
     BUG_ON(EXT_POS_INVAL(root_cep));
     castle_debug_bvec_update(c_bvec, C_BVEC_VERSION_FOUND);
     __castle_btree_submit(c_bvec, root_cep, btree->max_key);
@@ -2058,7 +2058,7 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
 #ifdef DEBUG
     iter_debug("iter %p, node %p, ct = %d, ct->tree_depth = %d, ct root node "
             cep_fmt_str" version = %d\n",
-            c_iter, node, c_iter->tree->seq, c_iter->tree->tree_depth,
+            c_iter, node, c_iter->tree->seq, atomic_read(&c_iter->tree->tree_depth),
             cep2str(c_iter->tree->root_node), c_iter->version);
     iter_debug("iter %p, node %p, parent_key: ", c_iter, node);
     if (c_iter->parent_key)
@@ -2290,7 +2290,7 @@ static int __castle_btree_iter_start(c_iter_t *c_iter)
     down_read(&c_iter->tree->lock);
 
     c_iter->depth = 0;
-    c_iter->btree_levels = c_iter->tree->tree_depth;
+    c_iter->btree_levels = atomic_read(&c_iter->tree->tree_depth);
     root_cep = c_iter->tree->root_node;
     if(EXT_POS_INVAL(root_cep))
     {

@@ -44,7 +44,7 @@ struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TRE
                                                    .level           = -1,
                                                    .node_sizes      = {[0 ... (MAX_BTREE_DEPTH-1)] =
                                                                        MTREE_NODE_SIZE},
-                                                   .tree_depth      = -1,
+                                                   .tree_depth      = ATOMIC(-1),
                                                    .root_node       = INVAL_EXT_POS,
                                                    .da_list         = {NULL, NULL},
                                                    .hash_list       = {NULL, NULL},
@@ -541,7 +541,7 @@ int castle_global_tree_init(void)
     /* Save the root node in the global tree */
     castle_global_tree.root_node = c2b->cep;
     /* We know that the tree is 1 level deep at the moment */
-    castle_global_tree.tree_depth = 1;
+    atomic_set(&castle_global_tree.tree_depth, 1);
     /* Release btree node c2b */
     write_unlock_c2b(c2b);
     put_c2b(c2b);

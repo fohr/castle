@@ -1088,7 +1088,7 @@ struct castle_component_tree {
                                                 node_sizes[tree_depth-1] is the size of the
                                                 root node. */
     struct rw_semaphore lock;              /**< Protects root_node, tree depth & last_node.     */
-    uint8_t             tree_depth;
+    atomic_t            tree_depth;
     c_ext_pos_t         root_node;
     struct list_head    da_list;
     struct list_head    hash_list;
@@ -1162,30 +1162,30 @@ struct castle_clist_entry {
     /*          4 */ btree_t         btree_type;
     /*          5 */ uint8_t         dynamic;
     /*          6 */ uint8_t         level;
-    /*          7 */ uint8_t         tree_depth;
-    /*          8 */ uint64_t        item_count;
-    /*         16 */ c_ext_pos_t     root_node;
-    /*         32 */ c_ext_free_bs_t internal_ext_free_bs;
-    /*         96 */ c_ext_free_bs_t tree_ext_free_bs;
-    /*        160 */ c_ext_free_bs_t data_ext_free_bs;
-    /*        224 */ uint64_t        large_ext_chk_cnt;
-    /*        232 */ uint32_t        bloom_num_chunks;
-    /*        236 */ uint32_t        bloom_num_blocks_last_chunk;
-    /*        240 */ uint64_t        bloom_chunks_offset;
-    /*        248 */ c_ext_id_t      bloom_ext_id;
-    /*        256 */ uint32_t        bloom_num_btree_nodes;
-    /*        260 */ uint32_t        bloom_block_size_pages;
-    /*        264 */ tree_seq_t      seq;
-    /*        272 */ uint8_t         bloom_exists;
-    /*        273 */ uint8_t         bloom_num_hashes;
-    /*        274 */ uint16_t        node_sizes[MAX_BTREE_DEPTH];
-    /*        294 */ tree_seq_t      data_age;
-    /*        302 */ uint32_t        nr_data_exts;
-    /*        306 */ uint64_t        nr_bytes;
-    /*        314 */ uint64_t        nr_drained_bytes;
-    /*        322 */ uint64_t        max_user_timestamp;
-    /*        330 */ uint64_t        min_user_timestamp;
-    /*        338 */ uint8_t         _unused[174];
+    /*          7 */ uint64_t        item_count;
+    /*         15 */ c_ext_pos_t     root_node;
+    /*         31 */ c_ext_free_bs_t internal_ext_free_bs;
+    /*         95 */ c_ext_free_bs_t tree_ext_free_bs;
+    /*        159 */ c_ext_free_bs_t data_ext_free_bs;
+    /*        223 */ uint64_t        large_ext_chk_cnt;
+    /*        231 */ uint32_t        bloom_num_chunks;
+    /*        235 */ uint32_t        bloom_num_blocks_last_chunk;
+    /*        239 */ uint64_t        bloom_chunks_offset;
+    /*        247 */ c_ext_id_t      bloom_ext_id;
+    /*        255 */ uint32_t        bloom_num_btree_nodes;
+    /*        259 */ uint32_t        bloom_block_size_pages;
+    /*        263 */ tree_seq_t      seq;
+    /*        271 */ uint8_t         bloom_exists;
+    /*        272 */ uint8_t         bloom_num_hashes;
+    /*        273 */ uint16_t        node_sizes[MAX_BTREE_DEPTH];
+    /*        293 */ tree_seq_t      data_age;
+    /*        301 */ uint32_t        nr_data_exts;
+    /*        305 */ uint64_t        nr_bytes;
+    /*        313 */ uint64_t        nr_drained_bytes;
+    /*        321 */ uint64_t        max_user_timestamp;
+    /*        329 */ uint64_t        min_user_timestamp;
+    /*        337 */ int32_t         tree_depth;
+    /*        341 */ uint8_t         _unused[171];
     /*        512 */
 } PACKED;
 STATIC_BUG_ON(sizeof(struct castle_clist_entry) != 512);
@@ -1243,10 +1243,8 @@ struct castle_dmserlist_entry {
 
     /**************** partially complete output ct: marshalled once per checkpoint ****************/
                     /* sizing/alignment of the overall struct assumes MAX_BTREE_DEPTH=10 */
-    /*         16 */ uint64_t                         nr_entries;
-    /*         24 */ uint64_t                         large_chunks;
-    /*         32 */ struct castle_clist_entry        out_tree;
-    /*        544 */
+    /*         16 */ struct castle_clist_entry        out_tree;
+    /*        528 */
                      struct {
                          /*   0 */ c_ext_pos_t                 node_c2b_cep;
                          /*  16 */ int32_t                     next_idx;
@@ -1255,25 +1253,26 @@ struct castle_dmserlist_entry {
                          /*  28 */ c_ver_t                     valid_version;
                          /*  32 */
                      } levels[MAX_BTREE_DEPTH]; /* 32 * 10 = 320 */
-    /*        864 */
-    /*        864 */ c_ext_pos_t                      last_leaf_node_cep;
-    /*        880 */ struct castle_bbp_entry          out_tree_bbp;
-    /*        950 */ uint8_t                          have_bbp;
-    /*        951 */ btree_t                          btree_type;
-    /*        952 */ int32_t                          root_depth;
-    /*        956 */ int8_t                           completing;
-    /*        957 */ int8_t                           is_new_key;
-    /*        958 */ uint32_t                         skipped_count;
+    /*        848 */
+    /*        848 */ c_ext_pos_t                      last_leaf_node_cep;
+    /*        864 */ struct castle_bbp_entry          out_tree_bbp;
+    /*        934 */ uint8_t                          have_bbp;
+    /*        935 */ btree_t                          btree_type;
+    /*        936 */ int8_t                           completing;
+    /*        937 */ int8_t                           is_new_key;
+    /*        938 */ uint32_t                         skipped_count;
                      /* Although the redirection partition is contained by the castle_double_array
                         struct, SERDES is left to merge because the partition is tighly linked to
                         merge SERDES state. */
-    /*        962 */ c_ext_pos_t                      redirection_partition_node_cep;
-    /*        978 */ int32_t                          redirection_partition_node_size;
-    /*        982 */ uint64_t                         growth_control_tree_ext_used_bytes;
-    /*        990 */ uint64_t                         growth_control_data_ext_used_bytes;
-    /*        998 */ uint8_t                          pad_to_iters[6];  /**< beyond here entries are
-                                                                           frequently marshalled, so
-                                                                           alignment is important */
+    /*        942 */ c_ext_pos_t                      redirection_partition_node_cep;
+    /*        958 */ int32_t                          redirection_partition_node_size;
+    /*        962 */ uint64_t                         growth_control_tree_ext_used_bytes;
+    /*        970 */ uint64_t                         growth_control_data_ext_used_bytes;
+    /*        978 */ uint8_t                          pad_to_iters[26];  /**< beyond here entries
+                                                                              are frequently
+                                                                              marshalled, so
+                                                                              alignment is
+                                                                              important */
     /*         */
 
     /**************** input ct seq and iters: iters potentially marshalled often *****************/

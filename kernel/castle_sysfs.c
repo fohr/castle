@@ -386,11 +386,11 @@ static ssize_t da_tree_list_show(struct kobject *kobj,
             ret = snprintf(buf, PAGE_SIZE,
                            "%s[%lu %u %u %u %llu %lu %lu] ",
                            buf,
-                           atomic64_read(&ct->item_count),       /* Item count*/
-                           (uint32_t)ct->node_sizes[0],          /* Leaf node size */
-                           ct->tree_depth > 1 ?                  /* Internal node size */
+                           atomic64_read(&ct->item_count),         /* Item count*/
+                           (uint32_t)ct->node_sizes[0],            /* Leaf node size */
+                           atomic_read(&ct->tree_depth) > 1 ?      /* Internal node size */
                                (uint32_t)ct->node_sizes[1] : 0,
-                           (uint32_t)ct->tree_depth,             /* Depth of tree */
+                           (uint32_t)atomic_read(&ct->tree_depth), /* Depth of tree */
                            ct_size,
                            atomic64_read(&ct->min_user_timestamp),
                            atomic64_read(&ct->max_user_timestamp));
@@ -968,11 +968,7 @@ static ssize_t ct_size_show(struct kobject *kobj,
 {
     struct castle_component_tree *ct = container_of(kobj, struct castle_component_tree, kobj);
 
-    if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags))
-        sprintf(buf, "Item Count: %llu\n", ct->merge->nr_entries);
-    else
-        sprintf(buf, "Item Count: %lu\n", atomic64_read(&ct->item_count));
-
+    sprintf(buf, "Item Count: %lu\n", atomic64_read(&ct->item_count));
     sprintf(buf, "%sReserved Bytes: %llu\n", buf, ct->tree_ext_free.ext_size);
     sprintf(buf, "%sUsed Bytes: %lu\n", buf, atomic64_read(&ct->nr_bytes));
 
