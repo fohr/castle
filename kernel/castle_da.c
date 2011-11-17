@@ -4221,34 +4221,38 @@ static void castle_da_entry_add(struct castle_da_merge *merge,
                                 int depth,
                                 void *key,
                                 c_ver_t version,
-                                c_val_tup_t cvt,
+                                c_val_tup_t _cvt,
                                 int is_re_add)
 {
+    signed int initial_root_depth = atomic_read(&merge->out_tree->tree_depth);
+    c_val_tup_t* cvt = &_cvt;
+    int cvt_is_preadoption_cvt = 0;
     c_val_tup_t* preadoption_cvt = NULL;
-    int initial_root_depth = atomic_read(&merge->out_tree->tree_depth);
 
     do{
         if (depth==0)
-            BUG_ON(!CVT_LEAF_VAL(cvt) && !CVT_LOCAL_COUNTER(cvt));
+            BUG_ON(!CVT_LEAF_VAL(*cvt) && !CVT_LOCAL_COUNTER(*cvt));
 
-        preadoption_cvt = _castle_da_entry_add(merge, depth, key, version, cvt, is_re_add);
+        preadoption_cvt = _castle_da_entry_add(merge, depth, key, version, *cvt, is_re_add);
+
+        if (cvt_is_preadoption_cvt)
+            castle_check_kfree(cvt); /* preadoption_cvt malloc'd by _castle_da_entry_add */
+
         if (!preadoption_cvt) return; /* no new node created */
 
-        /*  if _castle_da_entry_add returned non-NULL, then a sibling node was created */
-        //TODO@tr restructure this so there's no memcpy
-        memcpy(&cvt, preadoption_cvt, sizeof(c_val_tup_t));
-        castle_kfree(preadoption_cvt); /* malloc'd by _castle_da_entry_add */
+        cvt = preadoption_cvt;
         preadoption_cvt = NULL;
+        cvt_is_preadoption_cvt = 1;
 
         key = merge->out_btree->max_key;
         is_re_add = 0;
         depth++;
 
         /* at most this loop can add 1 level */
-        BUG_ON(depth > initial_root_depth+1);
+        BUG_ON(depth > initial_root_depth+2);
         BUG_ON(atomic_read(&merge->out_tree->tree_depth) > (initial_root_depth+1) );
-        debug("%s::preadopting new orphan node for merge on da %d level %d.\n",
-                __FUNCTION__, merge->da->id, merge->level);
+        debug("%s::[%p] preadopting new orphan node for merge id %u level %d.\n",
+                __FUNCTION__, merge, merge->id, merge->level);
     } while(true); /* rely on the return value from _castle_da_entry_add to break */
 }
 
