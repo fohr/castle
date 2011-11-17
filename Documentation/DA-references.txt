@@ -1,0 +1,46 @@
+Reference counting in DA:
+========= ======== == ==
+
+- Clients
+    - Live reference
+    - Merge threads
+    - Asynchornous T0 promotion
+
+- Assumptions
+    - Live reference is removed when marking DA for deletion.
+    - DA is removed from hash when marking DA for deletion.
+    - Holding DA hash lock or transaction lock guarantees that
+        - DA is not getting destroyed.
+        - Not being removed from hash table.
+        - No CT is being unlinked.
+    - CT's don't hold any reference on DA.
+    - Each attachment increments the attachment counr on DA. DA can't be marked for deletion
+      when DA is attached.
+    - References just guarantee valid DA structure. No guarantee is given on associated CTs.
+      DA-CT links would be protected by DA lock and transaction lock.
+    - Could take references, even after DA is marked for deletion.
+    - Sysfs accesses DA wihtout references, as we remove DA from sysfs before freeing DA
+      structure.
+
+
+Reference counting in DA:
+========= ======== == ==
+
+- Clients
+    - Live reference
+    - Writes, Reads, RQs
+
+- Assumptions
+    - Live reference is removed when last reference is removed.
+    - Removed from hash only when last reference is removed.
+    - No guarantees on DA pointer in CT, even with reference. Client has to make sure DA
+      pointer would be valid.
+    - ct->merge, merge_id, flags are valid only under ct->da->lock.
+    - All the current clients(with references) are active only when there are live attachments,
+      so DA should be valid.
+    - Sysfs accesses CT without taking reference, as we remove CT from sysfs before removing
+      from DA or hash.
+
+- Cons
+    - Starting a new merge thread needs to take a reference on CT and DA. But, DA is might have
+      already gone by the time. CT need to hold a reference on DA.
