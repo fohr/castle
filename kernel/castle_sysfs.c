@@ -1426,10 +1426,10 @@ int castle_sysfs_slave_add(struct castle_slave *slave)
             ret = sysfs_create_link(&slave->kobj, &slave->bdev->bd_disk->kobj, "dev");
         if (ret < 0)
             return ret;
-        /* Mark slave as having a sysfs entry. */
-        set_bit(CASTLE_SLAVE_SYSFS_BIT, &slave->flags);
     }
 #endif
+    /* Mark slave as having a sysfs entry. */
+    set_bit(CASTLE_SLAVE_SYSFS_BIT, &slave->flags);
 
     return 0;
 }
