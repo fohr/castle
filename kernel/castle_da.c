@@ -5421,6 +5421,10 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
 {
     int ret;
 
+#ifdef CASTLE_PERF_DEBUG
+    struct timespec ts_start, ts_end;
+#endif
+
     /* Skip entry if version marked for deletion and no descendant keys. */
     if (castle_da_entry_skip(merge, key, version))
     {
