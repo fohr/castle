@@ -2352,7 +2352,7 @@ void castle_extents_meta_pool_init(void)
     unsigned long                   nr_meta_pgs, bitmap_size;
     void                            *used_meta_bitmap;
     struct castle_meta_compactor    meta_pool;
-    int                             i, unused_idx;
+    int                             i, unused_idx, map_idx;
     c_byte_off_t                    meta_pool_offset;
     c_ext_pos_t                     maps_cep;
 
@@ -2412,7 +2412,7 @@ void castle_extents_meta_pool_init(void)
             break;
         meta_pool_offset = (unsigned long)unused_idx * PAGE_SIZE;
 
-        if (meta_pool_offset >= atomic_read(&meta_ext_free.used))
+        if (meta_pool_offset >= atomic64_read(&meta_ext_free.used))
             /*
              * Once we have reached meta_ext_free.used the rest of the pool will come from
              * unallocated meta_extent pages.
@@ -2447,11 +2447,13 @@ void castle_extents_meta_pool_init(void)
             goto err_out_nofreespace;
         }
         /* Add these entries to the meta extent pool available list. */
-        for (i=castle_extent_meta_pool_size; i<castle_meta_pool_entries; i++)
+        map_idx = 0;
+        for (i=castle_extent_meta_pool_size; i<castle_meta_pool_entries; i++, map_idx++)
         {
-            meta_pool_offset = (unsigned long)(maps_cep.offset + (i * PAGE_SIZE));
+            meta_pool_offset = (unsigned long)(maps_cep.offset + (map_idx * PAGE_SIZE));
             meta_extent_pool[i].offset = meta_pool_offset;
             list_add_tail(&meta_extent_pool[i].list, &meta_pool_available);
+            BUG_ON(meta_pool_offset >= atomic64_read(&meta_ext_free.used));
         }
         debug("Initialising meta ext pool with %d allocated pages\n",
               (castle_meta_pool_entries - castle_extent_meta_pool_size));
