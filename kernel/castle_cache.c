@@ -3366,7 +3366,7 @@ static c2_block_t* _castle_cache_block_get(c_ext_pos_t cep,
                                            int merge_originated)
 {
     int grown_block_freelist = 0, grown_page_freelist = 0;
-#ifdef PERF_DEBUG
+#ifdef CASTLE_PERF_DEBUG
     c_ext_type_t ext_type;
 #endif
     c2_block_t *c2b;
@@ -3467,7 +3467,7 @@ static c2_block_t* _castle_cache_block_get(c_ext_pos_t cep,
     BUG(); /* can't reach here */
 
 out:
-#ifdef PERF_DEBUG
+#ifdef CASTLE_PERF_DEBUG
     /* Update per-extent type cache statistics. */
     ext_type = castle_extent_type_get(c2b->cep.ext_id);
     if (ext_type != EXT_T_INVALID)
