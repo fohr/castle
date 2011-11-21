@@ -202,7 +202,7 @@ void castle_da_ct_marshall(struct castle_clist_entry *ctm, struct castle_compone
 static struct castle_component_tree* castle_da_ct_unmarshall(struct castle_component_tree *ct,
                                                              struct castle_clist_entry *ctm);
 /* partial merges: partition handling */
-//TODO@tr get rid of partition_activate if this stage no longer needed?
+//TODO@tr get rid of partition_activate if this stage no longer needed? - trac #3840
 static void castle_da_merge_new_partition_activate(struct castle_da_merge *merge);
 static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
                                                  c2_block_t *node_c2b,
@@ -6331,7 +6331,7 @@ alloc_fail_2:
 alloc_fail_1:
         castle_printk(LOG_ERROR, "%s::failed to malloc, partial merges disabled for this merge"
                 "[da %d level %d] (warning: UNTESTED).\n", __FUNCTION__, da, level);
-        //TODO@tr implement partial merges disabling
+        //TODO@tr implement partial merges disabling - see trac #3839
         return;
     }
 
@@ -11208,17 +11208,17 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
     if (!err && !c_bvec->tree)
     {
         //TODO@tr this needs to be tightened up considerably - need a careful review
-        //        of how big_get works!
+        //        of how big_get works! - trac #3841
         if(get->resolve_timestamps &&
            CVT_INVALID(cvt) &&
            !CVT_INVALID(get->cvt) &&
-           !get->resolve_counters) //a hack to hopefully get big gets to do the right thing, TODO@tr unhack this!
+           !get->resolve_counters) //a hack to hopefully get big gets to do the right thing, TODO@tr unhack this! - trac #3841
         {
             /* If we had performed any timestamp resolution, we must have disabled
                counter resolution. */
 
             //TODO@tr tighten this up... with big_gets, the following BUG can be hit
-            //BUG_ON(get->resolve_counters);
+            //BUG_ON(get->resolve_counters); - trac #3841
             cvt = get->cvt;
         }
         goto complete;
