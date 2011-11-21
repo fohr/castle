@@ -2513,6 +2513,7 @@ struct castle_merge_thread {
     c_thread_id_t               id;
     struct task_struct         *thread;
     c_merge_id_t                merge_id;
+    c_work_id_t                 work_id;
     uint64_t                    cur_work_size;
     struct list_head            hash_list;
     struct castle_double_array *da;

@@ -1,6 +1,10 @@
 #ifndef __CASTLE_EVENTS_H__
 #define __CASTLE_EVENTS_H__
 
+void castle_uevent6(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4,
+                    uint64_t arg5, uint64_t arg6);
+void castle_uevent5(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4,
+                    uint64_t arg5);
 void castle_uevent4(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4);
 void castle_uevent3(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3);
 void castle_uevent2(uint16_t cmd, uint64_t arg1, uint64_t arg2);
@@ -76,8 +80,8 @@ void castle_netlink_fini(void);
 #define castle_events_new_tree_added(_array_id, _da_id) \
     castle_uevent3(CASTLE_EVENT_NEW_TREE_ADDED, CASTLE_EVENTS_SUCCESS, _array_id, _da_id)
 
-#define castle_events_merge_work_finished(_work_id, _work_done, _is_merge_finished) \
-    castle_uevent4(CASTLE_EVENT_MERGE_WORK_FINISHED, CASTLE_EVENTS_SUCCESS, _work_id, _work_done, _is_merge_finished)
+#define castle_events_merge_work_finished(_da_id, _merge_id, _work_id, _work_done, _is_merge_finished) \
+    castle_uevent6(CASTLE_EVENT_MERGE_WORK_FINISHED, CASTLE_EVENTS_SUCCESS, _da_id, _merge_id, _work_id, _work_done, _is_merge_finished)
 
 #define castle_events_version_tree_created(_da_id) \
     castle_uevent2(CASTLE_EVENT_VERSION_TREE_CREATED, CASTLE_EVENTS_SUCCESS, _da_id)

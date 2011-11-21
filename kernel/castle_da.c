@@ -90,6 +90,7 @@ static atomic64_t               castle_next_tree_data_age = ATOMIC64(0);
 static int                      castle_da_exiting    = 0;
 
 static int                      castle_dynamic_driver_merge = 1;
+static int                      castle_merge_max_work_id = 0;
 
 static int                      castle_merges_abortable = 1; /* 0 or 1, default=enabled */
 static DECLARE_WAIT_QUEUE_HEAD (castle_da_promote_wq);  /**< castle_da_level0_modified_promote()  */
@@ -12131,7 +12132,9 @@ static int castle_merge_thread_start(void *_data)
         if (!ret)
         {
             BUG_ON(merge->nr_bytes < prev_nr_bytes);
-            castle_events_merge_work_finished(merge_thread->merge_id,
+            castle_events_merge_work_finished(merge_thread->da->id,
+                                              merge_thread->merge_id,
+                                              merge_thread->work_id,
                                               merge->nr_bytes - prev_nr_bytes, 1);
             merge_thread->merge_id = INVAL_MERGE_ID;
 
@@ -12144,7 +12147,9 @@ static int castle_merge_thread_start(void *_data)
         else
         {
             BUG_ON(merge->nr_bytes < prev_nr_bytes);
-            castle_events_merge_work_finished(merge_thread->merge_id,
+            castle_events_merge_work_finished(merge_thread->da->id,
+                                              merge_thread->merge_id,
+                                              merge_thread->work_id,
                                               merge->nr_bytes - prev_nr_bytes, 0);
         }
 
@@ -12494,7 +12499,7 @@ int castle_merge_do_work(c_merge_id_t merge_id, c_work_size_t work_size, c_work_
     merge_thread->cur_work_size = work_size;
     wmb();
 
-    *work_id = merge_id;
+    merge_thread->work_id = *work_id = castle_merge_max_work_id++;
 
     wake_up(&merge_thread->da->merge_waitq);
 

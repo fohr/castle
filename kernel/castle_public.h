@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 31 /* last updated by GM */
+#define CASTLE_PROTOCOL_VERSION 32 /* last updated by BM */
 
 #ifdef SWIG
 #define PACKED               //overide gcc intrinsics for SWIG

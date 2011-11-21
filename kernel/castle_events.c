@@ -286,7 +286,8 @@ int castle_uevent(struct kobj_uevent_env *env)
     return result;
 }
 
-void castle_uevent4(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4)
+void castle_uevent6(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4,
+                    uint64_t arg5, uint64_t arg6)
 {
     int err = 0;
     struct kobj_uevent_env *env;
@@ -315,8 +316,14 @@ void castle_uevent4(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3, u
     err = add_uevent_var(env, "ARG4=0x%llx", arg4);
     if (err) debug("Error adding event var ARG4 err=%d\n", err);
 
-    debug("Sending the event. CMD=%d ARG1=0x%Lx ARG2=0x%Lx ARG3=0x%Lx ARG4=0x%Lx\n",
-            cmd, arg1, arg2, arg3, arg4);
+    err = add_uevent_var(env, "ARG5=0x%llx", arg5);
+    if (err) debug("Error adding event var ARG5 err=%d\n", err);
+
+    err = add_uevent_var(env, "ARG6=0x%llx", arg6);
+    if (err) debug("Error adding event var ARG6 err=%d\n", err);
+
+    debug("Sending the event. CMD=%d ARG1=0x%Lx ARG2=0x%Lx ARG3=0x%Lx ARG4=0x%Lx ARG5=0x%Lx ARG6=0x%Lx\n",
+            cmd, arg1, arg2, arg3, arg4, arg5, arg6);
 
     if((cmd >= CASTLE_CTRL_PROG_EVENT_RANGE_START) &&
        (cmd <= CASTLE_CTRL_PROG_EVENT_RANGE_END))
@@ -327,6 +334,17 @@ void castle_uevent4(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3, u
     if (err) debug("Error sending event err=%d\n", err);
 
     castle_kfree(env);
+}
+
+void castle_uevent5(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4,
+                    uint64_t arg5)
+{
+    castle_uevent6(cmd, arg1, arg2, arg3, arg4, arg5, 0);
+}
+
+void castle_uevent4(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4)
+{
+    castle_uevent6(cmd, arg1, arg2, arg3, arg4, 0, 0);
 }
 
 void castle_uevent3(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3)
