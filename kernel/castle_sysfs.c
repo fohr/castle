@@ -982,12 +982,16 @@ static ssize_t ct_merge_state_show(struct kobject *kobj,
 {
     struct castle_component_tree *ct = container_of(kobj, struct castle_component_tree, kobj);
 
+    read_lock(&ct->da->lock);
+
     if (!ct->merge)
         return sprintf(buf, "idle\n");
     else if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags))
         return sprintf(buf, "output\n");
     else
         return sprintf(buf, "input\n");
+
+    read_unlock(&ct->da->lock);
 }
 
 static ssize_t ct_data_extents_show(struct kobject *kobj,
