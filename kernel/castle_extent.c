@@ -2279,6 +2279,11 @@ static struct list_head     meta_pool_frozen;       /* Temp list for use during 
 
 int                         meta_pool_inited = 0;   /* set once the pool is available for use. */
 
+static int meta_pool_inuse_count = 0;
+static int meta_pool_available_count = 0;
+static int meta_pool_released_count = 0;
+static int meta_pool_frozen_count = 0;
+
 /*
  * Move all freed meta extent pool entries to the frozen list.
  */
@@ -2286,7 +2291,11 @@ void castle_extent_meta_pool_freeze(void)
 {
     castle_extent_transaction_start();
     BUG_ON(!list_empty(&meta_pool_frozen));
+    BUG_ON((meta_pool_released_count + meta_pool_available_count + meta_pool_inuse_count)
+            < castle_extent_meta_pool_size);
     list_splice_init(&meta_pool_released, &meta_pool_frozen);
+    meta_pool_frozen_count += meta_pool_released_count;
+    meta_pool_released_count = 0;
     castle_extent_transaction_end();
 }
 
@@ -2297,30 +2306,36 @@ void castle_extent_meta_pool_free(void)
 {
     castle_extent_transaction_start();
     list_splice_init(&meta_pool_frozen, &meta_pool_available);
+    meta_pool_available_count += meta_pool_frozen_count;
+    meta_pool_frozen_count = 0;
     castle_extent_transaction_end();
 }
 
 /*
  * Find and return a meta extent pool entry from the available list.
  *
- * @return: The list entry of one was available, else NULL.
+ * @param offset    The meta extent byte offset being allocated from the pool.
+ *
+ * @return: The list entry if one was available, else NULL.
  */
-int castle_extent_meta_pool_get(c_byte_off_t * offset)
+meta_pool_entry_t * castle_extent_meta_pool_get(c_byte_off_t * offset)
 {
     meta_pool_entry_t * pent;
 
     BUG_ON(!castle_extent_in_transaction());
 
     if (!meta_pool_inited || list_empty(&meta_pool_available))
-        return -ENOENT;
+        return NULL;
     else
     {
         pent = list_first_entry(&meta_pool_available, meta_pool_entry_t, list);
         list_del(&pent->list);
+        meta_pool_available_count--;
         *offset = pent->offset;
         list_add_tail(&pent->list, &meta_pool_inuse);
+        meta_pool_inuse_count++;
+        return pent;
     }
-    return EXIT_SUCCESS;
 }
 
 /*
@@ -2339,9 +2354,29 @@ void castle_extent_meta_pool_release(c_byte_off_t offset)
 
         pent = list_first_entry(&meta_pool_inuse, meta_pool_entry_t, list);
         list_del(&pent->list);
+        meta_pool_inuse_count--;
         pent->offset = offset;
         list_add_tail(&pent->list, &meta_pool_released);
+        meta_pool_released_count++;
     }
+}
+
+/*
+ * Put a meta extent pool entry back on the available list.
+ * For example, when extent alloc fails.
+ *
+ * @param pent    The meta extent pool entry being returned.
+ */
+void castle_extent_meta_pool_replace(meta_pool_entry_t * pent)
+{
+    BUG_ON(!castle_extent_in_transaction());
+    BUG_ON(list_empty(&meta_pool_inuse));
+    BUG_ON(!pent);
+
+    list_del(&pent->list);
+    meta_pool_inuse_count--;
+    list_add(&pent->list, &meta_pool_available);
+    meta_pool_available_count++;
 }
 
 /*
@@ -2467,6 +2502,7 @@ err_out_nofreespace:
         castle_printk(LOG_USERINFO, "Meta extent pool initialised with %d entries.\n",
                       castle_extent_meta_pool_size);
         meta_pool_inited = 1;
+        meta_pool_available_count = castle_extent_meta_pool_size;
     } else
         castle_printk(LOG_WARN,
                       "No free meta extent pages found. Meta extent pool not initialised..\n");
@@ -3073,6 +3109,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     struct castle_extents_superblock *castle_extents_sb;
     c_res_pool_t *pool = NULL;
     uint32_t     nr_blocks;
+    meta_pool_entry_t * meta_pool_entryp = NULL;
 
     BUG_ON(!castle_extent_in_transaction());
     BUG_ON(!extent_init_done && !LOGICAL_EXTENT(ext_id));
@@ -3149,7 +3186,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
         ext->maps_cep.offset = 0;
     }
     else if ((nr_blocks == 1) &&
-             (castle_extent_meta_pool_get(&ext->maps_cep.offset) == EXIT_SUCCESS))
+             (meta_pool_entryp = castle_extent_meta_pool_get(&ext->maps_cep.offset)))
         ext->maps_cep.ext_id = META_EXT_ID;
     else
     {
@@ -3227,6 +3264,10 @@ __hell:
         castle_res_pool_unreserve(pool);
         castle_kfree(pool);
     }
+
+    /* If we allocated from the meta extent pool, put it back ... */
+    if (meta_pool_entryp)
+        castle_extent_meta_pool_replace(meta_pool_entryp);
 
     if (ext)
     {

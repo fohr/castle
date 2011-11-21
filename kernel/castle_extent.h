@@ -172,7 +172,7 @@ void                castle_extents_remap_writeback_setstate  (void);
 void                castle_extents_remap_writeback           (void);
 void                castle_extents_process_syncpoint         (void);
 void                castle_extents_meta_pool_init            (void);
-int                 castle_extent_meta_pool_get              (c_byte_off_t * offset);
+meta_pool_entry_t * castle_extent_meta_pool_get              (c_byte_off_t * offset);
 void                castle_extent_meta_pool_freeze           (void);
 void                castle_extent_meta_pool_free             (void);
 
