@@ -283,9 +283,6 @@ static USED void castle_back_print_page(char *buff, int length)
 #define castle_back_kernel_to_user(__buffer, __kernel_addr) \
     (__buffer->user_addr + ((unsigned long)__kernel_addr - (unsigned long)__buffer->buffer))
 
-#define castle_back_user_addr_in_buffer(__buffer, __user_addr) \
-    ((unsigned long) __user_addr < (__buffer->user_addr + __buffer->size))
-
 /**
  * Return whether a buffer satisfying start-end exists in conn's RB tree.
  *
@@ -332,8 +329,9 @@ static inline int __castle_back_buffer_exists(struct castle_back_conn *conn,
 /**
  * Look up buffer matching user_addr in conn's RB tree.
  *
- * @param conn      Connection to search for user buffers
- * @param user_addr Userland buffer address to find
+ * @param conn          Connection to search for user buffers
+ * @param user_addr     Userland buffer address to find
+ * @param user_len      Space we're supposed to use in user_addr
  *
  * - Hold a read-lock on conn->buffers_lock to prevent the tree changing beneath
  *   us during our search
@@ -347,7 +345,8 @@ static inline int __castle_back_buffer_exists(struct castle_back_conn *conn,
  * @also castle_back_buffer_put()
  */
 static inline struct castle_back_buffer *castle_back_buffer_get(struct castle_back_conn *conn,
-                                                                unsigned long user_addr)
+                                                                unsigned long user_addr,
+                                                                uint32_t user_len)
 {
     struct rb_node *node;
     struct castle_back_buffer *buffer, *ret = NULL;
@@ -367,14 +366,19 @@ static inline struct castle_back_buffer *castle_back_buffer_get(struct castle_ba
             node = node->rb_right;
         else
         {
-            /* We found a matching buffer.
-             * If it's ref_count is 0 then ignore it, otherwise increment by 1
-             * and return it to the caller. */
-            if (atomic_add_unless(&buffer->ref_count, 1, 0))
+            /* We found a buffer that matches the UAS buffer pointer. */
+            if (user_addr + user_len <= buffer->user_addr + buffer->size)
             {
-                debug("castle_back_buffer_get ref_count is now %d\n",
-                        atomic_read(&buffer->ref_count));
-                ret = buffer;
+                /* User-supplied buffer length fits within the kernel buffer.
+                 *
+                 * If ref_count is 0, ignore it, otherwise increment by 1 and
+                 * return the buffer pointer to the caller. */
+                if (atomic_add_unless(&buffer->ref_count, 1, 0))
+                {
+                    debug("castle_back_buffer_get ref_count is now %d\n",
+                            atomic_read(&buffer->ref_count));
+                    ret = buffer;
+                }
             }
 
             break;
@@ -861,7 +865,7 @@ static void castle_back_vm_open(struct vm_area_struct *vma)
         return;
     }
 
-    buf = castle_back_buffer_get(conn, vma->vm_start);
+    buf = castle_back_buffer_get(conn, vma->vm_start, 0 /*user_len*/);
 
     if (buf == NULL)
     {
@@ -894,7 +898,7 @@ static void castle_back_vm_close(struct vm_area_struct *vma)
         return;
     }
 
-    buf = castle_back_buffer_get(conn, vma->vm_start);
+    buf = castle_back_buffer_get(conn, vma->vm_start, 0 /*user_len*/);
 
     if (buf == NULL)
     {
@@ -964,11 +968,19 @@ static int castle_back_reply(struct castle_back_op *op,
     return 0;
 }
 
-static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *user_key,
-                                    uint32_t key_len, c_vl_bkey_t **key_out)
+/**
+ * Copy userland key from user_key to key_out (size key_len).
+ *
+ * @param user_key  Source key pointer (UAS)
+ * @param key_len   Size of user_key
+ * @param key_out   Destination pointer (KAS)
+ */
+static int castle_back_key_copy_get(struct castle_back_conn *conn,
+                                    c_vl_bkey_t *user_key,
+                                    uint32_t key_len,
+                                    c_vl_bkey_t **key_out)
 {
     struct castle_back_buffer *buf;
-    unsigned long user_key_start, user_key_end, buf_end;
     c_vl_bkey_t *bkey;
     int i, err;
 
@@ -987,23 +999,12 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *
 
     /* Work out the start (inclusive), and the end point (exclusive) of the key block
        in user memory. */
-    user_key_start = (unsigned long)user_key;
-    user_key_end = user_key_start + (unsigned long)key_len;
-    buf = castle_back_buffer_get(conn, user_key_start);
+    buf = castle_back_buffer_get(conn, (unsigned long)user_key, key_len);
     if (!buf)
     {
         error("Bad user pointer %p\n", user_key);
         err = -EINVAL;
         goto err0;
-    }
-
-    /* buf_end is the end address of the buffer in userspace */
-    buf_end = buf->user_addr + buf->size;
-    if (user_key_end > buf_end)
-    {
-        error("Key too big for buffer! (key_len = %u)\n", key_len);
-        err = -EINVAL;
-        goto err1;
     }
 
     bkey = castle_dup_or_copy(castle_back_user_to_kernel(buf, user_key), key_len, NULL, NULL);
@@ -1012,14 +1013,14 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *
     {
         error("Buffer length(%u) doesnt match with key length(%u)\n", key_len, bkey->length+4);
         err = -EINVAL;
-        goto err2;
+        goto err1;
     }
 
     if (*((uint64_t *)bkey->_unused) != 0)
     {
         error("Unused bits need to be set to 0\n");
         err = -EINVAL;
-        goto err2;
+        goto err1;
     }
 
     /* Check if the key length is smaller than space needed for all dim_heads. */
@@ -1027,14 +1028,14 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *
     {
         error("Too many dimensions %d\n", bkey->nr_dims);
         err = -EINVAL;
-        goto err2;
+        goto err1;
     }
 
     if (bkey->nr_dims == 0)
     {
         error("Zero-dimensional key\n");
         err = -EINVAL;
-        goto err2;
+        goto err1;
     }
 
     debug("Original key pointer %p\n", user_key);
@@ -1051,7 +1052,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *
         {
             error("Found flags other than INFINITY %u\n", dim_flags);
             err = -EINVAL;
-            goto err2;
+            goto err1;
         }
 
         /* Only one kind of infinity is possible. */
@@ -1060,7 +1061,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *
         {
             error("Found both PLUS_INFINITY and MINUS_INFINITY for the same dimension.\n");
             err = -EINVAL;
-            goto err2;
+            goto err1;
         }
 
         /* Length should be zero, if the dimension is infinity. */
@@ -1068,7 +1069,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *
         {
             error("Found mis-match for INFINITY flags and dimension length.\n");
             err = -EINVAL;
-            goto err2;
+            goto err1;
         }
 
         /* Dimension payload shouldn't cross key boundaries. */
@@ -1077,7 +1078,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *
             error("Dimension payload going beyond the key boundaries [%p, %u] - [%p, %u]\n",
                   dim_data, dim_len, bkey, key_len);
             err = -EINVAL;
-            goto err2;
+            goto err1;
         }
     }
 
@@ -1091,8 +1092,8 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn, c_vl_bkey_t *
 
     return 0;
 
-err2: castle_free(bkey);
-err1: castle_back_buffer_put(conn, buf);
+err1: castle_free(bkey);
+      castle_back_buffer_put(conn, buf);
 err0: return err;
 }
 
@@ -1342,21 +1343,15 @@ static void castle_back_replace(void *data)
      */
     if (op->req.replace.value_len > 0)
     {
-        op->buf = castle_back_buffer_get(conn, (unsigned long) op->req.replace.value_ptr);
+        op->buf = castle_back_buffer_get(conn,
+                                         (unsigned long) op->req.replace.value_ptr,
+                                         op->req.replace.value_len);
         if (op->buf == NULL)
         {
-            error("Could not get buffer for pointer=%p\n", op->req.replace.value_ptr);
+            error("Couldn't get buffer for pointer=%p length=%u\n",
+                    op->req.replace.value_ptr, op->req.replace.value_len);
             err = -EINVAL;
-            goto err2;
-        }
-
-        if (!castle_back_user_addr_in_buffer(op->buf,
-                    op->req.replace.value_ptr + op->req.replace.value_len - 1))
-        {
-            error("Invalid value length %u (ptr=%p)\n",
-                  op->req.replace.value_len, op->req.replace.value_ptr);
-            err = -EINVAL;
-            goto err3;
+            goto err1;
         }
     }
     else op->buf = NULL;
@@ -1374,12 +1369,12 @@ static void castle_back_replace(void *data)
 
     err = castle_object_replace(&op->replace, op->attachment, op->cpu_index, 0);
     if (err)
-        goto err3;
+        goto err2;
 
     return;
 
-err3: if (op->buf) castle_back_buffer_put(conn, op->buf);
-err2: castle_attachment_put(op->attachment);
+err2: if (op->buf) castle_back_buffer_put(conn, op->buf);
+err1: castle_attachment_put(op->attachment);
 err0: castle_free(op->key);
       castle_back_reply(op, err, 0, 0, 0);
 }
@@ -1403,21 +1398,16 @@ static void castle_back_timestamped_replace(void *data)
      */
     if (op->req.timestamped_replace.value_len > 0)
     {
-        op->buf = castle_back_buffer_get(conn, (unsigned long) op->req.timestamped_replace.value_ptr);
+        op->buf = castle_back_buffer_get(conn,
+                                         (unsigned long) op->req.timestamped_replace.value_ptr,
+                                         op->req.timestamped_replace.value_len);
         if (op->buf == NULL)
         {
-            error("Could not get buffer for pointer=%p\n", op->req.timestamped_replace.value_ptr);
+            error("Couldn't get buffer for pointer=%p length=%u\n",
+                    op->req.timestamped_replace.value_ptr,
+                    op->req.timestamped_replace.value_len);
             err = -EINVAL;
-            goto err2;
-        }
-
-        if (!castle_back_user_addr_in_buffer(op->buf,
-                    op->req.timestamped_replace.value_ptr + op->req.timestamped_replace.value_len - 1))
-        {
-            error("Invalid value length %u (ptr=%p)\n",
-                  op->req.timestamped_replace.value_len, op->req.timestamped_replace.value_ptr);
-            err = -EINVAL;
-            goto err3;
+            goto err1;
         }
     }
     else op->buf = NULL;
@@ -1436,12 +1426,12 @@ static void castle_back_timestamped_replace(void *data)
 
     err = castle_object_replace(&op->replace, op->attachment, op->cpu_index, 0);
     if (err)
-        goto err3;
+        goto err2;
 
     return;
 
-err3: if (op->buf) castle_back_buffer_put(conn, op->buf);
-err2: castle_attachment_put(op->attachment);
+err2: if (op->buf) castle_back_buffer_put(conn, op->buf);
+err1: castle_attachment_put(op->attachment);
 err0: castle_free(op->key);
       castle_back_reply(op, err, 0, 0, 0);
 }
@@ -1465,21 +1455,16 @@ static void castle_back_counter_replace(void *data)
      */
     if (op->req.counter_replace.value_len > 0)
     {
-        op->buf = castle_back_buffer_get(conn, (unsigned long) op->req.counter_replace.value_ptr);
+        op->buf = castle_back_buffer_get(conn,
+                                         (unsigned long) op->req.counter_replace.value_ptr,
+                                         op->req.counter_replace.value_len);
         if (op->buf == NULL)
         {
-            error("Could not get buffer for pointer=%p\n", op->req.counter_replace.value_ptr);
+            error("Couldn't get buffer for pointer=%p length=%u\n",
+                    op->req.counter_replace.value_ptr,
+                    op->req.counter_replace.value_len);
             err = -EINVAL;
-            goto err2;
-        }
-
-        if (!castle_back_user_addr_in_buffer(op->buf,
-                    op->req.counter_replace.value_ptr + op->req.counter_replace.value_len - 1))
-        {
-            error("Invalid value length %u (ptr=%p)\n",
-                  op->req.counter_replace.value_len, op->req.counter_replace.value_ptr);
-            err = -EINVAL;
-            goto err3;
+            goto err1;
         }
     }
     else op->buf = NULL;
@@ -1498,12 +1483,12 @@ static void castle_back_counter_replace(void *data)
 
     err = castle_object_replace(&op->replace, op->attachment, op->cpu_index, 0);
     if (err)
-        goto err3;
+        goto err2;
 
     return;
 
-err3: if (op->buf) castle_back_buffer_put(conn, op->buf);
-err2: castle_attachment_put(op->attachment);
+err2: if (op->buf) castle_back_buffer_put(conn, op->buf);
+err1: castle_attachment_put(op->attachment);
 err0: castle_free(op->key);
       castle_back_reply(op, err, 0, 0, 0);
 }
@@ -1732,21 +1717,15 @@ static void castle_back_get(void *data)
     /*
      * Get buffer with value in it and save it
      */
-    op->buf = castle_back_buffer_get(conn, (unsigned long) op->req.get.value_ptr);
+    op->buf = castle_back_buffer_get(conn,
+                                     (unsigned long) op->req.get.value_ptr,
+                                     op->req.get.value_len);
     if (op->buf == NULL)
     {
-        error("Invalid value ptr %p\n", op->req.get.value_ptr);
+        error("Couldn't get buffer for pointer=%p length=%u\n",
+                op->req.get.value_ptr, op->req.get.value_len);
         err = -EINVAL;
-        goto err2;
-    }
-
-    if (!castle_back_user_addr_in_buffer(op->buf,
-                op->req.get.value_ptr + op->req.get.value_len - 1))
-    {
-        error("Invalid value length %u (ptr=%p)\n",
-              op->req.get.value_len, op->req.get.value_ptr);
-        err = -EINVAL;
-        goto err3;
+        goto err1;
     }
 
     op->get.reply_start = castle_back_get_reply_start;
@@ -1765,17 +1744,17 @@ static void castle_back_get(void *data)
         error("User requested timestamp return on a non-timestamped collection, id=0x%x\n",
               op->req.get.collection_id);
         err = -EINVAL;
-        goto err3;
+        goto err2;
     }
 
     err = castle_object_get(&op->get, op->attachment, op->cpu_index);
     if (err)
-        goto err3;
+        goto err2;
 
     return;
 
-err3: castle_back_buffer_put(conn, op->buf);
-err2: castle_attachment_put(op->attachment);
+err2: castle_back_buffer_put(conn, op->buf);
+err1: castle_attachment_put(op->attachment);
 err0: castle_free(op->key);
       castle_back_reply(op, err, 0, 0, 0);
 }
@@ -2508,9 +2487,13 @@ static void _castle_back_iter_next(struct castle_back_op *op,
     }
 
     /* Get buffer with value in and save it. */
-    op->buf = castle_back_buffer_get(op->conn, (unsigned long)op->req.iter_next.buffer_ptr);
+    op->buf = castle_back_buffer_get(op->conn,
+                                     (unsigned long)op->req.iter_next.buffer_ptr,
+                                     op->req.iter_next.buffer_len);
     if (op->buf == NULL)
     {
+        error("Couldn't get buffer for pointer=%p length=%u\n",
+                op->req.iter_next.buffer_ptr, op->req.iter_next.buffer_len);
         err = -EINVAL;
         goto err;
     }
@@ -3137,24 +3120,17 @@ static void castle_back_put_chunk(void *data)
         goto err0;
     }
 
-    /*
-     * Get buffer with value in it and save it
-     */
-    op->buf = castle_back_buffer_get(conn, (unsigned long) op->req.put_chunk.buffer_ptr);
+    /* Get buffer with value in it and save it. */
+    op->buf = castle_back_buffer_get(conn,
+                                     (unsigned long) op->req.put_chunk.buffer_ptr,
+                                     op->req.put_chunk.buffer_len);
     if (op->buf == NULL)
     {
-        error("Could not get buffer for pointer=%p\n", op->req.put_chunk.buffer_ptr);
+        error("Couldn't get buffer for pointer=%p length=%u\n",
+                op->req.put_chunk.buffer_ptr, op->req.put_chunk.buffer_len);
         err = -EINVAL;
         goto err0;
     }
-
-    if (!castle_back_user_addr_in_buffer(op->buf, op->req.put_chunk.buffer_ptr + op->req.put_chunk.buffer_len - 1))
-    {
-        error("Invalid value length %u (ptr=%p)\n", op->req.put_chunk.buffer_len, op->req.put_chunk.buffer_ptr);
-        err = -EINVAL;
-        goto err1;
-    }
-
     op->buffer_offset = 0;
 
     /*
@@ -3416,26 +3392,15 @@ static void castle_back_get_chunk(void *data)
     /*
      * Get buffer with value in it and save it
      */
-    op->buf = castle_back_buffer_get(conn, (unsigned long) op->req.get_chunk.buffer_ptr);
+    op->buf = castle_back_buffer_get(conn,
+                                     (unsigned long) op->req.get_chunk.buffer_ptr,
+                                     op->req.get_chunk.buffer_len);
     if (op->buf == NULL)
     {
-        error("Could not get buffer for pointer=%p, while doing op: "
-              "(tag: 0x%x, call_id: 0x%x, token: 0x%x, buffer_ptr: %p, buffer_len: 0x%x)\n",
-                op->req.get_chunk.buffer_ptr,
-                op->req.tag,
-                op->req.call_id,
-                op->req.get_chunk.token,
-                op->req.get_chunk.buffer_ptr,
-                op->req.get_chunk.buffer_len);
+        error("Couldn't get buffer for pointer=%p length=%u\n",
+                op->req.get_chunk.buffer_ptr, op->req.get_chunk.buffer_len);
         err = -EINVAL;
         goto err0;
-    }
-
-    if (!castle_back_user_addr_in_buffer(op->buf, op->req.get_chunk.buffer_ptr + op->req.get_chunk.buffer_len - 1))
-    {
-        error("Invalid value length %u (ptr=%p)\n", op->req.get_chunk.buffer_len, op->req.get_chunk.buffer_ptr);
-        err = -EINVAL;
-        goto err1;
     }
 
     if (((unsigned long) op->req.get_chunk.buffer_ptr) % PAGE_SIZE)
