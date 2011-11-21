@@ -1887,10 +1887,12 @@ err0: castle_free(op->key);
 
 static void __castle_back_iter_next(void *data);
 static void _castle_back_iter_next(struct castle_back_op *op,
-                                   struct castle_back_stateful_op *stateful_op);
+                                   struct castle_back_stateful_op *stateful_op,
+                                   int fastpath);
 static void __castle_back_iter_finish(void *data);
 static void _castle_back_iter_finish(struct castle_back_op *op,
-                                     struct castle_back_stateful_op *stateful_op);
+                                     struct castle_back_stateful_op *stateful_op,
+                                     int fastpath);
 static void castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op);
 
 static void castle_back_iter_expire(struct castle_back_stateful_op *stateful_op)
@@ -2002,9 +2004,6 @@ void _castle_back_iter_start(void *private, int err)
     uint32_t buffer_len;
     char *buffer_ptr;
 
-    /* See related comment in castle_back_iter_start() */
-    stateful_op->curr_op = NULL;
-
     /* Objects code iterator returned an error. */
     if (err)
         goto err;
@@ -2015,6 +2014,8 @@ void _castle_back_iter_start(void *private, int err)
 
     if (stateful_op->conn->flags & CASTLE_BACK_CONN_DEAD_FLAG)
     {
+        /* See castle_back_iter_start() comment for why we reset curr_op. */
+        stateful_op->curr_op  = NULL;
         stateful_op->expiring = 1;
         spin_unlock(&stateful_op->lock);
         stateful_op->expire(stateful_op);
@@ -2033,19 +2034,21 @@ void _castle_back_iter_start(void *private, int err)
     buffer_len = op->req.iter_start.buffer_len;
     buffer_ptr = op->req.iter_start.buffer_ptr;
     op->req.tag = CASTLE_RING_ITER_NEXT;
-    op->req.iter_next.token = stateful_op->token;
+    op->req.iter_next.token      = stateful_op->token;
     op->req.iter_next.buffer_ptr = buffer_ptr;
     op->req.iter_next.buffer_len = buffer_len;
 
     /* Start the iterator.  iter_next() handles castle_back(_iter)_reply(). */
-    _castle_back_iter_next(op, stateful_op);
+    _castle_back_iter_next(op, stateful_op, 1 /*fastpath*/);
 
     return;
 
 err:
     castle_attachment_put(attachment);
-    stateful_op->attachment = NULL;
+    /* See castle_back_iter_start() comment for why we reset curr_op. */
     spin_lock(&stateful_op->lock);
+    stateful_op->curr_op    = NULL;
+    stateful_op->attachment = NULL;
     castle_back_put_stateful_op(conn, stateful_op);
     castle_back_reply(op, err, 0, 0, 0);
 }
@@ -2311,7 +2314,6 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
          * See also: libcastle.hg:castle_iter_finish_prepare() */
         spin_lock(&stateful_op->lock);
         BUG_ON(!stateful_op->curr_op);
-        stateful_op->curr_op = NULL;
 
         op->req.tag = CASTLE_RING_ITER_FINISH;
         op->req.iter_finish.token = op->req.iter_next.token;
@@ -2319,7 +2321,7 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
 
         /* End the iterator. */
         castle_back_buffer_put(conn, op->buf);
-        _castle_back_iter_finish(op, stateful_op);
+        _castle_back_iter_finish(op, stateful_op, 1 /*fastpath*/);
 
         return 0;
     }
@@ -2483,13 +2485,18 @@ err0:
 /**
  * Continue iterator and return (up to) another buffer's-worth of results.
  *
- * Called from castle_back_iter_start() and castle_back_iter_next().
+ * Called from _castle_back_iter_start() and castle_back_iter_next().
+ *
+ * @param   op          Op to queue
+ * @param   stateful_op Stateful op to queue on
+ * @param   fastpath    Whether this a fastpath iter_next
  *
  * @also castle_back_iter_start()
  * @also castle_back_iter_next()
  */
 static void _castle_back_iter_next(struct castle_back_op *op,
-                                   struct castle_back_stateful_op *stateful_op)
+                                   struct castle_back_stateful_op *stateful_op,
+                                   int fastpath)
 {
     int err;
 
@@ -2509,6 +2516,12 @@ static void _castle_back_iter_next(struct castle_back_op *op,
     }
 
     spin_lock(&stateful_op->lock);
+
+    if (fastpath)
+    {
+        BUG_ON(!stateful_op->curr_op);
+        stateful_op->curr_op = NULL;
+    }
 
     /* Put this op on the queue for the iterator */
     stateful_debug("op=%p "stateful_op_fmt_str"\n", op, stateful_op2str(stateful_op));
@@ -2554,7 +2567,7 @@ static void castle_back_iter_next(void *data)
         return;
     }
 
-    _castle_back_iter_next(op, stateful_op);
+    _castle_back_iter_next(op, stateful_op, 0 /*fastpath*/);
 }
 
 /**
@@ -2627,11 +2640,21 @@ static void __castle_back_iter_finish(void *data)
  *
  * Called from castle_back_iter_finish() and castle_back_iter_next_callback().
  *
+ * @param   op          Op to queue
+ * @param   stateful_op Stateful op to queue on
+ * @param   fastpath    Whether this is a fastpath iter_finish
+ *
+ * fastpath is introduced for #3731 to prevent a race between fastpath iterators
+ * and castle_back_release().  If we are called from fastpath we expect that
+ * stateful_op->curr_op is set and we must unset it before queuing up this
+ * iter finish request.
+ *
  * @also castle_back_iter_finish()
  * @also castle_back_iter_next_callback()
  */
 static void _castle_back_iter_finish(struct castle_back_op *op,
-                                     struct castle_back_stateful_op *stateful_op)
+                                     struct castle_back_stateful_op *stateful_op,
+                                     int fastpath)
 {
     int err;
 
@@ -2639,6 +2662,12 @@ static void _castle_back_iter_finish(struct castle_back_op *op,
      * Put this op on the queue for the iterator
      */
     spin_lock(&stateful_op->lock);
+
+    if (fastpath)
+    {
+        BUG_ON(!stateful_op->curr_op);
+        stateful_op->curr_op = NULL;
+    }
 
     castle_printk(LOG_DEBUG, "%s: conn=%p stateful_op=%p op=%p in_use=%d cancel_on_op_complete=%d curr_op=%p\n",
             __FUNCTION__, stateful_op->conn, stateful_op, op, stateful_op->in_use,
@@ -2688,7 +2717,7 @@ static void castle_back_iter_finish(void *data)
 
     stateful_debug("op=%p "stateful_op_fmt_str"\n", op, stateful_op2str(stateful_op));
 
-    _castle_back_iter_finish(op, stateful_op);
+    _castle_back_iter_finish(op, stateful_op, 0 /*fastpath*/);
 }
 
 /**** BIG PUT ****/
