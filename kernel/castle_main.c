@@ -1025,6 +1025,12 @@ static int castle_slave_superblock_validate(struct castle_slave *cs,
     if((cs_sb->pub.flags & CASTLE_SLAVE_SB_INVALID))
         return -8;
 
+    /* Claim after init is only valid for 'new' slaves. */
+    if (castle_fs_inited && !cs->new_dev)
+    {
+        castle_printk(LOG_ERROR, "Cannot claim non-new slave after fs already initialised.\n");
+        return -9;
+    }
     return 0;
 }
 
