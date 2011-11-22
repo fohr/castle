@@ -411,25 +411,34 @@ int castle_counter_simple_reduce(c_val_tup_t *accumulator, c_val_tup_t delta_cvt
  */
 void castle_component_tree_prefetch(struct castle_component_tree *ct)
 {
+    c_chk_cnt_t start = 0, end = 0;
     c_ext_pos_t cep;
-    int chunks;
+    int i;
 
     castle_printk(LOG_DEVEL, "Prefetching ct=%p da_id=0x%x\n", ct, ct->da);
 
-    /* Prefetch all extents from beginning. */
-    cep.offset = 0;
-
+    /* Internal btree nodes. */
     cep.ext_id = ct->internal_ext_free.ext_id;
-    chunks = (atomic64_read(&ct->internal_ext_free.used) / C_CHK_SIZE) + 1;
-    castle_cache_prefetch_pin(cep, chunks, C2_ADV_PREFETCH);
+    castle_extent_mask_read_all(cep.ext_id, &start, &end);
+    cep.offset = start * C_CHK_SIZE;
+    castle_cache_prefetch_pin(cep, end-start, C2_ADV_PREFETCH);
 
+    /* Leaf btree nodes. */
+    start = end = 0;
     cep.ext_id = ct->tree_ext_free.ext_id;
-    chunks = (atomic64_read(&ct->tree_ext_free.used) / C_CHK_SIZE) + 1;
-    castle_cache_prefetch_pin(cep, chunks, C2_ADV_PREFETCH);
+    castle_extent_mask_read_all(cep.ext_id, &start, &end);
+    cep.offset = start * C_CHK_SIZE;
+    castle_cache_prefetch_pin(cep, end-start, C2_ADV_PREFETCH);
 
-    cep.ext_id = ct->data_ext_free.ext_id;
-    chunks = (atomic64_read(&ct->data_ext_free.used) / C_CHK_SIZE) + 1;
-    castle_cache_prefetch_pin(cep, chunks, C2_ADV_PREFETCH);
+    /* Data extents. */
+    for (i = 0; i < ct->nr_data_exts; i++)
+    {
+        start = end = 0;
+        cep.ext_id = ct->data_exts[i];
+        castle_extent_mask_read_all(cep.ext_id, &start, &end);
+        cep.offset = start * C_CHK_SIZE;
+        castle_cache_prefetch_pin(cep, end-start, C2_ADV_PREFETCH);
+    }
 
     /* Waits for all outstanding prefetch IOs to complete. */
     castle_cache_prefetches_wait();

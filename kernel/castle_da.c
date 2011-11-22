@@ -11907,9 +11907,8 @@ void castle_double_array_put(c_da_t da_id)
 int castle_double_array_prefetch(c_da_t da_id)
 {
     struct castle_double_array *da;
-    c_ct_ext_ref_t *ct_refs;
-    int nr_cts, nr_exts, i;
-    struct list_head *l;
+    struct castle_da_cts_proxy *proxy;
+    int i;
 
     if (castle_double_array_get(da_id) != 0)
     {
@@ -11924,47 +11923,22 @@ int castle_double_array_prefetch(c_da_t da_id)
         return -EINVAL;
     }
 
+    proxy = castle_da_cts_proxy_get(da);
+    if (!proxy)
+    {
+        castle_printk(LOG_USERINFO, "Couldn't get CTs proxy for DA id=0x%x\n",
+                da_id);
+        castle_da_put(da);
+        return -EINVAL;
+    }
+
     castle_printk(LOG_DEVEL, "Prefetching CTs for DA=%p id=0x%d\n", da, da_id);
 
-reallocate:
-    read_lock(&da->lock);
-    nr_cts  = da->nr_trees;
-    nr_exts = 2 * castle_da_cts_proxy_extents(da);
-    read_unlock(&da->lock);
+    /* Prefetch CTs. */
+    for (i = 0; i < proxy->nr_cts; i++)
+        castle_component_tree_prefetch(proxy->cts[i].ct);
 
-    ct_refs = castle_alloc(nr_cts * sizeof(c_ct_ext_ref_t)
-                                + nr_exts * sizeof(c_ext_mask_id_t));
-    if (!ct_refs)
-        return -ENOMEM;
-
-    read_lock(&da->lock);
-
-    if (nr_cts != da->nr_trees
-            || nr_exts < castle_da_cts_proxy_extents(da))
-    {
-        read_unlock(&da->lock);
-
-        castle_free(ct_refs);
-
-        goto reallocate;
-    }
-
-    /* Prefetch ROCTs. */
-    for (i = 2; i < MAX_DA_LEVEL; i++)
-    {
-        list_for_each(l, &da->levels[i].trees)
-        {
-            struct castle_component_tree *ct;
-
-            ct = list_entry(l, struct castle_component_tree, da_list);
-            castle_ct_get(ct, 0 /*write*/, ct_refs);
-            castle_component_tree_prefetch(ct);
-            castle_ct_put(ct, 0 /*write*/, ct_refs);
-        }
-    }
-
-    read_unlock(&da->lock);
-
+    castle_da_cts_proxy_put(proxy);
     castle_double_array_put(da_id);
 
     return 0;
