@@ -6019,6 +6019,8 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
 
     if(MERGE_CHECKPOINTABLE(merge))
     {
+        unsigned int size;
+
         /* When an iterator moves to a leaf node new node boundary, a new s.e.b is set. */
         BUG_ON(nr_trees <= 0);
         merge->shrinkable_extent_boundaries.tree =
@@ -6068,12 +6070,21 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
         for(i=0; i<(nr_drain_exts + nr_trees); i++)
             merge->in_tree_shrinkable_cep[i] = merge->serdes.shrinkable_cep[i] =
                                     merge->in_tree_shrink_activatable_cep[i] = INVAL_EXT_POS;
+
+        /* merge serdes structs */
+        size = sizeof(struct castle_dmserlist_entry);
+        merge->serdes.mstore_entry = castle_alloc(size);
+        if(!merge->serdes.mstore_entry) goto error_out;
+        memset(merge->serdes.mstore_entry, 0, size);
+
+        size = sizeof(struct castle_in_tree_merge_state_entry)*merge->nr_trees;
+        merge->serdes.in_tree_mstore_entry_arr = castle_alloc(size);
+        if(!merge->serdes.in_tree_mstore_entry_arr) goto error_out;
+        memset(merge->serdes.in_tree_mstore_entry_arr, 0, size);
     }
 
     merge->growth_control_tree.ext_used_bytes  = 0;
     merge->growth_control_data.ext_used_bytes  = 0;
-    merge->serdes.mstore_entry                 = NULL;
-    merge->serdes.in_tree_mstore_entry_arr     = NULL;
     merge->serdes.des                          = 0;
 
     mutex_init(&merge->serdes.mutex);
@@ -6094,6 +6105,8 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
 error_out:
     BUG_ON(!ret);
 
+    castle_check_free(merge->serdes.in_tree_mstore_entry_arr);
+    castle_check_free(merge->serdes.mstore_entry);
     castle_check_free(merge->shrinkable_extent_boundaries.tree);
     castle_check_free(merge->latest_mo_cep);
     castle_check_free(merge->shrinkable_extent_boundaries.data);
@@ -6268,7 +6281,7 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge)
     current_state = atomic_read(&merge->serdes.valid);
     /*
     Possible state transitions: (MT = this thread, CT = checkpoint thread)
-        NULL_DAM_SERDES            -> INVALID_DAM_SERDES         [label="MT allocs"]
+        NULL_DAM_SERDES            -> INVALID_DAM_SERDES         [label="MT inits"]
         INVALID_DAM_SERDES         -> INVALID_DAM_SERDES         [label="MT updates iter state or"]
         INVALID_DAM_SERDES         -> VALID_AND_FRESH_DAM_SERDES [label="MT found new key boundary, updates out cct state"]
         VALID_AND_FRESH_DAM_SERDES -> VALID_AND_STALE_DAM_SERDES [label="CT flushes extents"]
@@ -6287,35 +6300,12 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge)
         if (atomic_read(&merge->out_tree->tree_depth) < 3)
             return;
 
-        printk("Serialiing merge: %u\n", merge->id);
+        castle_printk(LOG_DEBUG, "%s::[%p] init SERDES merge: %u\n", __FUNCTION__, merge, merge->id);
 
         /* first write - initialise */
         mutex_lock(&merge->serdes.mutex);
         debug("%s::initialising mstore entry for merge %p in "
                 "da %d, level %d\n", __FUNCTION__, merge, da->id, level);
-        BUG_ON(merge->serdes.mstore_entry);
-
-        merge->serdes.mstore_entry=
-            castle_zalloc(sizeof(struct castle_dmserlist_entry), GFP_KERNEL);
-        if(!merge->serdes.mstore_entry) goto alloc_fail_1;
-
-        /* Using vmalloc for the input tree merge state array...
-           An array made up of non-contiguous pages sounds bad in this situation
-           because in a heavily versioned workload there could be very frequent
-           updates to the input tree merge state. However, each entry in the array
-           is currently 80 bytes, which means one page can accomodate 50 trees worth
-           of merge state. Therefore, the performance impact should be negligible.
-
-           The counter argument: since one page can accomodate 50 trees, why
-           even bother with vmalloc since malloc should be enough for all but the
-           grandest of workloads? Because this vmalloc only happens once per merge
-           at most, so we might as well. If it is felt that this is actually too
-           costly, then an increase in MIN_DA_SERDES_LEVEL should be considered.
-         */
-        merge->serdes.in_tree_mstore_entry_arr=
-            castle_zalloc(sizeof(struct castle_in_tree_merge_state_entry)*merge->nr_trees,
-            GFP_KERNEL);
-        if(!merge->serdes.in_tree_mstore_entry_arr) goto alloc_fail_2;
 
         castle_da_merge_marshall(merge->serdes.mstore_entry,
                                  merge->serdes.in_tree_mstore_entry_arr,
@@ -6326,13 +6316,6 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge)
         atomic_set(&merge->serdes.valid, (int)new_state);
         mutex_unlock(&merge->serdes.mutex);
 
-        return;
-alloc_fail_2:
-        castle_kfree(merge->serdes.mstore_entry);
-alloc_fail_1:
-        castle_printk(LOG_ERROR, "%s::failed to malloc, partial merges disabled for this merge"
-                "[da %d level %d] (warning: UNTESTED).\n", __FUNCTION__, da, level);
-        //TODO@tr implement partial merges disabling - see trac #3839
         return;
     }
 
