@@ -3757,8 +3757,10 @@ __again:
     castle_da_lfs_ct_reset(lfs);
 
     /* Allocate Bloom filters. */
-    if ((ret = castle_bloom_create(&merge->out_tree->bloom, merge->da->id,
-                                   merge->da->btree_type, bloom_size)))
+    if ((ret = castle_bloom_create(&merge->out_tree->bloom,
+                                   merge->da->id,
+                                   merge->da->btree_type,
+                                   bloom_size)))
         merge->out_tree->bloom_exists = 0;
     else
         merge->out_tree->bloom_exists = 1;
@@ -5907,6 +5909,8 @@ error_out:
     if (merge->out_tree)
     {
         castle_da_merge_res_pool_detach(merge, ret);
+        if (merge->out_tree->bloom_exists)
+            castle_bloom_abort(&merge->out_tree->bloom);
         castle_ct_put(merge->out_tree, 0, NULL);
     }
     castle_printk(LOG_ERROR, "%s::Failed a merge with ret=%d\n", __FUNCTION__, ret);
