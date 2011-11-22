@@ -25,7 +25,7 @@ static int castle_versions_process(int lock);
 
 static struct kmem_cache *castle_versions_cache  = NULL;
 
-#define CASTLE_VERSIONS_MAX                 (200)   /**< Maximum number of live versions per-DA.*/
+#define CASTLE_VERSIONS_MAX                 (4)   /**< Maximum number of live versions per-DA.*/
 #define CASTLE_VERSIONS_HASH_SIZE           (1000)  /**< Size of castle_versions_hash.          */
 #define CASTLE_VERSIONS_COUNTS_HASH_SIZE    (1000)  /**< Size of castle_versions_counts_hash.   */
 static struct list_head  *castle_versions_hash          = NULL;
@@ -859,22 +859,28 @@ int castle_version_free(c_ver_t version)
 /**
  * Allocate a new version structure and add it to castle_versions_hash.
  *
- * @param   version Version number to add
- * @param   parent  New version's parent version number
- * @param   da_id   DA new version is associated with
- * @param   size    ??? Size of version ???
- * @param   health  What state the version is in (e.g. live, deleted, etc.)
+ * @param   version [in]    Version number to add
+ * @param   parent  [in]    New version's parent version number
+ * @param   da_id   [in]    DA new version is associated with
+ * @param   size    [in]    ??? Size of version ???
+ * @param   health  [in]    What state the version is in (e.g. live, deleted, etc.)
+ * @param   ver_out [out]   Pointer to new version structure
  *
  * - Updates per-DA version counts (based on health).
+ *
+ * @return  0           Version successfully added
+ * @return -E2BIG       Per-DA live version limit reached
+ * @return -EINVAL      Memory allocation or sysfs failure
  *
  * @also castle_version_delete()
  * @also castle_versions_count_adjust()
  */
-static struct castle_version* castle_version_add(c_ver_t version,
-                                                 c_ver_t parent,
-                                                 c_da_t da_id,
-                                                 c_byte_off_t size,
-                                                 cv_health_t health)
+static int castle_version_add(c_ver_t version,
+                              c_ver_t parent,
+                              c_da_t da_id,
+                              c_byte_off_t size,
+                              cv_health_t health,
+                              struct castle_version **ver_out)
 {
     struct castle_version *v;
     int ret;
@@ -884,9 +890,10 @@ static struct castle_version* castle_version_add(c_ver_t version,
     {
         if (ret == -E2BIG)
             castle_printk(LOG_USERINFO,
-                    "V1 cannot create more than %d versions per DA.\n",
-                    CASTLE_VERSIONS_MAX);
-        return NULL;
+                    "Maximum live version limit (%d) reached for DA 0x%x\n",
+                    CASTLE_VERSIONS_MAX, da_id);
+        *ver_out = NULL;
+        return -E2BIG;
     }
 
     v = kmem_cache_alloc(castle_versions_cache, GFP_KERNEL);
@@ -950,15 +957,18 @@ static struct castle_version* castle_version_add(c_ver_t version,
     /* Increment the number of versions known to the filesystem. */
     atomic_inc(&castle_versions_count);
 
-    return v;
+    *ver_out = v;
+    return 0;
 
 out_dealloc:
-    kmem_cache_free(castle_versions_cache, v);
+    if (v)
+        kmem_cache_free(castle_versions_cache, v);
     /* Revert bump to version counts.  Don't propagate as this decrement does
      * not imply health -> health+1. */
     _castle_versions_count_adjust(da_id, health, 0 /*add*/, 0 /*propagate*/);
 
-    return NULL;
+    *ver_out = NULL;
+    return -EINVAL;
 }
 
 c_da_t castle_version_da_id_get(c_ver_t version)
@@ -1353,14 +1363,22 @@ int castle_versions_writeback(int is_fini)
 }
 
 /***** External functions *****/
-static struct castle_version* castle_version_new_create(int snap_or_clone,
-                                                        c_ver_t parent,
-                                                        c_da_t da_id,
-                                                        c_byte_off_t size)
+/**
+ *
+ * @return -EFBIG       Global version limit reached
+ * @return -E2BIG       Per-DA live version limit reached
+ * @return -EEXIST      Non-existant parent
+ */
+static int castle_version_new_create(int snap_or_clone,
+                                     c_ver_t parent,
+                                     c_da_t da_id,
+                                     c_byte_off_t size,
+                                     struct castle_version **ver_out)
 {
     struct castle_version *v, *p;
     c_byte_off_t parent_size;
     c_ver_t version;
+    int ret;
 
     /* Updates to some variables (especially castle_versions_last) are protected by the
        ctrl lock. Make sure its locked. */
@@ -1375,7 +1393,8 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
         castle_printk(LOG_WARN, "Too many versions created: %d, rejecting an attempt "
                                 "to create a new one.\n",
                                 atomic_read(&castle_versions_count));
-        return NULL;
+        *ver_out = NULL;
+        return -E2BIG;
     }
 
     /* Read ftree root from the parent (also, make sure parent exists) */
@@ -1384,7 +1403,8 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
     {
         castle_printk(LOG_WARN, "Asked to create a child of non-existant parent: %d\n",
             parent);
-        return NULL;
+        *ver_out = NULL;
+        return -EEXIST;
     }
 
     parent_size = p->size;
@@ -1392,9 +1412,12 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
     /* Try to add it to the hash. Use the da_id provided or the parent's */
     BUG_ON(!DA_INVAL(da_id) && !DA_INVAL(p->da_id));
     da_id = DA_INVAL(da_id) ? p->da_id : da_id;
-    v = castle_version_add(version, parent, da_id, size, CVH_LIVE);
+    ret = castle_version_add(version, parent, da_id, size, CVH_LIVE, &v);
     if (!v)
-        return NULL;
+    {
+        *ver_out = NULL;
+        return ret;
+    }
 
     /* If our parent has the size set, inherit it (ignores the size argument) */
     if(parent_size != 0)
@@ -1411,7 +1434,8 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
         castle_versions_hash_remove(v);
         kmem_cache_free(castle_versions_cache, v);
 
-        return NULL;
+        *ver_out = NULL;
+        return -EINVAL;
     }
 
     /* Set is_leaf bit for the the child and clear for parent. */
@@ -1423,46 +1447,63 @@ static struct castle_version* castle_version_new_create(int snap_or_clone,
     BUG_ON(version != atomic_read(&castle_versions_last) + 1);
     atomic_inc(&castle_versions_last);
 
-    return v;
+    *ver_out = v;
+    return 0;
 }
 
-c_ver_t castle_version_new(int snap_or_clone,
-                           c_ver_t parent,
-                           c_da_t da_id,
-                           c_byte_off_t size)
+/**
+ *
+ * @return -EROFS   Version is non-leaf
+ * @return -EUNATCH Version is attached
+ *
+ * @also castle_version_new_create()
+ */
+int castle_version_new(int snap_or_clone,
+                       c_ver_t parent,
+                       c_da_t da_id,
+                       c_byte_off_t size,
+                       c_ver_t *version)
 {
     struct castle_version *v;
     int is_leaf = castle_version_is_leaf(parent);
     int is_attached = castle_version_attached(parent);
+    int ret = 0;
 
     /* Snapshot is not possible on non-leafs. */
     if (snap_or_clone && !is_leaf)
     {
         castle_printk(LOG_WARN, "Couldn't snapshot non-leaf version: %d.\n", parent);
-        return INVAL_VERSION;
+        *version = INVAL_VERSION;
+
+        return -EROFS;
     }
 
     /* Clone is not possible on leafs which are attached. */
     if (!snap_or_clone && is_leaf && is_attached)
     {
         castle_printk(LOG_WARN, "Couldn't clone leaf versions: %d.\n", parent);
-        return INVAL_VERSION;
+        *version = INVAL_VERSION;
+        return -EUNATCH;
     }
 
     debug("New version: snap_or_clone=%d, parent=%d, size=%lld\n",
             snap_or_clone, parent, size);
     /* Get a new version number */
-    v = castle_version_new_create(snap_or_clone,
-                                  parent,
-                                  da_id,
-                                  size);
+    ret = castle_version_new_create(snap_or_clone,
+                                    parent,
+                                    da_id,
+                                    size,
+                                    &v);
 
     /* Return if we couldn't create the version correctly
        (possibly because we trying to clone attached version,
         or because someone asked for more than one snapshot to
         an attached version */
-    if(!v)
-        return INVAL_VERSION;
+    if (!v)
+    {
+        *version = INVAL_VERSION;
+        return ret;
+    }
 
     /* Timestamp the creation. */
     do_gettimeofday(&v->creation_timestamp);
@@ -1470,7 +1511,8 @@ c_ver_t castle_version_new(int snap_or_clone,
     /* We've succeeded at creating a new version number.
        Let's find where to store it on the disk. */
 
-    return v->version;
+    *version = v->version;
+    return 0;
 }
 
 int castle_version_attach(c_ver_t version)
@@ -1814,10 +1856,11 @@ void castle_version_is_ancestor_and_compare(c_ver_t version1,
 int castle_versions_zero_init(void)
 {
     struct castle_version *v;
+    int ret;
 
     debug("Initialising version root.\n");
 
-    v = castle_version_add(0, 0, INVAL_DA, 0, CVH_LIVE);
+    ret = castle_version_add(0, 0, INVAL_DA, 0, CVH_LIVE, &v);
     if (!v)
     {
         castle_printk(LOG_ERROR, "Failed to create verion ZERO\n");
@@ -1862,11 +1905,12 @@ int castle_versions_read(void)
         castle_mstore_iterator_next(iterator, &mstore_ventry, &key);
         health = test_bit(CV_DELETED_BIT, &mstore_ventry.flags)
                 ? CVH_DELETED : CVH_LIVE;
-        v = castle_version_add(mstore_ventry.version_nr,
-                               mstore_ventry.parent,
-                               mstore_ventry.da_id,
-                               mstore_ventry.size,
-                               health);
+        ret = castle_version_add(mstore_ventry.version_nr,
+                                 mstore_ventry.parent,
+                                 mstore_ventry.da_id,
+                                 mstore_ventry.size,
+                                 health,
+                                 &v);
         if (!v)
         {
             ret = -ENOMEM;

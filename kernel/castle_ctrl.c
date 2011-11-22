@@ -147,10 +147,11 @@ void castle_control_create_with_opts(uint64_t size, c_da_opts_t opts, int *ret, 
     }
 
     /* Create a new version which will act as the root for this version tree */
-    version = castle_version_new(0, /* clone */
-                                 0, /* root version */
-                                 da_id,
-                                 size);
+    *ret = castle_version_new(0, /* clone */
+                              0, /* root version */
+                              da_id,
+                              size,
+                              &version);
 
     /* We use doubling arrays for collection trees */
     if (collection_tree && (*ret = castle_double_array_make(da_id, version, opts)))
@@ -172,9 +173,26 @@ err_out:
     *id  = -1;
 }
 
+/**
+ * Clone an existing version.
+ *
+ * @param   version [in]    Version to clone
+ * @param   ret     [out]   Return code from operation
+ * @param   clone   [out]   Resulting version ID of clone
+ *
+ * @return  0           Version cloned successfully
+ * @return -EINVAL      Attempted to clone version 0
+ * @return -ECANCELED   Version marked for deletion
+ * @return -EROFS       Version is non-leaf
+ * @return -EUNATCH     Version is attached
+ * @return -EFBIG       Global version limit reached
+ * @return -E2BIG       Per-DA live version limit reached
+ * @return -EEXIST      Non-existant parent
+ * @return -ENOMEM      Allocation failure
+ */
 void castle_control_clone(c_ver_t version, int *ret, c_ver_t *clone)
 {
-    if(version == 0)
+    if (version == 0)
     {
         castle_printk(LOG_WARN, "Do not clone version 0. Create a new volume.\n");
         *clone = 0;
@@ -186,24 +204,22 @@ void castle_control_clone(c_ver_t version, int *ret, c_ver_t *clone)
     {
         castle_printk(LOG_WARN, "Version is already marked for deletion. Can't clone it.\n");
         *clone = 0;
-        *ret = -EINVAL;
+        *ret = -ECANCELED;
         return;
     }
 
     /* Try to create a new version in the version tree */
-    version = castle_version_new(0,        /* clone */
-                                 version,
-                                 INVAL_DA, /* da_id: take parent's */
-                                 0);       /* size:  take parent's */
-    if(VERSION_INVAL(version))
-    {
+    *ret = castle_version_new(0,             /* clone */
+                              version,
+                              INVAL_DA,      /* da_id: take parent's */
+                              0,             /* size:  take parent's */
+                              &version);
+    BUG_ON(*ret == 0 && VERSION_INVAL(version));
+    BUG_ON(*ret != 0 && !VERSION_INVAL(version));
+    if (VERSION_INVAL(version))
         *clone = 0;
-        *ret = -EINVAL;
-    } else
-    {
+    else
         *clone = version;
-        *ret = 0;
-    }
 }
 
 void castle_control_snapshot(uint32_t dev, int *ret, c_ver_t *version)
@@ -220,14 +236,15 @@ void castle_control_snapshot(uint32_t dev, int *ret, c_ver_t *version)
     }
     down_write(&cd->lock);
     old_version = cd->version;
-    ver = castle_version_new(1,            /* snapshot */
+    *ret = castle_version_new(1,            /* snapshot */
                              cd->version,
-                             INVAL_DA,     /* take da_id from the parent */
-                             0);           /* take size  from the parent */
+                             INVAL_DA,      /* take da_id from the parent */
+                             0,             /* take size from the parent */
+                             &ver);
     if(VERSION_INVAL(ver))
     {
         *version = -1;
-        *ret     = -EINVAL;
+        *ret     = -EINVAL; // currently ignoring castle_version_new()
     }
     else
     {
@@ -544,10 +561,11 @@ void castle_control_collection_snapshot(c_collection_id_t collection,
     }
     down_write(&ca->lock);
     old_version  = ca->version;
-    ver = castle_version_new(1,            /* snapshot */
-                             ca->version,
-                             INVAL_DA,     /* take da_id from the parent */
-                             0);           /* take size  from the parent */
+    *ret = castle_version_new(1,            /* snapshot */
+                              ca->version,
+                              INVAL_DA,     /* take da_id from the parent */
+                              0,            /* take size  from the parent */
+                              &ver);
     if(VERSION_INVAL(ver))
     {
         *version = -1;

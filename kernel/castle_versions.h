@@ -47,10 +47,11 @@ void        castle_version_private_stats_adjust     (c_ver_t version, cv_nonatom
 cv_nonatomic_stats_t castle_version_consistent_stats_get (c_ver_t version);
 cv_nonatomic_stats_t castle_version_live_stats_get  (c_ver_t version);
 int         castle_versions_zero_init               (void);
-c_ver_t     castle_version_new                      (int snap_or_clone,
+int         castle_version_new                      (int snap_or_clone,
                                                      c_ver_t parent,
-                                                     c_da_t da,
-                                                     c_byte_off_t size);
+                                                     c_da_t da_id,
+                                                     c_byte_off_t size,
+                                                     c_ver_t *version);
 int         castle_version_free                     (c_ver_t version);
 int         castle_version_tree_delete              (c_ver_t version);
 int         castle_version_delete                   (c_ver_t version);
