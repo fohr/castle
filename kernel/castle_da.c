@@ -6942,7 +6942,6 @@ static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_bytes)
     struct castle_double_array *da = merge->da;
     int level = merge->level;
     struct castle_component_tree **in_trees = merge->in_trees;
-    tree_seq_t out_tree_id=0;
     int ret = 0;
     int i;
 
@@ -7003,7 +7002,6 @@ static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_bytes)
         /* Merges should never fail.
          *
          * Per-version statistics will now be out of sync. */
-        out_tree_id = INVAL_TREE;
         castle_printk(LOG_WARN, "%s::MERGE FAILED - DA %d L %d, with input cts %d and %d \n",
                 __FUNCTION__, da->id, level, in_trees[0]->seq, in_trees[1]->seq);
         goto merge_failed;
@@ -7041,8 +7039,8 @@ complete_merge_do:
                 C2_ADV_EXTENT|C2_ADV_HARDPIN, -1, -1, 0);
     }
 
-    debug_merges("%s::MERGE END with ret %d - DA %d L %d, produced out ct seq %d \n",
-        __FUNCTION__, ret, da->id, level, out_tree_id);
+    debug_merges("%s::MERGE END with ret %d - DA %d L %d, produced out ct seq ??\n",
+        __FUNCTION__, ret, da->id, level);
 
     castle_merge_sleep_prepare(merge);
 
@@ -7065,8 +7063,6 @@ complete_merge_do:
                                  da->id, level, ret);
 
     castle_da_merge_dealloc(merge, ret, 1/* In transaction. */);
-
-    castle_trace_da_merge(TRACE_END, TRACE_DA_MERGE_ID, da->id, level, out_tree_id, 0);
 
 out:
     /* safe for checkpoint to run now because we've completed and cleaned up all merge state */
@@ -7277,6 +7273,8 @@ merge_do:
             msleep_interruptible(10000);
             goto __again;
         }
+
+        castle_trace_da_merge(TRACE_END, TRACE_DA_MERGE_ID, da->id, level, 0, 0);
 
         atomic_dec(&da->ongoing_merges);
         continue;
