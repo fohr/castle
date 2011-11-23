@@ -1195,8 +1195,11 @@ static void castle_object_reference_release(c_val_tup_t cvt)
 {
     if (CVT_LARGE_OBJECT(cvt))
         castle_extent_unlink(cvt.cep.ext_id);
+#if 0
+    //TODO@tr FIX THIS!!!!!!!!!!!!
     if (CVT_INLINE(cvt))
         CVT_INLINE_FREE(cvt);
+#endif
 }
 
 void castle_object_get_continue(struct castle_bio_vec *c_bvec,
