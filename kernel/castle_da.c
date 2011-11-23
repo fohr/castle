@@ -676,7 +676,7 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter,
         /* Update time spent obtaining c2bs. */
         castle_perf_debug_bump_ctr(iter->tree->get_c2b_ns, ts_end, ts_start);
         debug("Node in immut iter.\n");
-        castle_cache_advise(c2b->cep, C2_ADV_PREFETCH|C2_ADV_FRWD, -1, -1, 0);
+        castle_cache_advise(c2b->cep, C2_ADV_PREFETCH, -1, -1, 0);
         write_lock_c2b(c2b);
         /* If c2b is not up to date, issue a blocking READ to update */
         if(!c2b_uptodate(c2b))
@@ -3929,7 +3929,7 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
         c_c2b = castle_cache_block_get_for_merge(new_cep, blocks);
         castle_perf_debug_getnstimeofday(&ts_end);
         castle_perf_debug_bump_ctr(tree->get_c2b_ns, ts_end, ts_start);
-        castle_cache_advise(s_c2b->cep, C2_ADV_PREFETCH|C2_ADV_SOFTPIN|C2_ADV_FRWD, -1, -1, 0);
+        castle_cache_advise(s_c2b->cep, C2_ADV_PREFETCH|C2_ADV_SOFTPIN, -1, -1, 0);
         /* Make sure that we lock _after_ prefetch call. */
         write_lock_c2b(s_c2b);
         write_lock_c2b(c_c2b);

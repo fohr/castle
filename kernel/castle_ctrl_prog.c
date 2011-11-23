@@ -150,12 +150,12 @@ static void castle_ctrl_prog_work_do(void *unused)
     switch(castle_ctrl_prog_state)
     {
         case CTRL_PROG_NOT_PRESENT:
-            castle_printk(LOG_DEBUG, "Startup ctrl prog.\n");
+            castle_printk(LOG_USERINFO, "Startup ctrl prog.\n");
             castle_ctrl_prog_touch();
             castle_uevent1(CASTLE_CTRL_PROG_REGISTER, 0);
             break;
         case CTRL_PROG_PRESENT:
-            castle_printk(LOG_DEBUG, "No heartbeat from ctrl prog.\n");
+            castle_printk(LOG_USERINFO, "No heartbeat from ctrl prog.\n");
             castle_ctrl_prog_state = CTRL_PROG_NOT_PRESENT;
             break;
         case CTRL_PROG_SHUTDOWN:

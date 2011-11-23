@@ -180,8 +180,6 @@ extern void put_c2b_and_demote(c2_block_t *c2b);
 enum c2_advise_bits {
     C2_ADV_cep,
     C2_ADV_extent,  /** @FIXME needs to be folded into C2_ADV_cep */
-    C2_ADV_frwd,
-    C2_ADV_back,    /** @FIXME needs to be folded into C2_ADV_frwd */
     C2_ADV_prefetch,
     C2_ADV_hardpin,
     C2_ADV_softpin,
@@ -193,9 +191,6 @@ enum c2_advise_bits {
 typedef uint32_t c2_advise_t;
 #define C2_ADV_CEP          ((c2_advise_t) (1<<C2_ADV_cep))
 #define C2_ADV_EXTENT       ((c2_advise_t) (1<<C2_ADV_extent))
-
-#define C2_ADV_FRWD         ((c2_advise_t) (1<<C2_ADV_frwd))
-#define C2_ADV_BACK         ((c2_advise_t) (1<<C2_ADV_back))
 
 #define C2_ADV_PREFETCH     ((c2_advise_t) (1<<C2_ADV_prefetch))
 #define C2_ADV_HARDPIN      ((c2_advise_t) (1<<C2_ADV_hardpin))
