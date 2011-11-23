@@ -4726,24 +4726,13 @@ static void castle_da_merge_serdes_dealloc(struct castle_da_merge *merge)
     BUG_ON(!merge->da);
     BUG_ON( (level < MIN_DA_SERDES_LEVEL) );
 
-    serdes_state = atomic_read(&merge->serdes.valid);
-    if(serdes_state == NULL_DAM_SERDES)
-    {
-        castle_printk(LOG_WARN, "%s::deallocating non-initialised merge SERDES state on "
-                "da %d level %d: repeated call???\n",
-                __FUNCTION__, da->id, level);
-        return;
-    }
-
     debug("%s::deallocating merge serdes state for da %d level %d\n",
             __FUNCTION__, da->id, level);
 
     BUG_ON(!merge->serdes.mstore_entry);
     BUG_ON(!merge->out_tree);
-    castle_kfree(merge->serdes.mstore_entry);
-    merge->serdes.mstore_entry=NULL;
-    castle_kfree(merge->serdes.in_tree_mstore_entry_arr);
-    merge->serdes.in_tree_mstore_entry_arr=NULL;
+    castle_check_free(merge->serdes.mstore_entry);
+    castle_check_free(merge->serdes.in_tree_mstore_entry_arr);
 
     serdes_state = NULL_DAM_SERDES;
     atomic_set(&merge->serdes.valid, (int)serdes_state);
@@ -4934,7 +4923,7 @@ static void castle_da_merge_partial_merge_cleanup(struct castle_da_merge *merge,
                                               merge->da,
                                               merge->level);
 
-    if (serdes_state > NULL_DAM_SERDES)
+    if (MERGE_CHECKPOINTABLE(merge))
         castle_da_merge_serdes_dealloc(merge);
 
     mutex_unlock(&merge->serdes.mutex);
@@ -9414,6 +9403,8 @@ static int castle_da_merge_deser_phase1(void)
         c_ext_id_t *drain_exts;
         c_mstore_key_t key;
 
+        /* alloc temp storage for mstore entry; will be used until we have a struct alloc'd by
+           castle_da_merge_alloc(). */
         entry = castle_zalloc(sizeof(struct castle_dmserlist_entry), GFP_KERNEL);
         if(!entry)
         {
@@ -9443,6 +9434,7 @@ static int castle_da_merge_deser_phase1(void)
         merge = castle_da_merge_alloc(entry->nr_trees, level, des_da,
                                       entry->merge_id, NULL,
                                       entry->nr_drain_exts, drain_exts);
+        /* if we failed to malloc at init, something must be horribly wrong */
         BUG_ON(!merge);
 
         /* Change the count to 0 for now, while serialising data_ext maps we add them. */
@@ -9455,6 +9447,9 @@ static int castle_da_merge_deser_phase1(void)
         /* we know the da and the level, and we passed some sanity checking - so put the serdes
            state in the appropriate merge slot */
         merge->serdes.mstore_entry = entry;
+        memcpy(merge->serdes.mstore_entry, entry, sizeof(struct castle_dmserlist_entry));
+        castle_kfree(entry);
+        entry = NULL;
 
         /* Recover partially complete output CT */
         merge->out_tree = castle_da_ct_unmarshall(NULL, &merge->serdes.mstore_entry->out_tree);
@@ -9471,21 +9466,11 @@ static int castle_da_merge_deser_phase1(void)
         /* bloom_build_param recovery is left to merge thread (castle_da_merge_deserialise) */
 
         /* sanity check merge output tree state */
-        castle_da_merge_serdes_out_tree_check(entry, des_da, level);
+        castle_da_merge_serdes_out_tree_check(merge->serdes.mstore_entry, des_da, level);
 
         /* inc ct seq number if necessary */
         if (merge->out_tree->seq >= atomic64_read(&castle_next_tree_seq))
             atomic64_set(&castle_next_tree_seq, merge->out_tree->seq+1);
-
-        /* allocate space required for Stage 2 DES */
-        merge->serdes.in_tree_mstore_entry_arr =
-            castle_zalloc(sizeof(struct castle_in_tree_merge_state_entry)*entry->nr_trees,
-                          GFP_KERNEL);
-        if(!merge->serdes.in_tree_mstore_entry_arr)
-        {
-            castle_printk(LOG_ERROR, "%s:: castle_zalloc fail.\n", __FUNCTION__);
-            BUG();
-        }
 
         /* notify merge thread that there is a deserialising merge */
         merge->serdes.des = 1;
@@ -9494,26 +9479,26 @@ static int castle_da_merge_deser_phase1(void)
         atomic_set(&merge->serdes.valid, VALID_AND_STALE_DAM_SERDES);
 
         /* enable query redirection if necessary */
-        if(!EXT_POS_INVAL(entry->redirection_partition_node_cep))
+        if(!EXT_POS_INVAL(merge->serdes.mstore_entry->redirection_partition_node_cep))
         {
             int node_size = -1;
             struct castle_btree_node *node;
             struct castle_btree_type *out_btree =
-                castle_btree_type_get(entry->out_tree.btree_type);
+                castle_btree_type_get(merge->serdes.mstore_entry->out_tree.btree_type);
 
             /* output tree pointer */
             set_bit(CASTLE_CT_PARTIAL_TREE_BIT, &merge->out_tree->flags);
 
             /* recover c2b containing partition key */
-            node_size = entry->redirection_partition_node_size;
+            node_size = merge->serdes.mstore_entry->redirection_partition_node_size;
             if(node_size == 0 || node_size > 256)
             {
                 castle_printk(LOG_ERROR, "%s::redir_partition_node_cep="cep_fmt_str", node size=%u\n",
-                    __FUNCTION__, cep2str(entry->redirection_partition_node_cep), node_size);
+                    __FUNCTION__, cep2str(merge->serdes.mstore_entry->redirection_partition_node_cep), node_size);
                 BUG();
             }
             merge->redirection_partition.node_c2b =
-                castle_cache_block_get_for_merge(entry->redirection_partition_node_cep, node_size);
+                castle_cache_block_get_for_merge(merge->serdes.mstore_entry->redirection_partition_node_cep, node_size);
             merge->redirection_partition.node_size = node_size;
             write_lock_c2b(merge->redirection_partition.node_c2b);
             if(!c2b_uptodate(merge->redirection_partition.node_c2b))

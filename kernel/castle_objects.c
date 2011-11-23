@@ -774,6 +774,7 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
             if(unlikely(replace->counter_type == CASTLE_OBJECT_COUNTER_SET) ||
                 (replace->counter_type == CASTLE_OBJECT_COUNTER_SET))
             {
+                castle_free(value);
                 castle_printk(LOG_ERROR, "%s::counters cannot be timestamped... we don't even provide an interface to do it, so what's going on?!?\n", __FUNCTION__);
                 WARN_ON(1);
                 return -EINVAL;
