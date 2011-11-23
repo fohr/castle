@@ -468,7 +468,7 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     BUG_ON(atomic_read(&c_bio->count) != 1);
     BUG_ON(c_bio->err != 0);
     BUG_ON(replace->data_c2b);
-    BUG_ON(memcmp(&replace->cvt, &cvt, sizeof(c_val_tup_t)));
+    BUG_ON(!err && memcmp(&replace->cvt, &cvt, sizeof(c_val_tup_t)));
     BUG_ON((c_bvec->cvt_get == NULL) && err);
 
     debug("castle_object_replace_complete\n");
@@ -479,11 +479,11 @@ static void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     /* If there was an error inserting on large objects, free the extent.
        Since there was an error, the object hasn't been threaded onto large object list yet.
        There is no need to remove it from there, or to change any accounting. */
-    if (err && CVT_LARGE_OBJECT(cvt))
-        castle_extent_free(cvt.cep.ext_id);
+    if (err && CVT_LARGE_OBJECT(replace->cvt))
+        castle_extent_free(replace->cvt.cep.ext_id);
 
     /* Release kmalloced memory for inline objects. */
-    CVT_INLINE_FREE(cvt);
+    CVT_INLINE_FREE(replace->cvt);
 
     /* Unreserve any space we may still hold in the CT. Drop the CT ref. */
     if (ct)
@@ -649,8 +649,7 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
 
     if(existing_object_user_timestamp > replace->user_timestamp)
     {
-        *new_cvt = INVAL_VAL_TUP;
-        *cvt = *new_cvt;
+        *cvt = INVAL_VAL_TUP;
         atomic64_inc(&c_bvec->tree->da->stats.user_timestamps.t0_discards);
         debug("%s::dropping an insert because it's timestamp (%llu) "
                 "is \"older\" than the timestamp of an existing entry (%llu).\n",
@@ -1196,6 +1195,8 @@ static void castle_object_reference_release(c_val_tup_t cvt)
 {
     if (CVT_LARGE_OBJECT(cvt))
         castle_extent_unlink(cvt.cep.ext_id);
+    if (CVT_INLINE(cvt))
+        CVT_INLINE_FREE(cvt);
 }
 
 void castle_object_get_continue(struct castle_bio_vec *c_bvec,
