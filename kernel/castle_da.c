@@ -4716,21 +4716,17 @@ static void castle_ct_large_objs_remove(struct list_head *);
  */
 static void castle_da_merge_serdes_dealloc(struct castle_da_merge *merge)
 {
-    struct castle_double_array *da;
     int level;
     c_merge_serdes_state_t serdes_state;
-    da=merge->da;
-    level=merge->level;
 
     BUG_ON(!merge);
-    BUG_ON(!merge->da);
+
+    level = merge->level;
     BUG_ON( (level < MIN_DA_SERDES_LEVEL) );
 
-    debug("%s::deallocating merge serdes state for da %d level %d\n",
-            __FUNCTION__, da->id, level);
+    debug("%s::[%p] deallocating merge SERDES state for merge %u\n",
+            __FUNCTION__, merge, merge->id);
 
-    BUG_ON(!merge->serdes.mstore_entry);
-    BUG_ON(!merge->out_tree);
     castle_check_free(merge->serdes.mstore_entry);
     castle_check_free(merge->serdes.in_tree_mstore_entry_arr);
 
