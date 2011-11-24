@@ -2436,6 +2436,7 @@ void castle_extents_meta_pool_init(void)
     {
         castle_printk(LOG_ERROR, "Failed meta pool init on meta mark.\n");
         castle_vfree(meta_extent_pool);
+        goto err_out_dealloc;
     }
 
     /* For each meta extent block in the pool ... */
