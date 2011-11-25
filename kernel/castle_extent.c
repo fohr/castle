@@ -2419,7 +2419,8 @@ void castle_extents_meta_pool_init(void)
     if(!used_meta_bitmap)
     {
         castle_printk(LOG_ERROR, "Couldn't allocate used bitmap.\n");
-        goto err_out_dealloc;
+        castle_vfree(meta_extent_pool);
+        goto out;
     }
 
     /* Initialise extent scanner state. */
@@ -2464,7 +2465,7 @@ void castle_extents_meta_pool_init(void)
         castle_extent_meta_pool_size++;
     }
 
-    debug("Initialising meta ext pool with %d unused pages\n", castle_extent_meta_pool_size);
+    castle_printk(LOG_USERINFO, "Initialising meta ext pool with %d unused pages\n", castle_extent_meta_pool_size);
 
     if (castle_extent_meta_pool_size < castle_meta_pool_entries)
     {
@@ -2505,8 +2506,11 @@ err_out_nofreespace:
         meta_pool_inited = 1;
         meta_pool_available_count = castle_extent_meta_pool_size;
     } else
+    {
+        castle_vfree(meta_extent_pool);
         castle_printk(LOG_WARN,
                       "No free meta extent pages found. Meta extent pool not initialised..\n");
+    }
 
 err_out_dealloc:
     castle_vfree(used_meta_bitmap);
