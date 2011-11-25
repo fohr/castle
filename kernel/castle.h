@@ -530,7 +530,6 @@ STATIC_BUG_ON(sizeof(struct castle_fs_superblock) != 3072);
 
 enum {
     CVT_TYPE_INVALID               = 0x00,
-    CVT_TYPE_LEAF_PTR              = 0x02,
     CVT_TYPE_NODE                  = 0x04,
     CVT_TYPE_TOMBSTONE             = 0x09,
     CVT_TYPE_INLINE                = 0x11,
@@ -584,8 +583,6 @@ STATIC_BUG_ON(sizeof(struct castle_value_tuple) != 32);
                                          ((_cvt).type == CVT_TYPE_COUNTER_ACCUM_SET_SET) ||   \
                                          ((_cvt).type == CVT_TYPE_COUNTER_ACCUM_ADD_SET) ||   \
                                          ((_cvt).type == CVT_TYPE_COUNTER_ACCUM_ADD_ADD))
-
-#define CVT_LEAF_PTR(_cvt)               ((_cvt).type == CVT_TYPE_LEAF_PTR)
 
 #define CVT_NODE(_cvt)                   ((_cvt).type == CVT_TYPE_NODE)
 
@@ -659,12 +656,6 @@ STATIC_BUG_ON(sizeof(struct castle_value_tuple) != 32);
    (_cvt).type   = CVT_TYPE_INVALID;                                          \
    (_cvt).length = 0;                                                         \
    (_cvt).cep    = INVAL_EXT_POS;                                             \
-}
-#define CVT_LEAF_PTR_INIT(_cvt, _length, _cep)                                \
-{                                                                             \
-   (_cvt).type   = CVT_TYPE_LEAF_PTR;                                         \
-   (_cvt).length = _length;                                                   \
-   (_cvt).cep    = _cep;                                                      \
 }
 #define CVT_NODE_INIT(_cvt, _length, _cep)                                    \
 {                                                                             \
@@ -1640,8 +1631,6 @@ typedef struct castle_iterator {
                                                          at the time when the walk started.
                                                          Used to prevent races with root node
                                                          splits.                                */
-
-    struct castle_indirect_node  *indirect_nodes;   /**< If allocated, MAX_BTREE_ENTRIES        */
 
     struct work_struct            work;
 } c_iter_t;

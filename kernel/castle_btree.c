@@ -650,7 +650,7 @@ static void castle_btree_slot_insert(c2_block_t  *c2b,
 
     BUG_ON(index > node->used);
 
-    if (CVT_ON_DISK(cvt) || CVT_NODE(cvt) || CVT_LEAF_PTR(cvt))
+    if (CVT_ON_DISK(cvt) || CVT_NODE(cvt))
         debug("Inserting "cep_fmt_str" under index=%d\n", cep2str(cvt.cep), index);
     else
         debug("%s::Inserting an inline value under index=%d\n",
@@ -679,9 +679,7 @@ static void castle_btree_slot_insert(c2_block_t  *c2b,
            because lub_version is strictly ancestoral to the node version.
            It implies that the key hasn't been insterted here, because
            keys are only inserted to weakly ancestoral nodes */
-        //BUG_ON(!CVT_LEAF_PTR(lub_cvt) && BTREE_NODE_IS_LEAF(node));
         /* Replace the slot */
-        BUG_ON(CVT_LEAF_PTR(cvt));
         btree->entry_replace(node, index, key, version, cvt);
         dirty_c2b(c2b);
         return;
@@ -1038,7 +1036,6 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
         debug("%s::Need to insert (%p, 0x%x) into node (used: 0x%x, leaf=%d).\n",
                 __FUNCTION__, key, version, node->used, BTREE_NODE_IS_LEAF(node));
         BUG_ON(btree->key_compare(c_bvec->parent_key, btree->inv_key) == 0);
-        BUG_ON(CVT_LEAF_PTR(new_cvt));
         castle_btree_slot_insert(c_bvec->btree_node,
                                  insert_idx,
                                  key,
@@ -1053,7 +1050,6 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
     BUG_ON((btree->key_compare(lub_key, key) != 0) ||
            (lub_version != version));
     BUG_ON(lub_idx != insert_idx);
-    BUG_ON(CVT_LEAF_PTR(lub_cvt));
 
     /* Get CVT from the client. Provide the current CVT. Ancestor isn't necessary
        even if it exists, since exact match was found. */
@@ -1063,7 +1059,6 @@ static void castle_btree_write_process(c_bvec_t *c_bvec)
        castle_btree_io_end(c_bvec, INVAL_VAL_TUP, ret);
        return;
     }
-    BUG_ON(CVT_LEAF_PTR(new_cvt));
 
     /* Update live per-version statistics. */
     if (CVT_TOMBSTONE(lub_cvt))
@@ -1198,9 +1193,8 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
     }
 
     btree->entry_get(node, lub_idx, &lub_key, &lub_version, &lub_cvt);
-    /* If we found the LUB, either complete the ftree walk (if we are looking
-       at a 'proper' leaf), or go to the next level (possibly following a leaf ptr) */
-    if (BTREE_NODE_IS_LEAF(node) && !CVT_LEAF_PTR(lub_cvt))
+    /* If we found the LUB, either complete the tree walk (if we are looking at a leaf). */
+    if (BTREE_NODE_IS_LEAF(node))
     {
         BUG_ON(!CVT_LEAF_VAL(lub_cvt));
         if (CVT_ON_DISK(lub_cvt))
@@ -1235,10 +1229,7 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
     else
     {
         BUG_ON(CVT_LEAF_VAL(lub_cvt));
-        if (CVT_LEAF_PTR(lub_cvt))
-            debug("Leaf ptr. Read and search "cep_fmt_str_nl,
-                   cep2str(lub_cvt.cep));
-        else if (CVT_NODE(lub_cvt))
+        if (CVT_NODE(lub_cvt))
             debug("Child node. Read and search - inline value\n");
         else
             BUG();
@@ -1553,13 +1544,6 @@ static void castle_btree_iter_end(c_iter_t *c_iter, int err, int async)
 
     castle_btree_iter_path_put(c_iter, 0);
 
-    /* @TODO: this will not work well for double frees/double ends, fix that */
-    if(c_iter->indirect_nodes)
-    {
-        castle_free(c_iter->indirect_nodes);
-        c_iter->indirect_nodes = NULL;
-    }
-
     /* Run end() callback, if specified.  We should not need to reset
      * running_async here as the iterator is being terminated. */
     if (c_iter->end)
@@ -1569,99 +1553,12 @@ static void castle_btree_iter_end(c_iter_t *c_iter, int err, int async)
     wake_up(&castle_btree_iters_wq);
 }
 
-#ifdef CASTLE_DEBUG
-#define indirect_node(_i)      ({struct castle_indirect_node *_n;            \
-                                 BUG_ON(!c_iter->indirect_nodes);            \
-                                 BUG_ON(_i >= RW_TREES_MAX_ENTRIES);         \
-                                 _n = &c_iter->indirect_nodes[(_i)];         \
-                                 _n;})
-#else
-#define indirect_node(_i)      (&c_iter->indirect_nodes[(_i)])
-#endif
-#define cep_lt(_cep1, _cep2)   (EXT_POS_COMP(_cep1, _cep2) < 0)
-#define c2b_follow_ptr(_i)     indirect_node(indirect_node(_i)->r_idx)->c2b
-
-#define slot_follow_ptr(_i, _real_c2b, _real_slot_idx)                       \
-({                                                                           \
-    struct castle_btree_node *_n;                                            \
-    struct castle_btree_type *_t;                                            \
-    c_val_tup_t _cvt;                                                        \
-                                                                             \
-    (_real_c2b)      = c_iter->path[c_iter->depth];                          \
-    _n               = c2b_bnode(_real_c2b);                                 \
-    _t               = castle_btree_type_get(_n->type);                      \
-    (_real_slot_idx) = (_i);                                                 \
-    _t->entry_get(_n, _i, NULL, NULL, &_cvt);                                \
-    if(CVT_LEAF_PTR(_cvt))                                                   \
-    {                                                                        \
-        BUG_ON(1 /* btree == &castle_vlba_tree */);                          \
-        (_real_c2b)  = c2b_follow_ptr(_i);                                   \
-        (_real_slot_idx) = indirect_node(_i)->node_idx;                      \
-    }                                                                        \
- })
-
-void castle_btree_iter_replace(c_iter_t *c_iter, int index, c_val_tup_t cvt)
-{
-    struct castle_btree_node *real_node;
-    struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
-    c2_block_t *real_c2b;
-    int real_entry_idx;
-    void *prev_key;
-    c_val_tup_t prev_cvt;
-    c_ver_t prev_version;
-#ifdef CASTLE_DEBUG
-    struct castle_btree_node *node;
-
-    iter_debug("Version=0x%x, index=%d\n", c_iter->version, index);
-
-    real_c2b = c_iter->path[c_iter->depth];
-    BUG_ON(real_c2b == NULL);
-
-    node = c2b_bnode(real_c2b);
-    BUG_ON(!BTREE_NODE_IS_LEAF(node));
-    BUG_ON(index >= node->used);
-#endif
-
-    slot_follow_ptr(index, real_c2b, real_entry_idx);
-    real_node = c2b_bnode(real_c2b);
-
-    btree->entry_get(real_node,
-                     real_entry_idx,
-                    &prev_key,
-                    &prev_version,
-                    &prev_cvt);
-    /* We should be looking at a concreate entry, not a leaf pointer now */
-    BUG_ON(CVT_LEAF_PTR(prev_cvt));
-
-#if 0
-    if (CVT_ON_DISK(prev_cvt) && CVT_ON_DISK(cvt))
-    iter_debug("Current=(0x%x, 0x%x), new=(0x%x, 0x%x), "
-               "in btree node: (0x%x, 0x%x), index=%d\n",
-                prev_cvt.cep.ext_id,
-                prev_cvt.cep.offset,
-                cvt.cep.ext_id,
-                cvt.cep.offset,
-                real_c2b->cep.ext_id,
-                real_c2b->cep.offset,
-                real_entry_idx);
-#endif
-
-    BUG_ON(CVT_LEAF_PTR(cvt));
-    btree->entry_replace(real_node,
-                         real_entry_idx,
-                         prev_key,
-                         prev_version,
-                         cvt);
-    dirty_c2b(real_c2b);
-}
-
 static int  __castle_btree_iter_start(c_iter_t *c_iter);
 
 static void __castle_btree_iter_release(c_iter_t *c_iter)
 {
     struct castle_btree_node *node;
     c2_block_t *leaf;
-    int i;
 
     iter_debug("Releasing leaf node.\n");
     leaf = c_iter->path[c_iter->depth];
@@ -1670,22 +1567,6 @@ static void __castle_btree_iter_release(c_iter_t *c_iter)
     node = c2b_bnode(leaf);
     BUG_ON(!BTREE_NODE_IS_LEAF(node));
 
-    if(c_iter->indirect_nodes != NULL)
-    {
-        /* Unlock all the indirect nodes. */
-        for(i=node->used - 1; i>=0; i--)
-        {
-            iter_debug("===> Trying to unlock indirect node i=%d\n", i);
-            if(indirect_node(i)->c2b)
-            {
-                read_unlock_node(indirect_node(i)->c2b);
-                put_c2b(indirect_node(i)->c2b);
-                indirect_node(i)->c2b = NULL;
-            }
-        }
-        iter_debug("Unlocking cep=(0x%x, 0x%x)\n",
-            leaf->cep.ext_id, leaf->cep.offset);
-    }
     iter_debug("%p unlocks leaf (0x%x, 0x%x)\n",
         c_iter, leaf->cep.ext_id, leaf->cep.offset);
     read_unlock_node(leaf);
@@ -1698,191 +1579,6 @@ void castle_btree_iter_continue(c_iter_t *c_iter)
 {
     __castle_btree_iter_release(c_iter);
     castle_btree_iter_start(c_iter);
-}
-
-static void castle_btree_iter_leaf_ptrs_sort(c_iter_t *c_iter, int nr_ptrs)
-{
-    int i, root, child, start, end, last_r_idx;
-    c_ext_pos_t  last_cep;
-
-    /* We use heapsort, using Wikipedia's pseudo-code as the reference */
-#define heap_swap(_i, _j)                                                   \
-           {c_ext_pos_t  tmp_cep;                                           \
-            uint8_t      tmp_f_idx;                                         \
-            tmp_cep   = indirect_node(_i)->cep;                             \
-            tmp_f_idx = indirect_node(_i)->f_idx;                           \
-            indirect_node(_i)->cep   = indirect_node(_j)->cep;              \
-            indirect_node(_i)->f_idx = indirect_node(_j)->f_idx;            \
-            indirect_node(_j)->cep   = tmp_cep;                             \
-            indirect_node(_j)->f_idx = tmp_f_idx;}
-
-#define sift_down(_start, _end)                                             \
-   {root = (_start);                                                        \
-    while((2*root + 1) <= (_end))                                           \
-    {                                                                       \
-        child = 2 * root + 1;                                               \
-        if((child < (_end)) &&                                              \
-            cep_lt(indirect_node(child)->cep, indirect_node(child+1)->cep)) \
-                child = child+1;                                            \
-        if(cep_lt(indirect_node(root)->cep, indirect_node(child)->cep))     \
-        {                                                                   \
-            heap_swap(root, child);                                         \
-            root = child;                                                   \
-        } else                                                              \
-        {                                                                   \
-            break;                                                          \
-        }                                                                   \
-    }}
-
-    /* Arrange the array into a heap */
-    for(start = (nr_ptrs - 2)/2; start >= 0; start--)
-        sift_down(start, nr_ptrs-1);
-
-    /* Sort */
-    for(end=nr_ptrs-1; end > 0; end--)
-    {
-        heap_swap(end, 0);
-        sift_down(0, end-1);
-    }
-
-    /* Create the reverse map. Also, remove duplicate ceps from the array */
-    last_cep   = INVAL_EXT_POS;
-    last_r_idx = -1;
-    for(i=0; i < nr_ptrs; i++)
-    {
-        if(EXT_POS_EQUAL(indirect_node(i)->cep, last_cep))
-        {
-            BUG_ON(last_r_idx < 0);
-            indirect_node(indirect_node(i)->f_idx)->r_idx = last_r_idx;
-            indirect_node(i)->cep = INVAL_EXT_POS;
-        } else
-        {
-            indirect_node(indirect_node(i)->f_idx)->r_idx = i;
-            last_cep   = indirect_node(i)->cep;
-            last_r_idx = i;
-        }
-    }
-}
-
-static void castle_btree_iter_leaf_ptrs_lock(c_iter_t *c_iter)
-{
-    struct castle_btree_node *node;
-    struct castle_btree_type *btree = castle_btree_type_get(c_iter->tree->btree_type);
-    c2_block_t *c2b;
-    int i, j, nr_ptrs;
-
-    /* VLBA trees don't have leaf pointers. */
-    if(1 /* btree == &castle_vlba_tree */)
-    {
-        BUG_ON(c_iter->indirect_nodes != NULL);
-        return;
-    }
-    node = c2b_bnode(c_iter->path[c_iter->depth]);
-    /* Make sure that node->used is smaller than what we can index in 1 byte f/r_idx */
-    BUG_ON(node->used >= 1<<(8*sizeof(uint16_t)));
-
-    /* Find all leaf pointers */
-    j=0;
-    for(i=0; i<node->used; i++)
-    {
-        c_ver_t entry_version;
-        c_val_tup_t entry_cvt;
-
-        btree->entry_get(node, i, NULL, &entry_version,
-                         &entry_cvt);
-        if((c_iter->type == C_ITER_MATCHING_VERSIONS &&
-            entry_version != c_iter->version) ||
-           (c_iter->type == C_ITER_ANCESTRAL_VERSIONS &&
-            !castle_version_is_ancestor(entry_version, c_iter->version)))
-            continue;
-        if(CVT_LEAF_PTR(entry_cvt))
-        {
-            BUG_ON(indirect_node(j)->c2b);
-            indirect_node(j)->cep   = entry_cvt.cep;
-            indirect_node(j)->f_idx = i;
-            j++;
-        }
-    }
-    nr_ptrs = j;
-
-    /* Sort the pointers on cep ordering */
-    castle_btree_iter_leaf_ptrs_sort(c_iter, nr_ptrs);
-
-    /* Now that leafs have been sorted, lock them all */
-    for(i=0; i<nr_ptrs; i++)
-    {
-        c_ext_pos_t cep = indirect_node(i)->cep;
-        /* Skip over the invalid (previously duplicated) blocks */
-        if(EXT_POS_INVAL(cep))
-        {
-            indirect_node(i)->c2b = NULL;
-            continue;
-        }
-        BUG_ON(c_iter->depth + 1 != c_iter->btree_levels);
-        c2b = castle_cache_block_get(cep, c_iter->tree->node_sizes[0]);
-        /* If the c2b is up to date within the cache, take a read lock.
-         * Otherwise get a write lock and retest, somebody could have completed
-         * IO while we waited; if so, downgrade to a read lock. */
-        if (c2b_uptodate(c2b))
-        {
-            read_lock_node(c2b);
-        }
-        else
-        {
-            write_lock_c2b(c2b);
-            if(c2b_uptodate(c2b))
-                /* Somebody else did IO for us. */
-                downgrade_write_node(c2b);
-            else
-            {
-                /* We need to do IO. */
-                BUG_ON(submit_c2b_sync(READ, c2b));
-                downgrade_write_node(c2b);
-            }
-        }
-        indirect_node(i)->c2b = c2b;
-    }
-
-    /* Finally, find out where in the indirect block the individual ptrs are */
-    for(i=0; i<node->used; i++)
-    {
-        c_ver_t entry_version;
-        void *entry_key;
-        c_val_tup_t entry_cvt;
-
-        /* Set the idx to inval to catch bugs early */
-        indirect_node(i)->node_idx = -1;
-
-        btree->entry_get(node, i, &entry_key, &entry_version,
-                         &entry_cvt);
-        if((c_iter->type == C_ITER_MATCHING_VERSIONS &&
-            entry_version != c_iter->version) ||
-           (c_iter->type == C_ITER_ANCESTRAL_VERSIONS &&
-            !castle_version_is_ancestor(entry_version, c_iter->version)))
-            continue;
-        if(CVT_LEAF_PTR(entry_cvt))
-        {
-            c_ver_t real_entry_version;
-            void *real_entry_key;
-            int lub_idx;
-
-            castle_btree_lub_find(c2b_bnode(c2b_follow_ptr(i)),
-                                  entry_key,
-                                  entry_version,
-                                 &lub_idx,
-                                  NULL);
-            /* Check that we _really_ found the right entry in the indirect node */
-            BUG_ON(lub_idx < 0);
-            btree->entry_get(c2b_bnode(c2b_follow_ptr(i)),
-                             lub_idx,
-                            &real_entry_key,
-                            &real_entry_version,
-                             NULL);
-            BUG_ON((btree->key_compare(entry_key, real_entry_key) != 0) ||
-                   (entry_version != real_entry_version));
-            indirect_node(i)->node_idx = lub_idx;
-        }
-    }
 }
 
 void castle_iter_parent_key_set(c_iter_t *iter, void *key)
@@ -1933,20 +1629,17 @@ static int castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
     else
         i = 0;
 
-    castle_btree_iter_leaf_ptrs_lock(c_iter);
-
     for (; i < node->used; i++)
     {
-        int         real_slot_idx;
         c_ver_t     entry_version;
         c_val_tup_t entry_cvt;
         void       *entry_key;
+        int         disabled;
 
         if (c_iter->cancelled)
             break;
 
-        btree->entry_get(node, i, &entry_key, &entry_version,
-                         &entry_cvt);
+        disabled = btree->entry_get(node, i, &entry_key, &entry_version, &entry_cvt);
 
         if (CVT_ON_DISK(entry_cvt))
             iter_debug("Current slot: (b=%p, v=%x)->(cep=0x%x, 0x%x)\n",
@@ -1956,12 +1649,6 @@ static int castle_btree_iter_version_leaf_process(c_iter_t *c_iter)
             (c_iter->type == C_ITER_ANCESTRAL_VERSIONS &&
              castle_version_is_ancestor(entry_version, c_iter->version)))
         {
-            c2_block_t *c2b;
-            int disabled;
-
-            slot_follow_ptr(i, c2b, real_slot_idx);
-            disabled = btree->entry_get(c2b_bnode(c2b), real_slot_idx, NULL, NULL,
-                                        &entry_cvt);
             /* If a disabled entry is about to be returned, we should have gone
                to the node that's currently handling this key instead. */
             BUG_ON(disabled);
@@ -2071,8 +1758,6 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
     {
         castle_printk(LOG_ERROR, "%s::lub_find returned -1, terminating iter %p\n",
                 __FUNCTION__, c_iter);
-        //castle_btree_iter_end(c_iter, c_iter->err);
-        //return;
         BUG();
     }
     btree->entry_get(node, index, &entry_key, NULL, &cvt);
@@ -2360,6 +2045,7 @@ void castle_btree_iter_init(c_iter_t *c_iter, c_ver_t version, int type)
 
     atomic_inc(&castle_btree_iters_cnt);
 
+    BUG_ON((type != C_ITER_MATCHING_VERSIONS) && (type != C_ITER_ANCESTRAL_VERSIONS));
     c_iter->type = type;
     c_iter->version = version;
     castle_iter_parent_key_set(c_iter, btree->min_key);
@@ -2368,29 +2054,7 @@ void castle_btree_iter_init(c_iter_t *c_iter, c_ver_t version, int type)
     c_iter->depth = -1;
     c_iter->err = 0;
     c_iter->cancelled = 0;
-    c_iter->indirect_nodes = NULL;
     memset(c_iter->path, 0, sizeof(c_iter->path));
-    switch(c_iter->type)
-    {
-        case C_ITER_MATCHING_VERSIONS:
-        case C_ITER_ANCESTRAL_VERSIONS:
-            /* VLBA trees don't have leaf pointers. */
-            if(1 /* btree == &castle_vlba_tree */)
-                return;
-            c_iter->indirect_nodes =
-                castle_alloc(RW_TREES_MAX_ENTRIES * sizeof(struct castle_indirect_node));
-            /* If memory allocation failed, cancel the iterator, and set the error condition.
-               This will get picked up by _start() */
-            if(!c_iter->indirect_nodes)
-                castle_btree_iter_cancel(c_iter, -ENOMEM);
-            memset(c_iter->indirect_nodes,
-                   0,
-                   RW_TREES_MAX_ENTRIES * sizeof(struct castle_indirect_node));
-            return;
-        default:
-            BUG();
-            return;
-    }
 }
 
 /***** Init/fini functions *****/
@@ -2676,7 +2340,6 @@ static int castle_rq_iter_each(c_iter_t *c_iter,
                     rq_iter, rq_iter->cur_key, key);
             BUG();
         }
-        BUG_ON(CVT_LEAF_PTR(cvt));
         /* Add the entry into the buffer, in the version of the rq. This guarantees that
            results from different arrays will be merged properly by the merged iterator
            (in castle_da_rq_iter). */

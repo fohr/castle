@@ -581,7 +581,7 @@ static int castle_vlba_tree_entry_get(struct castle_btree_node *node,
         BUG_ON(VLBA_TREE_ENTRY_IS_TOMB_STONE(entry) && entry->val_len != 0);
         BUG_ON(VLBA_TREE_ENTRY_IS_INLINE(entry) &&
                (entry->val_len > MAX_INLINE_VAL_SIZE));
-        BUG_ON(!BTREE_NODE_IS_LEAF(node) && (CVT_LEAF_PTR(*cvt_p) || CVT_LEAF_VAL(*cvt_p)));
+        BUG_ON(!BTREE_NODE_IS_LEAF(node) && CVT_LEAF_VAL(*cvt_p));
         BUG_ON(BTREE_NODE_IS_LEAF(node) && CVT_NODE(*cvt_p));
     }
 
@@ -608,7 +608,7 @@ static void castle_vlba_tree_entry_add(struct castle_btree_node *node,
     uint32_t req_space;
 
     BUG_ON(idx < 0 || idx > node->used);
-    BUG_ON(!BTREE_NODE_IS_LEAF(node) && (CVT_LEAF_PTR(cvt) || CVT_LEAF_VAL(cvt)));
+    BUG_ON(!BTREE_NODE_IS_LEAF(node) && CVT_LEAF_VAL(cvt));
 #if 0
     if (BTREE_NODE_IS_LEAF(node) && CVT_NODE(cvt))
     {
@@ -717,7 +717,7 @@ static void castle_vlba_tree_entry_replace(struct castle_btree_node *node,
     int old_length, new_length;
 
     BUG_ON(idx < 0 || idx >= node->used);
-    BUG_ON(!BTREE_NODE_IS_LEAF(node) && (CVT_LEAF_PTR(cvt) || CVT_LEAF_VAL(cvt)));
+    BUG_ON(!BTREE_NODE_IS_LEAF(node) && CVT_LEAF_VAL(cvt));
 #if 0
     BUG_ON(BTREE_NODE_IS_LEAF(node) && CVT_NODE(cvt));
 #endif
@@ -886,12 +886,6 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
             castle_printk(LOG_ERROR, ", 0x%x) -> "cep_fmt_str_nl,
                 entry->version,
                 cep2str(entry->cep));
-            BUG();
-        }
-
-        if (VLBA_TREE_ENTRY_IS_LEAF_PTR(entry) && !BTREE_NODE_IS_LEAF(node))
-        {
-            castle_printk(LOG_ERROR, "Entry is leaf ptr but node is not a leaf\n");
             BUG();
         }
 

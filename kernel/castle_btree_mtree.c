@@ -7,7 +7,7 @@
 #define MTREE_ENTRY_IS_NODE(_slot)          CVT_NODE(*(_slot))
 #define MTREE_ENTRY_IS_LEAF_VAL(_slot)      CVT_LEAF_VAL(*(_slot))
 #define MTREE_ENTRY_IS_LEAF_PTR(_slot)      CVT_LEAF_PTR(*(_slot))
-#define MTREE_ENTRY_IS_ANY_LEAF(_slot)      (CVT_LEAF_VAL(*(_slot)) || CVT_LEAF_PTR(*(_slot)))
+#define MTREE_ENTRY_IS_ANY_LEAF(_slot)      (CVT_LEAF_VAL(*(_slot)))
 
 #define MTREE_ENTRY_IS_TOMB_STONE(_slot)    CVT_TOMBSTONE(*(_slot))
 #define MTREE_ENTRY_IS_INLINE(_slot)        CVT_INLINE(*(_slot))
@@ -139,7 +139,7 @@ static int castle_mtree_entry_get(struct castle_btree_node *node,
     if(cvt_p)
     {
         *cvt_p = convert_to_cvt(entry->type, entry->val_len, entry->cep, NULL, 0);
-        BUG_ON(!CVT_MEDIUM_OBJECT(*cvt_p) && !CVT_NODE(*cvt_p) && !CVT_LEAF_PTR(*cvt_p));
+        BUG_ON(!CVT_MEDIUM_OBJECT(*cvt_p) && !CVT_NODE(*cvt_p));
     }
 
     return 0;
@@ -158,7 +158,6 @@ static void castle_mtree_entry_add(struct castle_btree_node *node,
     BUG_ON(idx < 0 || idx > node->used);
     BUG_ON(sizeof(*entry) * node->used + sizeof(struct castle_btree_node) >
                                                 MTREE_NODE_SIZE * C_BLK_SIZE);
-    BUG_ON(!BTREE_NODE_IS_LEAF(node) && CVT_LEAF_PTR(cvt));
     BUG_ON(BTREE_NODE_IS_LEAF(node) && CVT_NODE(cvt));
 
     /* Make space for the new entry, noop if we are adding one at the end
@@ -167,7 +166,7 @@ static void castle_mtree_entry_add(struct castle_btree_node *node,
 
     entry->block   = (block_t)(unsigned long)key;
     entry->version = version;
-    BUG_ON(!CVT_MEDIUM_OBJECT(cvt) && !CVT_NODE(cvt) && !CVT_LEAF_PTR(cvt));
+    BUG_ON(!CVT_MEDIUM_OBJECT(cvt) && !CVT_NODE(cvt));
     entry->type    = cvt.type;
     entry->cep     = cvt.cep;
     entry->val_len = cvt.length;
@@ -187,12 +186,11 @@ static void castle_mtree_entry_replace(struct castle_btree_node *node,
     struct castle_mtree_entry *entry = entries + idx;
 
     BUG_ON(idx < 0 || idx >= node->used);
-    BUG_ON(!BTREE_NODE_IS_LEAF(node) && CVT_LEAF_PTR(cvt));
     BUG_ON(BTREE_NODE_IS_LEAF(node) && CVT_NODE(cvt));
 
     entry->block   = (block_t)(unsigned long)key;
     entry->version = version;
-    BUG_ON(!CVT_MEDIUM_OBJECT(cvt) && !CVT_NODE(cvt) && !CVT_LEAF_PTR(cvt));
+    BUG_ON(!CVT_MEDIUM_OBJECT(cvt) && !CVT_NODE(cvt));
     entry->type    = cvt.type;
     entry->cep     = cvt.cep;
     entry->val_len = cvt.length;
@@ -260,11 +258,10 @@ static void castle_mtree_node_print(struct castle_btree_node *node)
     castle_printk(LOG_DEBUG, "Node: used=%d, version=%d, flags=%d\n",
                   node->used, node->version, node->flags);
     for(i=0; i<node->used; i++)
-        castle_printk(LOG_DEBUG, "[%d] (0x%x, 0x%x, %s) -> "cep_fmt_str_nl,
+        castle_printk(LOG_DEBUG, "[%d] (0x%x, 0x%x) -> "cep_fmt_str_nl,
             i,
             entries[i].block,
             entries[i].version,
-            MTREE_ENTRY_IS_LEAF_PTR(entries + i) ? "leafptr" : "direct ",
             cep2str(entries[i].cep));
     castle_printk(LOG_DEBUG, "\n");
 }

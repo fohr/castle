@@ -815,7 +815,7 @@ c_val_tup_t convert_to_cvt(uint8_t type,
     cvt.type           = type;
     cvt.length         = length;
     cvt.user_timestamp = user_timestamp;
-    if (CVT_LEAF_PTR(cvt) || CVT_NODE(cvt) || CVT_ON_DISK(cvt))
+    if (CVT_NODE(cvt) || CVT_ON_DISK(cvt))
     {
         cvt.cep    = cep;
     }

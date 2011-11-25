@@ -14,7 +14,6 @@ void        castle_btree_submit       (c_bvec_t *c_bvec, int go_async);
 
 void        castle_btree_iter_init    (c_iter_t *c_iter, c_ver_t version, int type);
 void        castle_btree_iter_start   (c_iter_t *c_iter);
-void        castle_btree_iter_replace (c_iter_t *c_iter, int index, c_val_tup_t cvt);
 void        castle_btree_iter_continue(c_iter_t *c_iter);
 void        castle_btree_iter_cancel  (c_iter_t *c_iter, int err);
 

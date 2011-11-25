@@ -1137,7 +1137,6 @@ static inline uint32_t castle_back_key_kernel_to_user(c_vl_bkey_t *kas_key,
 static inline uint8_t castle_back_val_type_kernel_to_user(c_val_tup_t cvt)
 {
     /* We should never be returning those to userspace. */
-    BUG_ON(CVT_LEAF_PTR(cvt));
     BUG_ON(CVT_NODE(cvt));
     BUG_ON(CVT_TOMBSTONE(cvt));
     BUG_ON(CVT_COUNTER_ADD(cvt));

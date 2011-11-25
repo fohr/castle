@@ -573,7 +573,7 @@ static int castle_ct_immut_iter_entry_find(c_immut_iter_t *iter,
     {
 
         disabled = iter->btree->entry_get(node, start_idx, NULL, &version, &cvt);
-        if(!CVT_LEAF_PTR(cvt) && !disabled && castle_version_is_ancestor(node->version, version))
+        if(!disabled && castle_version_is_ancestor(node->version, version))
             return start_idx;
     }
 
@@ -818,7 +818,7 @@ static void castle_ct_immut_iter_next(c_immut_iter_t *iter,
                                       version_p,
                                       cvt_p);
     /* curr_idx should have been set to a non-leaf pointer */
-    BUG_ON(CVT_LEAF_PTR(*cvt_p) || disabled);
+    BUG_ON(disabled);
     iter->cached_idx = iter->curr_idx;
     iter->curr_idx = castle_ct_immut_iter_entry_find(iter, iter->curr_node, iter->curr_idx + 1);
     debug("Returned next, curr_idx is now=%d / %d.\n", iter->curr_idx, iter->curr_node->used);
@@ -1246,7 +1246,6 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
         debug("Dereferencing first 4 bytes of the key (should be length)=0x%x.\n",
                 *((uint32_t *)key));
         debug("Inserting into the node=%d, under idx=%d\n", node_idx, node_offset);
-        BUG_ON(CVT_LEAF_PTR(cvt));
         if(CVT_ACCUM_COUNTER(cvt))
             CVT_COUNTER_ACCUM_ONEV_TO_LOCAL(cvt, cvt);
 
@@ -4161,7 +4160,6 @@ static c_val_tup_t* _castle_da_entry_add(struct castle_da_merge *merge,
     debug("Adding an idx=%d, key=%p, *key=%d, version=%d\n",
             level->next_idx, key, *((uint32_t *)key), version);
     /* Add the entry to the node (this may get dropped later, but leave it here for now */
-    BUG_ON(CVT_LEAF_PTR(cvt));
     btree->entry_add(node, level->next_idx, key, version, cvt);
     dirty_c2b(level->node_c2b);
     if (depth > 0)
@@ -4335,7 +4333,6 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     btree->entry_get(node, valid_end_idx, &key, &version, &cvt);
     debug("Inserting into parent key=%p, *key=%d, version=%d\n",
             key, *((uint32_t*)key), node->version);
-    BUG_ON(CVT_LEAF_PTR(cvt));
 
     /* Btree walk takes locks 2 at a time as it moves downwards. Node adoption attempts to do the
        reverse, i.e. move upwards while holding locks. To avoid deadlock, we need to temporarily
@@ -4396,7 +4393,6 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
         /* If merge is completing, there shouldn't be any splits any more. */
         BUG_ON(merge->completing);
         btree->entry_get(node, node_idx,  &key, &version, &cvt);
-        BUG_ON(CVT_LEAF_PTR(cvt));
         debug("%s::spliting node at depth %d for da %d level %d.\n",
                 __FUNCTION__, depth, merge->da->id, merge->level);
         castle_da_entry_add(merge, depth, key, version, cvt, 1);
@@ -4595,7 +4591,7 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge, c_ext_pos
 
         /* Replace right-most entry with (k=max_key, v=0) */
         btree->entry_get(node, node->used-1, &k, &v, &cvt);
-        BUG_ON(!CVT_NODE(cvt) || CVT_LEAF_PTR(cvt));
+        BUG_ON(!CVT_NODE(cvt));
         debug("The node is non-leaf, replacing the right most entry with (max_key, 0).\n");
         btree->entry_replace(node, node->used-1, btree->max_key, 0, cvt);
         /* Change the version of the node to 0 */
