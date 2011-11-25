@@ -4462,6 +4462,8 @@ static int c2_pref_window_advance(c2_pref_window_t *window, c_ext_pos_t cep, c2_
     c2_pref_window_submit(window, submit_cep, pages, debug);
 
 insert_and_exit:
+    BUG_ON(cep.ext_id != window->ext_id);
+    cep.offset = window->start_off;
     start_c2b = castle_cache_block_get(cep, BLKS_PER_CHK);
     if (c2_pref_window_insert(window, start_c2b) != EXIT_SUCCESS)
     {
