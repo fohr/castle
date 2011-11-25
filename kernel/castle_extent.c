@@ -2489,7 +2489,7 @@ void castle_extents_meta_pool_init(void)
     /* Check that the index has not got out of sync with castle_extent_meta_pool_size. */
     BUG_ON(i != castle_extent_meta_pool_size);
 
-    castle_printk(LOG_USERINFO, "Initialising meta ext pool with %d unused pages\n", castle_extent_meta_pool_size);
+    castle_printk(LOG_USERINFO, "Meta extent pool using %d unused meta extent pages.\n", castle_extent_meta_pool_size);
 
     if (castle_extent_meta_pool_size < castle_meta_pool_entries)
     {
@@ -2523,7 +2523,7 @@ void castle_extents_meta_pool_init(void)
             BUG_ON(meta_pool_offset >= atomic64_read(&meta_ext_free.used));
             BUG_ON(meta_pool_offset < current_used);
         }
-        debug("Initialising meta ext pool with %d allocated pages\n",
+        debug("Meta extent pool using %d allocated pages.\n",
               (castle_meta_pool_entries - castle_extent_meta_pool_size));
     }
 
