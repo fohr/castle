@@ -2291,8 +2291,9 @@ void castle_extent_meta_pool_freeze(void)
 {
     castle_extent_transaction_start();
     BUG_ON(!list_empty(&meta_pool_frozen));
+    BUG_ON(meta_pool_frozen_count != 0);
     BUG_ON((meta_pool_released_count + meta_pool_available_count + meta_pool_inuse_count)
-            < castle_extent_meta_pool_size);
+            != castle_extent_meta_pool_size);
     list_splice_init(&meta_pool_released, &meta_pool_frozen);
     meta_pool_frozen_count += meta_pool_released_count;
     meta_pool_released_count = 0;
@@ -2308,6 +2309,8 @@ void castle_extent_meta_pool_free(void)
     list_splice_init(&meta_pool_frozen, &meta_pool_available);
     meta_pool_available_count += meta_pool_frozen_count;
     meta_pool_frozen_count = 0;
+    BUG_ON((meta_pool_released_count + meta_pool_available_count + meta_pool_inuse_count)
+            != castle_extent_meta_pool_size);
     castle_extent_transaction_end();
 }
 
@@ -2338,6 +2341,23 @@ meta_pool_entry_t * castle_extent_meta_pool_get(c_byte_off_t * offset)
     }
 }
 
+static meta_pool_entry_t * castle_extent_meta_pool_inuse_get(c_byte_off_t offset)
+{
+    meta_pool_entry_t * pent;
+
+    BUG_ON(!castle_extent_in_transaction());
+
+    if (list_empty(&meta_pool_inuse))
+        return NULL;
+
+    pent = list_first_entry(&meta_pool_inuse, meta_pool_entry_t, list);
+    list_del(&pent->list);
+    pent->offset = offset;
+    meta_pool_inuse_count--;
+
+    return pent;
+}
+
 /*
  * Release an entry from the inuse list, placing it on the release list for
  * later processing during checkpoint.
@@ -2346,19 +2366,17 @@ meta_pool_entry_t * castle_extent_meta_pool_get(c_byte_off_t * offset)
  */
 void castle_extent_meta_pool_release(c_byte_off_t offset)
 {
+    meta_pool_entry_t * pent;
+
     BUG_ON(!castle_extent_in_transaction());
 
-    if (!list_empty(&meta_pool_inuse))
-    {
-        meta_pool_entry_t * pent;
+    pent = castle_extent_meta_pool_inuse_get(offset);
 
-        pent = list_first_entry(&meta_pool_inuse, meta_pool_entry_t, list);
-        list_del(&pent->list);
-        meta_pool_inuse_count--;
-        pent->offset = offset;
-        list_add_tail(&pent->list, &meta_pool_released);
-        meta_pool_released_count++;
-    }
+    if (!pent)
+        return;
+
+    list_add_tail(&pent->list, &meta_pool_released);
+    meta_pool_released_count++;
 }
 
 /*
@@ -2367,14 +2385,16 @@ void castle_extent_meta_pool_release(c_byte_off_t offset)
  *
  * @param pent    The meta extent pool entry being returned.
  */
-void castle_extent_meta_pool_replace(meta_pool_entry_t * pent)
+void castle_extent_meta_pool_replace(c_byte_off_t offset)
 {
+    meta_pool_entry_t * pent;
+
     BUG_ON(!castle_extent_in_transaction());
-    BUG_ON(list_empty(&meta_pool_inuse));
+
+    pent = castle_extent_meta_pool_inuse_get(offset);
+
     BUG_ON(!pent);
 
-    list_del(&pent->list);
-    meta_pool_inuse_count--;
     list_add(&pent->list, &meta_pool_available);
     meta_pool_available_count++;
 }
@@ -2387,7 +2407,8 @@ void castle_extents_meta_pool_init(void)
     unsigned long                   nr_meta_pgs, bitmap_size;
     void                            *used_meta_bitmap;
     struct castle_meta_compactor    meta_pool;
-    int                             i, unused_idx, map_idx;
+    int                             i, unused_idx;
+    uint64_t                        map_idx;
     c_byte_off_t                    meta_pool_offset;
     c_ext_pos_t                     maps_cep;
 
@@ -2465,10 +2486,15 @@ void castle_extents_meta_pool_init(void)
         castle_extent_meta_pool_size++;
     }
 
+    /* Check that the index has not got out of sync with castle_extent_meta_pool_size. */
+    BUG_ON(i != castle_extent_meta_pool_size);
+
     castle_printk(LOG_USERINFO, "Initialising meta ext pool with %d unused pages\n", castle_extent_meta_pool_size);
 
     if (castle_extent_meta_pool_size < castle_meta_pool_entries)
     {
+        uint64_t    current_used = atomic64_read(&meta_ext_free.used);
+
         /*
          * We didn't allocate the entire free pool from meta extent pages before
          * meta_ext_free.used. Get this directly in one go using the normal freespace allocator so
@@ -2490,12 +2516,19 @@ void castle_extents_meta_pool_init(void)
             meta_pool_offset = (unsigned long)(maps_cep.offset + (map_idx * PAGE_SIZE));
             meta_extent_pool[i].offset = meta_pool_offset;
             list_add_tail(&meta_extent_pool[i].list, &meta_pool_available);
+            /*
+             * We should never be using an offset at or past meta_ext_free.used, and we should
+             * never be using an offset less than meta_ext_free.used before the allocation.
+             */
             BUG_ON(meta_pool_offset >= atomic64_read(&meta_ext_free.used));
+            BUG_ON(meta_pool_offset < current_used);
         }
         debug("Initialising meta ext pool with %d allocated pages\n",
               (castle_meta_pool_entries - castle_extent_meta_pool_size));
     }
 
+    /* Check that our index is the same as castle_meta_pool_entries. */
+    BUG_ON(i != castle_meta_pool_entries);
     castle_extent_meta_pool_size = castle_meta_pool_entries;
 
 err_out_nofreespace:
@@ -3114,7 +3147,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     struct castle_extents_superblock *castle_extents_sb;
     c_res_pool_t *pool = NULL;
     uint32_t     nr_blocks;
-    meta_pool_entry_t * meta_pool_entryp = NULL;
+    int allocated_from_meta_pool = 0;
 
     BUG_ON(!castle_extent_in_transaction());
     BUG_ON(!extent_init_done && !LOGICAL_EXTENT(ext_id));
@@ -3191,8 +3224,11 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
         ext->maps_cep.offset = 0;
     }
     else if ((nr_blocks == 1) &&
-             (meta_pool_entryp = castle_extent_meta_pool_get(&ext->maps_cep.offset)))
+             (castle_extent_meta_pool_get(&ext->maps_cep.offset)))
+    {
+        allocated_from_meta_pool = 1;
         ext->maps_cep.ext_id = META_EXT_ID;
+    }
     else
     {
         if (castle_ext_freespace_get(&meta_ext_free, (nr_blocks * C_BLK_SIZE), 0, &ext->maps_cep))
@@ -3271,8 +3307,8 @@ __hell:
     }
 
     /* If we allocated from the meta extent pool, put it back ... */
-    if (meta_pool_entryp)
-        castle_extent_meta_pool_replace(meta_pool_entryp);
+    if (allocated_from_meta_pool)
+        castle_extent_meta_pool_replace(ext->maps_cep.offset);
 
     if (ext)
     {
@@ -3442,7 +3478,10 @@ static void castle_extent_resource_release(void *data)
      */
     nr_blocks = map_size(ext->size, ext->k_factor);
     if (nr_blocks == 1)
+    {
+        BUG_ON(ext->maps_cep.ext_id != META_EXT_ID);
         castle_extent_meta_pool_release(ext->maps_cep.offset);
+    }
 
     /* Remove extent from hash. */
     castle_extents_hash_remove(ext);
