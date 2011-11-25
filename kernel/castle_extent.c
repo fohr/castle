@@ -3237,7 +3237,8 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
             goto __hell;
         }
         debug("Allocated extent map at: "cep_fmt_str_nl, cep2str(ext->maps_cep));
-        if(atomic64_read(&meta_ext_free.used) % (PAGE_SIZE * 256) == 0)
+        if((ext->maps_cep.offset >> 20) !=
+           (ext->maps_cep.offset + nr_blocks * C_BLK_SIZE) >> 20)
             castle_printk(LOG_USERINFO, "Metaext, used=0x%llx, size=0x%llx\n",
                    atomic64_read(&meta_ext_free.used), meta_ext_free.ext_size);
     }
