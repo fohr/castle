@@ -1177,29 +1177,31 @@ void castle_object_slice_get_end_io(void *obj_iter, int err)
     queue_work(castle_wq, &iter->work);
 }
 
-static int castle_object_reference_get(c_bvec_t    *c_bvec,
-                                       c_val_tup_t  cvt)
+static void castle_object_value_acquire(c_val_tup_t *cvt)
 {
-    BUG_ON(c_bvec_data_dir(c_bvec) != READ);
+    if (CVT_INLINE(*cvt) && !CVT_ANY_COUNTER(*cvt))
+    {
+        char *buf = castle_malloc(cvt->length, GFP_KERNEL);
+        memcpy(buf, CVT_INLINE_VAL_PTR(*cvt), cvt->length);
+        cvt->val_p = buf;
+    }
 
-    /* We know LO don't resize dynamically. It is safe to get a link, instead of reference,
-     * which would requrie us to store the reference ID (extent mask ID). */
-    /* Note: Might need to revisit this code with unknown Big-object implementaiton. */
-    if (CVT_LARGE_OBJECT(cvt))
-        BUG_ON(castle_extent_link(cvt.cep.ext_id));
-
-    return 0;
+    /* We know LOs don't resize dynamically. It is safe to get a link, instead of a
+     * reference, which would require us to store the reference ID (extent mask ID). */
+    /* Note: Might need to revisit this code with unknown Big-object implementation. */
+    else if (CVT_LARGE_OBJECT(*cvt))
+        BUG_ON(castle_extent_link(cvt->cep.ext_id));
 }
 
-static void castle_object_reference_release(c_val_tup_t cvt)
+static void castle_object_value_release(c_val_tup_t *cvt)
 {
-    if (CVT_LARGE_OBJECT(cvt))
-        castle_extent_unlink(cvt.cep.ext_id);
-#if 0
-    //TODO@tr FIX THIS!!!!!!!!!!!!
-    if (CVT_INLINE(cvt))
-        CVT_INLINE_FREE(cvt);
-#endif
+    if (CVT_INLINE(*cvt))
+    {
+        CVT_INLINE_FREE(*cvt);
+    }
+
+    else if (CVT_LARGE_OBJECT(*cvt))
+        castle_extent_unlink(cvt->cep.ext_id);
 }
 
 void castle_object_get_continue(struct castle_bio_vec *c_bvec,
@@ -1280,7 +1282,7 @@ out:
     /* free the key via the proxy btree_type */
     castle_object_bvec_proxy_key_dealloc(c_bvec);
     castle_da_cts_proxy_put(c_bvec->cts_proxy); /* castle_da_ct_read_complete() */
-    castle_object_reference_release(cvt);
+    castle_object_value_release(&cvt);
     castle_utils_bio_free(c_bvec->c_bio);
 }
 
@@ -1537,8 +1539,8 @@ int castle_object_get(struct castle_object_get *get,
     c_bvec->key             = key;
     c_bvec->cpu_index       = cpu_index;
     c_bvec->cpu             = castle_double_array_request_cpu(c_bvec->cpu_index);
-    c_bvec->ref_get         = castle_object_reference_get;
-    c_bvec->ref_put         = castle_object_reference_release;
+    c_bvec->val_get         = castle_object_value_acquire;
+    c_bvec->val_put         = castle_object_value_release;
     c_bvec->submit_complete = castle_object_get_complete;
     c_bvec->orig_complete   = NULL;
     atomic_set(&c_bvec->reserv_nodes, 0);
@@ -1565,7 +1567,9 @@ void castle_object_pull_finish(struct castle_object_pull *pull)
 {
     if (CVT_ON_DISK(pull->cvt))
         castle_da_cts_proxy_put(pull->cts_proxy); /* castle_da_ct_read_complete() */
-    castle_object_reference_release(pull->cvt);
+
+    if (!CVT_INLINE(pull->cvt)) /* inline values are freed in chunk_pull() */
+        castle_object_value_release(&pull->cvt);
 }
 
 void __castle_object_chunk_pull_complete(struct work_struct *work)
@@ -1638,7 +1642,7 @@ void castle_object_chunk_pull(struct castle_object_pull *pull, void *buf, size_t
         /* this is assured since buf_len >= PAGE_SIZE > MAX_INLINE_VAL_SIZE */
         BUG_ON(buf_len < pull->remaining);
         memcpy(buf, CVT_INLINE_VAL_PTR(pull->cvt), pull->remaining);
-        CVT_INLINE_FREE(pull->cvt);
+        castle_object_value_release(&pull->cvt);
         pull->pull_continue(pull, 0, pull->remaining, 1 /*done*/);
 
         return;
@@ -1751,8 +1755,8 @@ int castle_object_pull(struct castle_object_pull *pull,
     c_bvec->key             = key;
     c_bvec->cpu_index       = cpu_index;
     c_bvec->cpu             = castle_double_array_request_cpu(c_bvec->cpu_index);
-    c_bvec->ref_get         = castle_object_reference_get;
-    c_bvec->ref_put         = castle_object_reference_release;
+    c_bvec->val_get         = castle_object_value_acquire;
+    c_bvec->val_put         = castle_object_value_release;
     c_bvec->submit_complete = castle_object_pull_continue;
     c_bvec->orig_complete   = NULL;
     atomic_set(&c_bvec->reserv_nodes, 0);

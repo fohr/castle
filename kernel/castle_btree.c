@@ -141,7 +141,7 @@ static void __castle_btree_submit(c_bvec_t *c_bvec,
 
 
 static void castle_btree_io_end(c_bvec_t    *c_bvec,
-                                c_val_tup_t    cvt,
+                                c_val_tup_t  cvt,
                                 int          err)
 {
     struct castle_btree_type *btree = castle_btree_type_get(c_bvec->tree->btree_type);
@@ -178,11 +178,11 @@ static void castle_btree_io_end(c_bvec_t    *c_bvec,
                             &c_bvec->tree->min_user_timestamp);
     }
 
-    /* Get reference on objects before reads. */
+    /* Acquire the necessary value resources for reads */
     if (!err && (c_bvec_data_dir(c_bvec) == READ))
     {
-        BUG_ON(!c_bvec->ref_get);
-        c_bvec->ref_get(c_bvec, cvt);
+        BUG_ON(!c_bvec->val_get);
+        c_bvec->val_get(&cvt);
     }
 
     /* Free the c2bs correctly. Call twice to release parent and child
@@ -1185,7 +1185,7 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
     //BUG_ON((lub_idx < 0) && (!BTREE_NODE_IS_LEAF(node)));
 
     /* If we haven't found the LUB (in the leaf node), return early */
-    if(lub_idx < 0)
+    if (lub_idx < 0)
     {
         debug("Could not find the LUB for (k,v)=(%p, 0x%x)\n", key, version);
         castle_btree_io_end(c_bvec, INVAL_VAL_TUP, 0);
@@ -1208,23 +1208,14 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
             debug(" Is a leaf, found (k,v)=(%p, 0x%x), tomb stone\n",
                     lub_key, lub_version);
 
-        if(btree->key_compare(lub_key, key) == 0)
+        if (btree->key_compare(lub_key, key) == 0)
         {
-            /* Deal with counters first. Accumulate if neccessary. */
+            /* Deal with counters first. Accumulate if necessary. */
             if (CVT_ANY_COUNTER(lub_cvt))
                 lub_cvt = castle_btree_counter_read(node, version, key, lub_idx, lub_cvt);
-            else
-            if (CVT_INLINE(lub_cvt))
-            {
-                char *loc_buf;
-                loc_buf = castle_malloc(lub_cvt.length, GFP_KERNEL);
-                memcpy(loc_buf, CVT_INLINE_VAL_PTR(lub_cvt), lub_cvt.length);
-                lub_cvt.val_p = loc_buf;
-            }
             castle_btree_io_end(c_bvec, lub_cvt, 0);
         }
-        else
-            castle_btree_io_end(c_bvec, INVAL_VAL_TUP, 0);
+        else castle_btree_io_end(c_bvec, INVAL_VAL_TUP, 0);
     }
     else
     {

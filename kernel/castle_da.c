@@ -11119,14 +11119,14 @@ int castle_da_ct_read_complete_cvt_timestamp_check(c_bvec_t *c_bvec,
     {
         if(cvt->user_timestamp > get->cvt.user_timestamp)
         {
-            c_bvec->ref_put(get->cvt);
+            c_bvec->val_put(&get->cvt);
             get->cvt = *cvt;
         }
         else
         {
             BUG_ON(!c_bvec->tree);
             atomic64_inc(&c_bvec->tree->da->stats.user_timestamps.ct_max_uts_false_positives);
-            c_bvec->ref_put(*cvt);
+            c_bvec->val_put(cvt);
             *cvt = get->cvt;
         }
     }

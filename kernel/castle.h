@@ -1468,12 +1468,13 @@ typedef struct castle_bio_vec {
                                                                     isn't precise (k,v) match,
                                                                     and if one exists.           */
                                                  c_val_tup_t *);
-        /* Get reference on objects for reads */
-        int                       (*ref_get)    (struct castle_bio_vec *,
-                                                 c_val_tup_t);
+        struct {
+            /* Acquire the necessary value resources for reads. */
+            void                  (*val_get)    (c_val_tup_t *);
+            /* Release the value resources previously acquired for reads. */
+            void                  (*val_put)    (c_val_tup_t *);
+        };
     };
-    /* Put reference on objects for reads, if they are timestamp deprecated */
-    void                          (*ref_put)    (c_val_tup_t);
     /* Completion callback */
     union {
         void                      (*queue_complete)  (struct castle_bio_vec *, int);
