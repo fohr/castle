@@ -1486,6 +1486,7 @@ typedef struct castle_bio_vec {
 #ifdef CASTLE_DEBUG
     unsigned long                   state;
     struct castle_cache_block      *locking;
+    atomic_t                        read_passes;
 #endif
 #ifdef CASTLE_PERF_DEBUG
     struct castle_request_timeline *timeline;

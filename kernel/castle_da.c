@@ -11113,6 +11113,18 @@ int castle_da_ct_read_complete_cvt_timestamp_check(c_bvec_t *c_bvec,
     Note: doing this means we need the version of the cvt, which is not immediately available here.
     */
 
+#ifdef CASTLE_DEBUG
+    debug(
+            "%s::[%p, rp %u] cvt of type %u u_ts %llu, get->cvt of type %u u_ts %llu\n",
+            __FUNCTION__,
+            c_bvec,
+            atomic_read(&c_bvec->read_passes),
+            cvt->type,
+            cvt->user_timestamp,
+            get->cvt.type,
+            get->cvt.user_timestamp);
+#endif
+
     if(CVT_INVALID(get->cvt))
         get->cvt = *cvt;
     else if(!CVT_INVALID(*cvt))
@@ -11159,6 +11171,10 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
 
     BUG_ON(c_bvec_data_dir(c_bvec) != READ);
     BUG_ON(atomic_read(&c_bvec->reserv_nodes));
+
+#ifdef CASTLE_DEBUG
+    atomic_inc(&c_bvec->read_passes);
+#endif
 
     /* No more candidate trees available, callback now. */
     if (!err && !c_bvec->tree)

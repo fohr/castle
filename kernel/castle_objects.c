@@ -1528,7 +1528,6 @@ int castle_object_get(struct castle_object_get *get,
     if (!c_bio)
         goto err0;
 
-    /* Set CVT to invalid. We need that to recognise and handle counters properly. */
     CVT_INVALID_INIT(get->cvt);
 
     c_bio->attachment    = attachment;
@@ -1746,6 +1745,8 @@ int castle_object_pull(struct castle_object_pull *pull,
     c_bio = castle_utils_bio_alloc(1);
     if (!c_bio)
         goto err0;
+
+    CVT_INVALID_INIT(pull->cvt);
 
     c_bio->attachment    = attachment;
     c_bio->pull          = pull;
