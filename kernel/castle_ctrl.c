@@ -19,6 +19,7 @@
 #include "castle_extent.h"
 #include "castle_rebuild.h"
 #include "castle_ctrl_prog.h"
+#include "castle_mstore.h"
 
 /* Define string array for userspace error-codes. */
 #undef CASTLE_ERROR_CODE
@@ -37,8 +38,6 @@ const char *castle_error_strings[CASTLE_ERROR_MAX+1] =
 
 static DEFINE_MUTEX(castle_control_lock);
 static DECLARE_WAIT_QUEUE_HEAD(castle_control_wait_q);
-
-c_mstore_t *castle_attachments_store = NULL;
 
 struct task_struct *ctrl_lock_holder = NULL;
 void castle_ctrl_lock(void)
@@ -267,7 +266,7 @@ void castle_control_fs_init(int *ret)
     *ret = castle_fs_init();
 }
 
-static int castle_collection_writeback(struct castle_attachment *ca)
+static int castle_collection_writeback(struct castle_mstore *mstore, struct castle_attachment *ca)
 {
     struct castle_alist_entry mstore_entry;
 
@@ -279,21 +278,21 @@ static int castle_collection_writeback(struct castle_attachment *ca)
     mstore_entry.flags   = ca->col.flags;
     strcpy(mstore_entry.name, ca->col.name);
 
-    castle_mstore_entry_insert(castle_attachments_store, &mstore_entry);
+    castle_mstore_entry_insert(mstore,
+                               &mstore_entry,
+                               sizeof(struct castle_alist_entry));
 
     return 0;
 }
 
 int castle_attachments_writeback(void)
 { /* Should be called in CASTLE_TRANSACTION. */
+    struct castle_mstore *mstore;
     struct castle_attachment *ca;
     struct list_head *lh;
 
-    BUG_ON(castle_attachments_store);
-
-    castle_attachments_store =
-        castle_mstore_init(MSTORE_ATTACHMENTS_TAG, sizeof(struct castle_alist_entry));
-    if(!castle_attachments_store)
+    mstore = castle_mstore_init(MSTORE_ATTACHMENTS_TAG);
+    if(!mstore)
         return -ENOMEM;
 
     /* Note: Shouldn't take attachments lock here. Writeback function can sleep.
@@ -305,13 +304,12 @@ int castle_attachments_writeback(void)
         ca = list_entry(lh, struct castle_attachment, list);
         if(ca->device)
             continue;
-        if(castle_collection_writeback(ca))
+        if(castle_collection_writeback(mstore, ca))
             castle_printk(LOG_WARN, "Failed to writeback collection: (%u, %s)\n",
                     ca->col.id, ca->col.name);
     }
 
-    castle_mstore_fini(castle_attachments_store);
-    castle_attachments_store = NULL;
+    castle_mstore_fini(mstore);
 
     return 0;
 }
@@ -319,21 +317,9 @@ int castle_attachments_writeback(void)
 int castle_attachments_read(void)
 {
     struct castle_mstore_iter *iterator = NULL;
-    struct castle_alist_entry mstore_entry;
     int ret = 0;
 
-    BUG_ON(castle_attachments_store);
-
-    castle_printk(LOG_INFO, "Opening mstore for Collection Attachments\n");
-    castle_attachments_store = castle_mstore_open(MSTORE_ATTACHMENTS_TAG,
-                                        sizeof(struct castle_alist_entry));
-    if (!castle_attachments_store)
-    {
-        ret = -ENOMEM;
-        goto out;
-    }
-
-    iterator = castle_mstore_iterate(castle_attachments_store);
+    iterator = castle_mstore_iterate(MSTORE_ATTACHMENTS_TAG);
     if (!iterator)
     {
         ret = -EINVAL;
@@ -342,12 +328,14 @@ int castle_attachments_read(void)
 
     while (castle_mstore_iterator_has_next(iterator))
     {
+        struct castle_alist_entry mstore_entry;
         struct castle_attachment *ca;
-        c_mstore_key_t key;
+        size_t mstore_entry_size;
         char *name = castle_malloc(MAX_NAME_SIZE, GFP_KERNEL);
 
         BUG_ON(!name);
-        castle_mstore_iterator_next(iterator, &mstore_entry, &key);
+        castle_mstore_iterator_next(iterator, &mstore_entry, &mstore_entry_size);
+        BUG_ON(mstore_entry_size != sizeof(struct castle_alist_entry));
         strcpy(name, mstore_entry.name);
         debug("Collection Load: %s\n", name);
 
@@ -364,9 +352,8 @@ int castle_attachments_read(void)
     }
 
 out:
-    if (iterator)                 castle_mstore_iterator_destroy(iterator);
-    if (castle_attachments_store) castle_mstore_fini(castle_attachments_store);
-    castle_attachments_store = NULL;
+    if (iterator)
+        castle_mstore_iterator_destroy(iterator);
 
     return ret;
 }

@@ -216,6 +216,8 @@ void castle_cache_prefetches_wait(void);
  */
 #define c2b_buffer(_c2b)    ((_c2b)->buffer)
 
+int                        castle_stats_read               (void);
+
 /**********************************************************************************************
  * The 'interesting' cache interface functions
  */
@@ -242,30 +244,6 @@ int         castle_cache_block_unsoftpin(c2_block_t *c2b);
 void        castle_cache_page_block_unreserve(c2_block_t *c2b);
 int         castle_cache_extent_flush_schedule (c_ext_id_t ext_id, uint64_t start, uint64_t size);
 
-
-/**********************************************************************************************
- * MStore related functions (including stats store handler).
- */
-int                        castle_stats_read               (void);
-
-int                        castle_mstore_iterator_has_next (struct castle_mstore_iter *iter);
-void                       castle_mstore_iterator_next     (struct castle_mstore_iter *iter,
-                                                            void *entry,
-                                                            c_mstore_key_t *key);
-void                       castle_mstore_iterator_destroy  (struct castle_mstore_iter *iter);
-struct castle_mstore_iter* castle_mstore_iterate           (struct castle_mstore *store);
-void                       castle_mstore_entry_update      (struct castle_mstore *store,
-                                                            c_mstore_key_t key,
-                                                            void *entry);
-void                       castle_mstore_entry_delete      (struct castle_mstore *store,
-                                                            c_mstore_key_t key);
-c_mstore_key_t             castle_mstore_entry_insert      (struct castle_mstore *store,
-                                                            void *entry);
-struct castle_mstore*      castle_mstore_open              (c_mstore_id_t store_id,
-                                                            size_t entry_size);
-struct castle_mstore*      castle_mstore_init              (c_mstore_id_t store_id,
-                                                            size_t entry_size);
-void                       castle_mstore_fini              (struct castle_mstore *store);
 
 int                        castle_checkpoint_init          (void);
 void                       castle_checkpoint_fini          (void);

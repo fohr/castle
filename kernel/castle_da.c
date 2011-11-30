@@ -18,6 +18,7 @@
 #include "castle_objects.h"
 #include "castle_bloom.h"
 #include "castle_events.h"
+#include "castle_mstore.h"
 
 #ifndef CASTLE_PERF_DEBUG
 #define ts_delta_ns(a, b)                       ((void)0)
@@ -77,13 +78,6 @@
 static struct list_head        *castle_da_hash       = NULL;
 static struct list_head        *castle_ct_hash       = NULL;
 static struct list_head        *castle_data_exts_hash= NULL;
-static struct castle_mstore    *castle_da_store      = NULL;
-static struct castle_mstore    *castle_tree_store    = NULL;
-static struct castle_mstore    *castle_lo_store      = NULL;
-static struct castle_mstore    *castle_data_exts_store = NULL;
-static struct castle_mstore    *castle_data_exts_maps_store = NULL;
-static struct castle_mstore    *castle_dmser_store   = NULL;
-static struct castle_mstore    *castle_dmser_in_tree_store   = NULL;
        c_da_t                   castle_next_da_id    = 1;
 static atomic64_t               castle_next_tree_seq = ATOMIC64(0);
 static atomic64_t               castle_next_tree_data_age = ATOMIC64(0);
@@ -7976,7 +7970,8 @@ static void castle_component_tree_promote(struct castle_double_array *da,
 }
 
 static void castle_ct_large_obj_writeback(struct castle_large_obj_entry *lo,
-                                          struct castle_component_tree *ct)
+                                          struct castle_component_tree *ct,
+                                          struct castle_mstore *store)
 {
     struct castle_lolist_entry mstore_entry;
 
@@ -7984,7 +7979,9 @@ static void castle_ct_large_obj_writeback(struct castle_large_obj_entry *lo,
     mstore_entry.length = lo->length;
     mstore_entry.ct_seq = ct->seq;
 
-    castle_mstore_entry_insert(castle_lo_store, &mstore_entry);
+    castle_mstore_entry_insert(store,
+                               &mstore_entry,
+                               sizeof(struct castle_lolist_entry));
 }
 
 static void __castle_ct_large_obj_remove(struct list_head *lh)
@@ -8282,7 +8279,7 @@ static int castle_merge_data_exts_writeback(struct castle_da_merge *merge,
         mentry.merge_id     = merge->id;
         mentry.is_merge     = 1;
 
-        castle_mstore_entry_insert(store, &mentry);
+        castle_mstore_entry_insert(store, &mentry, sizeof(struct castle_dext_map_list_entry));
     }
 
     return 0;
@@ -8305,7 +8302,7 @@ static int castle_ct_data_exts_writeback(struct castle_component_tree *ct,
         mentry.ct_seq   = ct->seq;
         mentry.is_merge = 0;
 
-        castle_mstore_entry_insert(store, &mentry);
+        castle_mstore_entry_insert(store, &mentry, sizeof(struct castle_dext_map_list_entry));
 
         /* Mark the extent for flush. We want flush only the data extents that are linked to
          * checkpointable trees. It is fine to mark same data extent multiple times. */
@@ -8315,9 +8312,9 @@ static int castle_ct_data_exts_writeback(struct castle_component_tree *ct,
     return 0;
 }
 
-static int castle_data_exts_maps_read(struct castle_mstore *store)
+static int castle_data_exts_maps_read(void)
 {
-    struct castle_mstore_iter *iterator = castle_mstore_iterate(store);
+    struct castle_mstore_iter *iterator = castle_mstore_iterate(MSTORE_CT_DATA_EXTENTS);
 
     if (!iterator)
         return -EINVAL;
@@ -8327,9 +8324,10 @@ static int castle_data_exts_maps_read(struct castle_mstore *store)
         struct castle_component_tree *ct;
         struct castle_da_merge *merge;
         struct castle_dext_map_list_entry mentry;
-        c_mstore_key_t key;
+        size_t mentry_size;
 
-        castle_mstore_iterator_next(iterator, &mentry, &key);
+        castle_mstore_iterator_next(iterator, &mentry, &mentry_size);
+        BUG_ON(mentry_size != sizeof(struct castle_dext_map_list_entry));
 
         if (!mentry.is_merge)
         {
@@ -8367,14 +8365,14 @@ static int castle_data_ext_writeback(struct castle_data_extent *data_ext,
     mentry.nr_bytes         = data_ext->chkpt_nr_bytes;
     mentry.nr_drain_bytes   = data_ext->chkpt_nr_drain_bytes;
 
-    castle_mstore_entry_insert(store, &mentry);
+    castle_mstore_entry_insert(store, &mentry, sizeof(struct castle_dext_list_entry));
 
     return 0;
 }
 
-static int castle_data_exts_read(struct castle_mstore *store)
+static int castle_data_exts_read(void)
 {
-    struct castle_mstore_iter *iterator = castle_mstore_iterate(store);
+    struct castle_mstore_iter *iterator = castle_mstore_iterate(MSTORE_DATA_EXTENTS);
 
     if (!iterator)
         return -EINVAL;
@@ -8382,9 +8380,10 @@ static int castle_data_exts_read(struct castle_mstore *store)
     while(castle_mstore_iterator_has_next(iterator))
     {
         struct castle_dext_list_entry mentry;
-        c_mstore_key_t key;
+        size_t mentry_size;
 
-        castle_mstore_iterator_next(iterator, &mentry, &key);
+        castle_mstore_iterator_next(iterator, &mentry, &mentry_size);
+        BUG_ON(mentry_size != sizeof(struct castle_dext_list_entry));
 
         castle_data_ext_add(mentry.ext_id, mentry.nr_entries, mentry.nr_bytes,
                             mentry.nr_drain_bytes);
@@ -8719,7 +8718,9 @@ static struct castle_component_tree * castle_da_ct_unmarshall(struct castle_comp
 static void __castle_da_foreach_tree(struct castle_double_array *da,
                                      int (*fn)(struct castle_double_array *da,
                                                struct castle_component_tree *ct,
-                                               int level_cnt))
+                                               int level_cnt,
+                                               void *private),
+                                     void *private)
 {
     struct castle_component_tree *ct;
     struct list_head *lh, *t;
@@ -8731,7 +8732,7 @@ static void __castle_da_foreach_tree(struct castle_double_array *da,
         list_for_each_safe(lh, t, &da->levels[i].trees)
         {
             ct = list_entry(lh, struct castle_component_tree, da_list);
-            if(fn(da, ct, j))
+            if(fn(da, ct, j, private))
                 return;
             j++;
         }
@@ -8741,10 +8742,12 @@ static void __castle_da_foreach_tree(struct castle_double_array *da,
 static USED void castle_da_foreach_tree(struct castle_double_array *da,
                                         int (*fn)(struct castle_double_array *da,
                                                   struct castle_component_tree *ct,
-                                                  int level_cnt))
+                                                  int level_cnt,
+                                                  void *private),
+                                        void *private)
 {
     write_lock(&da->lock);
-    __castle_da_foreach_tree(da, fn);
+    __castle_da_foreach_tree(da, fn, private);
     write_unlock(&da->lock);
 }
 
@@ -8790,7 +8793,8 @@ static int castle_ct_hash_destroy_check(struct castle_component_tree *ct, void *
 
 static int castle_da_ct_dealloc(struct castle_double_array *da,
                                 struct castle_component_tree *ct,
-                                int level_cnt)
+                                int level_cnt,
+                                void *_unused)
 {
     /* We should have already gone through castle_merge_hash_destroy(), which should have
      * deleted all merges and all output trees. */
@@ -8826,7 +8830,7 @@ static int castle_da_hash_dealloc(struct castle_double_array *da, void *unused)
     BUG_ON(!da);
     castle_sysfs_da_del(da);
 
-    __castle_da_foreach_tree(da, castle_da_ct_dealloc);
+    __castle_da_foreach_tree(da, castle_da_ct_dealloc, NULL);
 
     list_del(&da->hash_list);
 
@@ -8855,6 +8859,16 @@ static void castle_data_exts_hash_destroy(void)
     castle_kfree(castle_data_exts_hash);
 }
 
+struct castle_da_writeback_mstores {
+    struct castle_mstore *da_store;
+    struct castle_mstore *tree_store;
+    struct castle_mstore *lo_store;
+    struct castle_mstore *data_exts_store;
+    struct castle_mstore *data_exts_maps_store;
+    struct castle_mstore *dmser_store;
+    struct castle_mstore *dmser_in_tree_store;
+};
+
 /**
  * Flush CT's extents to disk and marshall CT structure.
  *
@@ -8864,11 +8878,15 @@ static void castle_data_exts_hash_destroy(void)
  */
 static int castle_da_tree_writeback(struct castle_double_array *da,
                                     struct castle_component_tree *ct,
-                                    int level_cnt)
+                                    int level_cnt,
+                                    void *mstores_p)
 {
+    struct castle_da_writeback_mstores *mstores;
     struct castle_clist_entry mstore_entry;
     struct list_head *lh, *tmp;
     int being_written;
+
+    mstores = (struct castle_da_writeback_mstores *)mstores_p;
 
     /* Partial merge output tree is being cehckpointed using merge serialisation. */
     /* FIXME: Move that to here. */
@@ -8917,15 +8935,17 @@ mstore_writeback:
         struct castle_large_obj_entry *lo =
                             list_entry(lh, struct castle_large_obj_entry, list);
 
-        castle_ct_large_obj_writeback(lo, ct);
+        castle_ct_large_obj_writeback(lo, ct, mstores->lo_store);
     }
     mutex_unlock(&ct->lo_mutex);
 
     /* Writeback data extents. */
-    castle_ct_data_exts_writeback(ct, castle_data_exts_maps_store);
+    castle_ct_data_exts_writeback(ct, mstores->data_exts_maps_store);
 
     castle_da_ct_marshall(&mstore_entry, ct);
-    castle_mstore_entry_insert(castle_tree_store, &mstore_entry);
+    castle_mstore_entry_insert(mstores->tree_store,
+                               &mstore_entry,
+                               sizeof(struct castle_clist_entry));
 
     return 0;
 }
@@ -8936,7 +8956,8 @@ uint32_t castle_da_count(void)
 }
 
 /* assumes caller took serdes.mutex */
-static void __castle_da_merge_writeback(struct castle_da_merge *merge)
+static void __castle_da_merge_writeback(struct castle_da_merge *merge,
+                                        struct castle_da_writeback_mstores *mstores)
 {
     struct castle_double_array *da = merge->da;
     unsigned int level = merge->level;
@@ -8990,20 +9011,24 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge)
             BUG_ON(lo_ref_cnt < 1);
             debug("%s::writeback lo at ext %d\n", __FUNCTION__,
                     lo->ext_id);
-            castle_ct_large_obj_writeback(lo, ct);
+            castle_ct_large_obj_writeback(lo, ct, mstores->lo_store);
         }
         mutex_unlock(&ct->lo_mutex);
     }
 
     /* Writeback list of data extents not to be merged. */
-    castle_merge_data_exts_writeback(merge, castle_data_exts_maps_store);
+    castle_merge_data_exts_writeback(merge, mstores->data_exts_maps_store);
     /* insert merge state into mstore */
-    castle_mstore_entry_insert(castle_dmser_store, merge_mstore);
+    castle_mstore_entry_insert(mstores->dmser_store,
+                               merge_mstore,
+                               sizeof(struct castle_dmserlist_entry));
     for(i=0; i<merge_mstore->nr_trees; i++)
-        castle_mstore_entry_insert(castle_dmser_in_tree_store, &in_tree_merge_mstore_arr[i]);
+        castle_mstore_entry_insert(mstores->dmser_in_tree_store,
+                                   &in_tree_merge_mstore_arr[i],
+                                   sizeof(struct castle_in_tree_merge_state_entry));
 
     /* Writeback data extents. */
-    castle_ct_data_exts_writeback(ct, castle_data_exts_maps_store);
+    castle_ct_data_exts_writeback(ct, mstores->data_exts_maps_store);
 
     /* flush and shrink extents if neccesary */
     if(current_state == VALID_AND_FRESH_DAM_SERDES)
@@ -9086,35 +9111,41 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge)
  * @note called through castle_da_hash_iterate from castle_double_arrays_writeback
  * @note blocks on serdes.mutex
  */
-static int castle_da_writeback(struct castle_double_array *da, void *unused)
+static int castle_da_writeback(struct castle_double_array *da, void *mstores_p)
 {
+    struct castle_da_writeback_mstores *mstores;
     struct castle_dlist_entry mstore_dentry;
 
     BUG_ON(!CASTLE_IN_TRANSACTION);
+    mstores = (struct castle_da_writeback_mstores *)mstores_p;
 
     castle_da_marshall(&mstore_dentry, da);
 
     /* Writeback is happening under CASTLE_TRANSACTION LOCK, which guarentees no
      * addition/deletions to component tree list, no need of DA lock here. */
-    __castle_da_foreach_tree(da, castle_da_tree_writeback);
+    __castle_da_foreach_tree(da, castle_da_tree_writeback, mstores);
 
     debug("Inserting a DA id=%d\n", da->id);
-    castle_mstore_entry_insert(castle_da_store, &mstore_dentry);
+    castle_mstore_entry_insert(mstores->da_store,
+                               &mstore_dentry,
+                               sizeof(struct castle_dlist_entry));
 
     return 0;
 }
 
-static int castle_da_merge_writeback(struct castle_da_merge *merge, void *unused)
+static int castle_da_merge_writeback(struct castle_da_merge *merge, void *mstores_p)
 {
+    struct castle_da_writeback_mstores *mstores;
     c_merge_serdes_state_t current_state;
 
     BUG_ON(!CASTLE_IN_TRANSACTION);
+    mstores = (struct castle_da_writeback_mstores *)mstores_p;
 
     mutex_lock(&merge->serdes.mutex);
     current_state = atomic_read(&merge->serdes.valid);
     if( (current_state == VALID_AND_FRESH_DAM_SERDES) ||
             (current_state == VALID_AND_STALE_DAM_SERDES) )
-        __castle_da_merge_writeback(merge);
+        __castle_da_merge_writeback(merge, mstores);
     mutex_unlock(&merge->serdes.mutex);
 
     return 0;
@@ -9129,52 +9160,49 @@ static int castle_da_merge_writeback(struct castle_da_merge *merge, void *unused
  */
 void castle_double_arrays_writeback(void)
 {
-    BUG_ON(castle_da_store || castle_tree_store || castle_lo_store || castle_data_exts_store
-           || castle_dmser_store || castle_dmser_in_tree_store);
+    struct castle_da_writeback_mstores mstores;
 
-    castle_da_store   = castle_mstore_init(MSTORE_DOUBLE_ARRAYS,
-                                         sizeof(struct castle_dlist_entry));
-    castle_tree_store = castle_mstore_init(MSTORE_COMPONENT_TREES,
-                                         sizeof(struct castle_clist_entry));
-    castle_lo_store   = castle_mstore_init(MSTORE_LARGE_OBJECTS,
-                                         sizeof(struct castle_lolist_entry));
-    castle_data_exts_store = castle_mstore_init(MSTORE_DATA_EXTENTS,
-                                         sizeof(struct castle_dext_list_entry));
-    castle_data_exts_maps_store = castle_mstore_init(MSTORE_CT_DATA_EXTENTS,
-                                         sizeof(struct castle_dext_map_list_entry));
-    castle_dmser_store= castle_mstore_init(MSTORE_DA_MERGE,
-                                         sizeof(struct castle_dmserlist_entry));
-    castle_dmser_in_tree_store= castle_mstore_init(MSTORE_DA_MERGE_IN_TREE,
-                                         sizeof(struct castle_in_tree_merge_state_entry));
+    memset(&mstores, 0, sizeof(struct castle_da_writeback_mstores));
+    mstores.da_store             = castle_mstore_init(MSTORE_DOUBLE_ARRAYS);
+    mstores.tree_store           = castle_mstore_init(MSTORE_COMPONENT_TREES);
+    mstores.lo_store             = castle_mstore_init(MSTORE_LARGE_OBJECTS);
+    mstores.data_exts_store      = castle_mstore_init(MSTORE_DATA_EXTENTS);
+    mstores.data_exts_maps_store = castle_mstore_init(MSTORE_CT_DATA_EXTENTS);
+    mstores.dmser_store          = castle_mstore_init(MSTORE_DA_MERGE);
+    mstores.dmser_in_tree_store  = castle_mstore_init(MSTORE_DA_MERGE_IN_TREE);
 
-    if(!castle_da_store || !castle_tree_store || !castle_lo_store || !castle_data_exts_store
-        || !castle_data_exts_maps_store || !castle_dmser_store || !castle_dmser_in_tree_store)
+    if(!mstores.da_store ||
+       !mstores.tree_store ||
+       !mstores.lo_store ||
+       !mstores.data_exts_store ||
+       !mstores.data_exts_maps_store ||
+       !mstores.dmser_store ||
+       !mstores.dmser_in_tree_store)
     {
-        castle_printk(LOG_USERINFO, "FS Checkpoint failed: mstore open failed in %s\n", __FUNCTION__);
+        castle_printk(LOG_USERINFO,
+                      "FS Checkpoint failed: mstore open failed in %s\n",
+                      __FUNCTION__);
         goto out;
     }
 
-    __castle_da_hash_iterate(castle_da_writeback, NULL);
+    __castle_da_hash_iterate(castle_da_writeback, &mstores);
 
     /* Writeback all the merges. */
-    __castle_merges_hash_iterate(castle_da_merge_writeback, NULL);
+    __castle_merges_hash_iterate(castle_da_merge_writeback, &mstores);
 
-    castle_da_tree_writeback(NULL, &castle_global_tree, -1);
+    castle_da_tree_writeback(NULL, &castle_global_tree, -1, &mstores);
 
     /* Writeback all data extent structures. */
-    __castle_data_exts_hash_iterate(castle_data_ext_writeback, castle_data_exts_store);
+    __castle_data_exts_hash_iterate(castle_data_ext_writeback, mstores.data_exts_store);
 
 out:
-    if (castle_dmser_in_tree_store) castle_mstore_fini(castle_dmser_in_tree_store);
-    if (castle_dmser_store) castle_mstore_fini(castle_dmser_store);
-    if (castle_lo_store)    castle_mstore_fini(castle_lo_store);
-    if (castle_data_exts_store)    castle_mstore_fini(castle_data_exts_store);
-    if (castle_data_exts_maps_store) castle_mstore_fini(castle_data_exts_maps_store);
-    if (castle_tree_store)  castle_mstore_fini(castle_tree_store);
-    if (castle_da_store)    castle_mstore_fini(castle_da_store);
-
-    castle_da_store = castle_tree_store = castle_lo_store = castle_data_exts_store =
-    castle_data_exts_maps_store = castle_dmser_store = castle_dmser_in_tree_store = NULL;
+    if (mstores.dmser_in_tree_store)  castle_mstore_fini(mstores.dmser_in_tree_store);
+    if (mstores.dmser_store)          castle_mstore_fini(mstores.dmser_store);
+    if (mstores.lo_store)             castle_mstore_fini(mstores.lo_store);
+    if (mstores.data_exts_store)      castle_mstore_fini(mstores.data_exts_store);
+    if (mstores.data_exts_maps_store) castle_mstore_fini(mstores.data_exts_maps_store);
+    if (mstores.tree_store)           castle_mstore_fini(mstores.tree_store);
+    if (mstores.da_store)             castle_mstore_fini(mstores.da_store);
 }
 
 /**
@@ -9383,15 +9411,10 @@ static int _castle_sysfs_ct_add(struct castle_component_tree *ct, void *_unused)
 
 static int castle_da_merge_deser_phase1(void)
 {
-    struct castle_mstore *store;
     struct castle_mstore_iter *iterator = NULL;
     int ret = 0;
 
-    store = castle_mstore_open(MSTORE_DA_MERGE, sizeof(struct castle_dmserlist_entry));
-    if (!store)
-        return -1;
-
-    iterator = castle_mstore_iterate(store);
+    iterator = castle_mstore_iterate(MSTORE_DA_MERGE);
     if (!iterator)
     {
         ret = -1;
@@ -9406,7 +9429,7 @@ static int castle_da_merge_deser_phase1(void)
         struct castle_dmserlist_entry *entry = NULL;
         struct castle_da_merge *merge = NULL;
         c_ext_id_t *drain_exts;
-        c_mstore_key_t key;
+        size_t entry_size;
 
         /* alloc temp storage for mstore entry; will be used until we have a struct alloc'd by
            castle_da_merge_alloc(). */
@@ -9417,7 +9440,8 @@ static int castle_da_merge_deser_phase1(void)
             BUG();
         }
 
-        castle_mstore_iterator_next(iterator, entry, &key);
+        castle_mstore_iterator_next(iterator, entry, &entry_size);
+        BUG_ON(entry_size != sizeof(struct castle_dmserlist_entry));
         da_id = entry->da_id;
         level = entry->level;
         BUG_ON((level < MIN_DA_SERDES_LEVEL));
@@ -9522,24 +9546,18 @@ static int castle_da_merge_deser_phase1(void)
 
     BUG_ON(ret);
 out:
-    if (iterator)       castle_mstore_iterator_destroy(iterator);
-    if (store)          castle_mstore_fini(store);
+    if (iterator)
+        castle_mstore_iterator_destroy(iterator);
 
     return ret;
 }
 
 static int castle_da_merge_deser_phase2(void)
 {
-    struct castle_mstore *store;
-    struct castle_mstore_iter *iterator = NULL;
+    struct castle_mstore_iter *iterator;
     int ret = 0;
 
-    store = castle_mstore_open(MSTORE_DA_MERGE_IN_TREE,
-                               sizeof(struct castle_in_tree_merge_state_entry));
-    if (!store)
-        return -1;
-
-    iterator = castle_mstore_iterate(store);
+    iterator = castle_mstore_iterate(MSTORE_DA_MERGE_IN_TREE);
     if (!iterator)
     {
         ret = -1;
@@ -9552,9 +9570,9 @@ static int castle_da_merge_deser_phase2(void)
         int level;
         int pos;
         int seq;
-        c_mstore_key_t key;
         struct castle_double_array *da;
         struct castle_in_tree_merge_state_entry *entry;
+        size_t entry_size;
         struct castle_component_tree *ct;
         struct castle_da_merge *merge = NULL;
 
@@ -9565,7 +9583,8 @@ static int castle_da_merge_deser_phase2(void)
             BUG();
         }
 
-        castle_mstore_iterator_next(iterator, entry, &key);
+        castle_mstore_iterator_next(iterator, entry, &entry_size);
+        BUG_ON(entry_size != sizeof(struct castle_in_tree_merge_state_entry));
 
         da_id = entry->da_id;
         merge = castle_merges_hash_get(entry->merge_id);
@@ -9617,23 +9636,18 @@ static int castle_da_merge_deser_phase2(void)
 
     BUG_ON(ret);
 out:
-    if (iterator)       castle_mstore_iterator_destroy(iterator);
-    if (store)          castle_mstore_fini(store);
+    if (iterator)
+        castle_mstore_iterator_destroy(iterator);
 
     return ret;
 }
 
 static int castle_da_ct_read(void)
 {
-    struct castle_mstore *store;
     struct castle_mstore_iter *iterator = NULL;
     int ret = 0;
 
-    store = castle_mstore_open(MSTORE_COMPONENT_TREES, sizeof(struct castle_clist_entry));
-    if (!store)
-        return -1;
-
-    iterator = castle_mstore_iterate(store);
+    iterator = castle_mstore_iterate(MSTORE_COMPONENT_TREES);
     if (!iterator)
     {
         ret = -1;
@@ -9643,12 +9657,13 @@ static int castle_da_ct_read(void)
     while(castle_mstore_iterator_has_next(iterator))
     {
         uint64_t ct_seq;
-        c_mstore_key_t key;
         struct castle_component_tree *ct;
         struct castle_double_array *da;
         struct castle_clist_entry entry;
+        size_t entry_size;
 
-        castle_mstore_iterator_next(iterator, &entry, &key);
+        castle_mstore_iterator_next(iterator, &entry, &entry_size);
+        BUG_ON(entry_size != sizeof(struct castle_clist_entry));
         /* Special case for castle_global_tree, it doesn't have a da associated with it. */
         if(TREE_GLOBAL(entry.seq))
         {
@@ -9678,8 +9693,8 @@ static int castle_da_ct_read(void)
 
     BUG_ON(ret);
 out:
-    if (iterator)       castle_mstore_iterator_destroy(iterator);
-    if (store)          castle_mstore_fini(store);
+    if (iterator)
+        castle_mstore_iterator_destroy(iterator);
 
     return ret;
 }
@@ -9697,32 +9712,19 @@ int castle_double_array_read(void)
     struct castle_lolist_entry mstore_loentry;
     struct castle_mstore_iter *iterator = NULL;
     struct castle_double_array *da;
-    c_mstore_key_t key;
+    size_t mstore_dentry_size, mstore_loentry_size;
     int ret = 0;
     debug("%s::start.\n", __FUNCTION__);
 
-    castle_da_store   = castle_mstore_open(MSTORE_DOUBLE_ARRAYS,
-                                         sizeof(struct castle_dlist_entry));
-    castle_lo_store   = castle_mstore_open(MSTORE_LARGE_OBJECTS,
-                                         sizeof(struct castle_lolist_entry));
-    castle_data_exts_store = castle_mstore_open(MSTORE_DATA_EXTENTS,
-                                         sizeof(struct castle_dext_list_entry));
-    castle_data_exts_maps_store = castle_mstore_open(MSTORE_CT_DATA_EXTENTS,
-                                         sizeof(struct castle_dext_map_list_entry));
-
-    if(!castle_da_store ||
-       !castle_lo_store || !castle_data_exts_store ||
-       !castle_data_exts_maps_store)
-        goto error_out;
-
     /* Read doubling arrays */
-    iterator = castle_mstore_iterate(castle_da_store);
+    iterator = castle_mstore_iterate(MSTORE_DOUBLE_ARRAYS);
     if(!iterator)
         goto error_out;
 
     while(castle_mstore_iterator_has_next(iterator))
     {
-        castle_mstore_iterator_next(iterator, &mstore_dentry, &key);
+        castle_mstore_iterator_next(iterator, &mstore_dentry, &mstore_dentry_size);
+        BUG_ON(mstore_dentry_size != sizeof(struct castle_dlist_entry));
         da = castle_da_alloc(mstore_dentry.id, mstore_dentry.creation_opts);
         if(!da)
             goto error_out;
@@ -9777,10 +9779,10 @@ int castle_double_array_read(void)
     castle_da_ct_read();
 
     /* Read all data extents. Also, output tree data extents. */
-    castle_data_exts_read(castle_data_exts_store);
+    castle_data_exts_read();
 
     /* Read data extent to CT mappings. Expects data extents and CTs in hash table. */
-    castle_data_exts_maps_read(castle_data_exts_maps_store);
+    castle_data_exts_maps_read();
 
     debug("castle_next_da_id = %d, castle_next_tree_id=%lld\n",
             castle_next_da_id,
@@ -9790,7 +9792,7 @@ int castle_double_array_read(void)
 
     /* Read all Large Objects lists. */
     /* (implicit Stage 3 merge DES) */
-    iterator = castle_mstore_iterate(castle_lo_store);
+    iterator = castle_mstore_iterate(MSTORE_LARGE_OBJECTS);
     if(!iterator)
         goto error_out;
 
@@ -9798,7 +9800,9 @@ int castle_double_array_read(void)
     {
         struct castle_component_tree *ct;
 
-        castle_mstore_iterator_next(iterator, &mstore_loentry, &key);
+
+        castle_mstore_iterator_next(iterator, &mstore_loentry, &mstore_loentry_size);
+        BUG_ON(mstore_loentry_size != sizeof(struct castle_lolist_entry));
         ct = castle_component_tree_get(mstore_loentry.ct_seq);
         if (!ct)
         {
@@ -9837,16 +9841,8 @@ error_out:
     /* The doubling arrays we've created so far should be destroyed by the module fini code. */
     ret = -EINVAL;
 out:
-    if (iterator)                   castle_mstore_iterator_destroy(iterator);
-    if (castle_da_store)            castle_mstore_fini(castle_da_store);
-    if (castle_lo_store)            castle_mstore_fini(castle_lo_store);
-    if (castle_data_exts_store)     castle_mstore_fini(castle_data_exts_store);
-    if (castle_data_exts_maps_store)  castle_mstore_fini(castle_data_exts_maps_store);
-
-    castle_da_store               =
-    castle_lo_store               =
-    castle_data_exts_store        =
-    castle_data_exts_maps_store   = NULL;
+    if (iterator)
+        castle_mstore_iterator_destroy(iterator);
 
     debug("%s::end.\n", __FUNCTION__);
     return ret;

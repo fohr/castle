@@ -17,6 +17,7 @@
 #include "castle_rebuild.h"
 #include "castle_events.h"
 #include "castle_freespace.h"
+#include "castle_mstore.h"
 
 /* Extent manager - Every disk reserves few chunks in the begining of the disk to
  * store meta data. Meta data for freespace management (for each disk) would be
@@ -711,7 +712,7 @@ skip_slave:
     memset(pool->freed_schks, 0, sizeof(c_chk_cnt_t) * MAX_NR_SLAVES);
 
     /* Insert entry into mstore: could sleep. */
-    castle_mstore_entry_insert(mstore, entry);
+    castle_mstore_entry_insert(mstore, entry, sizeof(struct castle_rlist_entry));
 
     return 0;
 }
@@ -722,8 +723,7 @@ static int castle_res_pools_writeback(void)
 
     BUG_ON(!castle_extent_in_transaction());
 
-    castle_res_pool_mstore =
-        castle_mstore_init(MSTORE_RES_POOLS, sizeof(struct castle_rlist_entry));
+    castle_res_pool_mstore = castle_mstore_init(MSTORE_RES_POOLS);
     if(!castle_res_pool_mstore)
         return -ENOMEM;
 
@@ -793,21 +793,12 @@ void castle_res_pools_post_checkpoint(void)
 int castle_res_pools_read(void)
 {
     struct castle_mstore_iter *iterator = NULL;
-    c_mstore_t *mstore = NULL;
     c_res_pool_t *pool = NULL;
     struct list_head *lh;
     int ret = 0;
 
-    /* Open reservation pools mstore. */
-    mstore = castle_mstore_open(MSTORE_RES_POOLS, sizeof(struct castle_rlist_entry));
-    if(!mstore)
-    {
-        ret = -ENOMEM;
-        goto error_out;
-    }
-
     /* Create an iterator for the mstore. */
-    iterator = castle_mstore_iterate(mstore);
+    iterator = castle_mstore_iterate(MSTORE_RES_POOLS);
     if (!iterator)
     {
         ret = -EINVAL;
@@ -818,12 +809,13 @@ int castle_res_pools_read(void)
     while (castle_mstore_iterator_has_next(iterator))
     {
         struct castle_rlist_entry *entry = &global_rentry_buffer;
+        size_t entry_size;
         struct castle_slave *cs;
-        c_mstore_key_t key;
         int i;
 
         /* Get the next entry. */
-        castle_mstore_iterator_next(iterator, entry, &key);
+        castle_mstore_iterator_next(iterator, entry, &entry_size);
+        BUG_ON(entry_size != sizeof(struct castle_rlist_entry));
 
         /* Allocate space for new pool. */
         pool = castle_malloc(sizeof(c_res_pool_t), GFP_KERNEL);
@@ -894,10 +886,6 @@ int castle_res_pools_read(void)
     castle_mstore_iterator_destroy(iterator);
     iterator = NULL;
 
-    /* Close the mstore. */
-    castle_mstore_fini(mstore);
-    mstore = NULL;
-
     /* Do sanity check on slaves. */
     rcu_read_lock();
     list_for_each_rcu(lh, &castle_slaves.slaves)
@@ -914,8 +902,8 @@ int castle_res_pools_read(void)
     rcu_read_unlock();
 
 error_out:
-    if (iterator)       castle_mstore_iterator_destroy(iterator);
-    if (mstore)         castle_mstore_fini(mstore);
+    if (iterator)
+        castle_mstore_iterator_destroy(iterator);
 
     return ret;
 }
@@ -1162,7 +1150,9 @@ static int castle_extent_part_schks_writeback(c_ext_t *ext, void *store)
         mstore_entry.first_chk  = part_schk->first_chk;
         mstore_entry.count      = part_schk->count;
 
-        castle_mstore_entry_insert(castle_part_schks_mstore, &mstore_entry);
+        castle_mstore_entry_insert(castle_part_schks_mstore,
+                                   &mstore_entry,
+                                   sizeof(struct castle_plist_entry));
     }
 
     return 0;
@@ -1172,8 +1162,7 @@ static int castle_extents_part_schks_writeback(void)
 {
     c_mstore_t *castle_part_schks_mstore;
 
-    castle_part_schks_mstore =
-                castle_mstore_init(MSTORE_PART_SCHKS, sizeof(struct castle_plist_entry));
+    castle_part_schks_mstore = castle_mstore_init(MSTORE_PART_SCHKS);
     if (!castle_part_schks_mstore)
         return -ENOMEM;
 
@@ -1187,16 +1176,10 @@ static int castle_extents_part_schks_writeback(void)
 static int castle_extents_part_schks_read(void)
 {
     struct castle_plist_entry entry;
+    size_t entry_size;
     struct castle_mstore_iter *iterator = NULL;
-    c_mstore_t *castle_part_schks_mstore = NULL;
-    c_mstore_key_t key;
 
-    castle_part_schks_mstore =
-        castle_mstore_open(MSTORE_PART_SCHKS, sizeof(struct castle_plist_entry));
-    if(!castle_part_schks_mstore)
-        return -ENOMEM;
-
-    iterator = castle_mstore_iterate(castle_part_schks_mstore);
+    iterator = castle_mstore_iterate(MSTORE_PART_SCHKS);
     if (!iterator)
         goto error_out;
 
@@ -1205,7 +1188,8 @@ static int castle_extents_part_schks_read(void)
         c_ext_t *ext;
         struct castle_slave *cs;
 
-        castle_mstore_iterator_next(iterator, &entry, &key);
+        castle_mstore_iterator_next(iterator, &entry, &entry_size);
+        BUG_ON(entry_size != sizeof(struct castle_plist_entry));
 
         ext = castle_extents_hash_get(entry.ext_id);
         cs = castle_slave_find_by_uuid(entry.slave_uuid);
@@ -1220,13 +1204,12 @@ static int castle_extents_part_schks_read(void)
     }
 
     castle_mstore_iterator_destroy(iterator);
-    castle_mstore_fini(castle_part_schks_mstore);
 
     return 0;
 
 error_out:
-    if (iterator)                   castle_mstore_iterator_destroy(iterator);
-    if (castle_part_schks_mstore)   castle_mstore_fini(castle_part_schks_mstore);
+    if (iterator)
+        castle_mstore_iterator_destroy(iterator);
 
     return -1;
 }
@@ -1796,7 +1779,9 @@ void castle_extents_stats_writeback(c_mstore_t *stats_mstore)
     mstore_entry.key = -1;
     mstore_entry.val = castle_extents_chunks_remapped;
 
-    castle_mstore_entry_insert(stats_mstore, &mstore_entry);
+    castle_mstore_entry_insert(stats_mstore,
+                               &mstore_entry,
+                               sizeof(struct castle_slist_entry));
 }
 
 /**
@@ -1834,7 +1819,9 @@ static int castle_extent_writeback(c_ext_t *ext, void *store)
 
     CONVERT_EXTENT_TO_MENTRY(ext, &mstore_entry);
 
-    castle_mstore_entry_insert(castle_extents_mstore, &mstore_entry);
+    castle_mstore_entry_insert(castle_extents_mstore,
+                               &mstore_entry,
+                               sizeof(struct castle_elist_entry));
 
     nr_exts++;
 
@@ -1856,8 +1843,7 @@ int castle_extents_writeback(void)
         while (atomic_read(&castle_extents_gc_q_size) || atomic_read(&castle_extents_dead_count))
             msleep_interruptible(1000);
 
-    castle_extents_mstore =
-        castle_mstore_init(MSTORE_EXTENTS, sizeof(struct castle_elist_entry));
+    castle_extents_mstore = castle_mstore_init(MSTORE_EXTENTS);
     if(!castle_extents_mstore)
         return -ENOMEM;
 
@@ -2554,26 +2540,21 @@ out:
 int castle_extents_read_complete(int *force_checkpoint)
 {
     struct castle_elist_entry mstore_entry;
+    size_t mstore_entry_size;
     struct castle_extents_superblock *ext_sblk = NULL;
     struct castle_mstore_iter *iterator = NULL;
-    c_mstore_t *castle_extents_mstore = NULL;
-    c_mstore_key_t key;
-
-    castle_extents_mstore =
-        castle_mstore_open(MSTORE_EXTENTS, sizeof(struct castle_elist_entry));
-    if(!castle_extents_mstore)
-        return -ENOMEM;
 
     castle_extent_transaction_start();
 
     nr_exts = 0;
-    iterator = castle_mstore_iterate(castle_extents_mstore);
+    iterator = castle_mstore_iterate(MSTORE_EXTENTS);
     if (!iterator)
         goto error_out;
 
     while (castle_mstore_iterator_has_next(iterator))
     {
-        castle_mstore_iterator_next(iterator, &mstore_entry, &key);
+        castle_mstore_iterator_next(iterator, &mstore_entry, &mstore_entry_size);
+        BUG_ON(mstore_entry_size != sizeof(struct castle_elist_entry));
 
         BUG_ON(LOGICAL_EXTENT(mstore_entry.ext_id));
         if (load_extent_from_mentry(&mstore_entry))
@@ -2582,7 +2563,6 @@ int castle_extents_read_complete(int *force_checkpoint)
         nr_exts++;
     }
     castle_mstore_iterator_destroy(iterator);
-    castle_mstore_fini(castle_extents_mstore);
 
     ext_sblk = castle_extents_super_block_get();
     BUG_ON(ext_sblk->nr_exts != nr_exts);
@@ -2601,8 +2581,8 @@ int castle_extents_read_complete(int *force_checkpoint)
     return 0;
 
 error_out:
-    if (iterator)               castle_mstore_iterator_destroy(iterator);
-    if (castle_extents_mstore)  castle_mstore_fini(castle_extents_mstore);
+    if (iterator)
+        castle_mstore_iterator_destroy(iterator);
 
     castle_extent_transaction_end();
 

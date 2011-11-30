@@ -13,6 +13,7 @@
 #include "castle_events.h"
 #include "castle_ctrl.h"
 #include "castle_btree.h"
+#include "castle_mstore.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -36,7 +37,6 @@ static struct list_head  *castle_versions_counts_hash   = NULL;
 /* Note: we need this variable to be atomic, as max_get() can race with version_add(). */
 static atomic_t           castle_versions_last   = ATOMIC(INVAL_VERSION);
 static atomic_t           castle_versions_count  = ATOMIC(0);
-static c_mstore_t        *castle_versions_mstore = NULL;
 
 static int castle_versions_deleted_sysfs_hide = 1;  /**< Hide deleted versions from sysfs?      */
 module_param(castle_versions_deleted_sysfs_hide, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
@@ -1312,15 +1312,23 @@ struct timeval castle_version_immute_timestamp_get(c_ver_t version)
     return v->immute_timestamp;
 }
 
+struct castle_version_writeback_state {
+    struct castle_mstore *mstore;
+    int is_fini;
+};
+
 /* TODO who should handle errors in writeback? */
 static int castle_version_writeback(struct castle_version *v, void *_data)
 {
     struct castle_vlist_entry mstore_ventry;
-    int is_fini = *(int *)_data;
+    struct castle_version_writeback_state *writeback_state =
+                            (struct castle_version_writeback_state *)_data;
 
     debug("Writing back version %d\n", v->version);
 
-    BUG_ON(is_fini && !DA_INVAL(v->da_id) && !castle_double_array_alive(v->da_id));
+    BUG_ON(writeback_state->is_fini &&
+           !DA_INVAL(v->da_id) &&
+           !castle_double_array_alive(v->da_id));
 
     mstore_ventry.version_nr        = v->version;
     mstore_ventry.parent            = (v->parent ? v->parent->version : 0);
@@ -1338,26 +1346,29 @@ static int castle_version_writeback(struct castle_version *v, void *_data)
     mstore_ventry.immute_time_us    = v->immute_timestamp.tv_usec;
 
     read_unlock_irq(&castle_versions_hash_lock);
-    castle_mstore_entry_insert(castle_versions_mstore, &mstore_ventry);
+    castle_mstore_entry_insert(writeback_state->mstore,
+                               &mstore_ventry,
+                               sizeof(struct castle_vlist_entry));
     read_lock_irq(&castle_versions_hash_lock);
 
     return 0;
 }
 
+/* Should be called in CASTLE_TRANSACTION. */
 int castle_versions_writeback(int is_fini)
-{ /* Should be called in CASTLE_TRANSACTION. */
-    BUG_ON(castle_versions_mstore);
+{
+    struct castle_version_writeback_state writeback_state;
 
-    castle_versions_mstore =
-        castle_mstore_init(MSTORE_VERSIONS_ID, sizeof(struct castle_vlist_entry));
-    if(!castle_versions_mstore)
+    writeback_state.mstore = castle_mstore_init(MSTORE_VERSIONS_ID);
+    if(!writeback_state.mstore)
         return -ENOMEM;
 
-    /* Writeback new copy. */
-    castle_versions_hash_iterate(castle_version_writeback, &is_fini);
+    writeback_state.is_fini = is_fini;
 
-    castle_mstore_fini(castle_versions_mstore);
-    castle_versions_mstore = NULL;
+    /* Writeback new copy. */
+    castle_versions_hash_iterate(castle_version_writeback, &writeback_state);
+
+    castle_mstore_fini(writeback_state.mstore);
 
     return 0;
 }
@@ -1876,23 +1887,11 @@ int castle_versions_zero_init(void)
  */
 int castle_versions_read(void)
 {
-    struct castle_vlist_entry mstore_ventry;
     struct castle_mstore_iter* iterator = NULL;
     struct castle_version* v;
-    c_mstore_key_t key;
     int ret = 0;
 
-    BUG_ON(castle_versions_mstore);
-    castle_versions_mstore =
-        castle_mstore_open(MSTORE_VERSIONS_ID, sizeof(struct castle_vlist_entry));
-
-    if(!castle_versions_mstore)
-    {
-        ret = -ENOMEM;
-        goto out;
-    }
-
-    iterator = castle_mstore_iterate(castle_versions_mstore);
+    iterator = castle_mstore_iterate(MSTORE_VERSIONS_ID);
     if(!iterator)
     {
         ret = -EINVAL;
@@ -1901,8 +1900,13 @@ int castle_versions_read(void)
 
     while(castle_mstore_iterator_has_next(iterator))
     {
+        struct castle_vlist_entry mstore_ventry;
+        size_t mstore_ventry_size;
         cv_health_t health;
-        castle_mstore_iterator_next(iterator, &mstore_ventry, &key);
+
+        castle_mstore_iterator_next(iterator, &mstore_ventry, &mstore_ventry_size);
+
+        BUG_ON(mstore_ventry_size != sizeof(struct castle_vlist_entry));
         health = test_bit(CV_DELETED_BIT, &mstore_ventry.flags)
                 ? CVH_DELETED : CVH_LIVE;
         ret = castle_version_add(mstore_ventry.version_nr,
@@ -1948,9 +1952,8 @@ int castle_versions_read(void)
     ret = castle_versions_process(0);
 
 out:
-    if (iterator)               castle_mstore_iterator_destroy(iterator);
-    if (castle_versions_mstore) castle_mstore_fini(castle_versions_mstore);
-    castle_versions_mstore = NULL;
+    if (iterator)
+        castle_mstore_iterator_destroy(iterator);
 
     return ret;
 }

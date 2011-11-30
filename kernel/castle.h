@@ -37,7 +37,7 @@ void ATTRIB_NORET bug_fn(char *file, unsigned long line);
 #define MAX_KMALLOC_SIZE    MAX_KMALLOC_PAGES << PAGE_SHIFT     /**< Maximum Bytes we can kmalloc */
 
 /* Printk implementation used in the entire filesystem. */
-#define PRINTKS_PER_SEC_STEADY_STATE    5
+#define PRINTKS_PER_SEC_STEADY_STATE    500
 #define PRINTKS_IN_BURST                100
 #define PRINTK_BUFFER_MBS               10          /**< Size of printk ring buffer (in MB).    */
 #define PRINTK_BUFFER_SIZE              PRINTK_BUFFER_MBS*1024*1024 /**< Size of printk buffer. */
@@ -293,6 +293,8 @@ STATIC_BUG_ON(sizeof(struct castle_disk_chunk) != 8);
 #define disk_chk2str(_chk)            (_chk).slave_id, (_chk).offset
 
 typedef uint64_t c_byte_off_t;
+#define INVAL_BYTE_OFF               ((c_byte_off_t)-1)
+#define BYTE_OFF_INVAL(_off)         ((_off) == INVAL_BYTE_OFF)
 
 /* Disk layout related structures (extent based) */
 struct castle_extent_position {
@@ -795,30 +797,27 @@ STATIC_BUG_ON(sizeof(struct castle_value_tuple) != 32);
 
 typedef uint8_t c_mstore_id_t;
 
-typedef struct castle_mstore_key {
-    c_ext_pos_t  cep;
-    int          idx;
-} c_mstore_key_t;
-
-#define INVAL_MSTORE_KEY           ((c_mstore_key_t){.cep = __INVAL_EXT_POS, .idx = 0})
-#define MSTORE_KEY_INVAL(_k)       (EXT_POS_INVAL(_k.cep) && ((_k).idx == 0))
-#define MSTORE_KEY_EQUAL(_k1, _k2) (EXT_POS_EQUAL(_k1.cep, _k2.cep)  &&         \
-                                    ((_k1).idx == (_k2).idx))
 typedef struct castle_mstore {
-    c_mstore_id_t              store_id;             /* Id of the store, ptr in fs_sb    */
-    size_t                     entry_size;           /* Size of the entries stored       */
-    struct semaphore           mutex;                /* Mutex which protects the         */
-                                                     /*  last_node_* variables           */
-    c_ext_pos_t                last_node_cep;        /* Tail of the list, has at least   */
-                                                     /* one unused entry in it           */
-    int                        last_node_unused;     /* Number of unused entries in the  */
-                                                     /* last node                        */
+    c_mstore_id_t              store_id;                    /* Id of the store, ptr in fs_sb    */
+    int                        rw;                          /* Whether the store is being read  */
+                                                            /* or written.                      */
+    struct semaphore           mutex;                       /* Mutex which protects the         */
+                                                            /*  last_node_* variables           */
+    c_ext_pos_t                last_node_cep;               /* Tail of the list, has at least   */
+                                                            /* one unused entry in it           */
+    c_byte_off_t               last_node_last_entry_offset; /* Points to the start of the last  */
+                                                            /* entry inserted into the last     */
+                                                            /* node.                            */
+    c_byte_off_t               last_node_next_entry_offset; /* Points to the start of where the */
+                                                            /* next entry should be inserted    */
+                                                            /* into the last node.              */
 } c_mstore_t;
 
 typedef struct castle_mstore_iter {
-    struct castle_mstore      *store;                /* Store we are iterating over      */
+    struct castle_mstore       store;                /* Store we are iterating over      */
     struct castle_cache_block *node_c2b;             /* Currently accessed node (locked) */
-    int                        node_idx;             /* Next entry index in current node */
+    int                        next_entry_idx;       /* Entry # in node_c2b to be        */
+                                                     /* returned next.                   */
 } c_mstore_iter_t;
 
 enum {
@@ -1317,8 +1316,7 @@ STATIC_BUG_ON(sizeof(struct castle_alist_entry) != 256);
 struct castle_mlist_node {
     /* align:   8 */
     /* offset:  0 */ uint32_t    magic;
-    /*          4 */ uint16_t    capacity;
-    /*          6 */ uint16_t    used;
+    /*          4 */ uint32_t    used;
     /*          8 */ c_ext_pos_t next;
     /*         24 */ uint8_t     _unused[40];
     /*         64 */ uint8_t     payload[0];
@@ -1802,7 +1800,6 @@ struct castle_slave_block_cnt
     c_ver_t          version;
     block_t          cnt;
     struct list_head list;
-    c_mstore_key_t   mstore_key;
 };
 
 struct castle_slave_block_cnts
@@ -1913,7 +1910,7 @@ extern struct workqueue_struct *castle_wqs[2*MAX_BTREE_DEPTH+1];
 
 /* Various utilities */
 #define C_BLK_SHIFT                    (12)
-#define C_BLK_SIZE                     (1 << C_BLK_SHIFT)
+#define C_BLK_SIZE                     (1ULL << C_BLK_SHIFT)
 #define NR_BLOCKS(_bytes)              (((_bytes) - 1) / C_BLK_SIZE + 1)
 //#define disk_blk_to_offset(_cdb)     ((_cdb).block * C_BLK_SIZE)
 
