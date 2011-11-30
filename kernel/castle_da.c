@@ -5424,17 +5424,14 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
          * as these keys have not yet been accounted for; skip them. */
         merge->skipped_count++;
         stats_p->version_deletes++;
-        if (CVT_TOMBSTONE(cvt))
-            stats_p->tombstones--;
-        else
-            stats_p->keys--;
-        castle_version_live_stats_adjust(version, *stats_p);
-        if (merge->level == 1)
+        /* Key & tombstones inserts have not been accounted for in
+         * level 1 merges so don't record removals. */
+        if(merge->level != 1)
         {
-            /* Key & tombstones inserts have not been accounted for in
-             * level 1 merges so don't record removals. */
-            stats_p->keys = 0;
-            stats_p->tombstones = 0;
+            if (CVT_TOMBSTONE(cvt))
+                stats_p->tombstones--;
+            else
+                stats_p->keys--;
         }
         castle_version_private_stats_adjust(version, *stats_p, &merge->version_states);
 
@@ -5484,11 +5481,8 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
     atomic64_inc(&merge->out_tree->item_count);
     if (merge->level == 1)
     {
-        /* Live stats to reflect adjustments by castle_da_each_skip(). */
-        castle_version_live_stats_adjust(version, *stats_p);
-
         /* Key & tombstone inserts have not been accounted for in private
-         * level 1 merge version stats.  Zero any stat adjustments made in
+         * level 1 merge version stats. Zero any stat adjustments made in
          * castle_da_each_skip() and perform accounting now. */
         stats_p->keys = 0;
         stats_p->tombstones = 0;
@@ -5497,14 +5491,8 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
             stats_p->tombstones++;
         else
             stats_p->keys++;
-
-        castle_version_private_stats_adjust(version, *stats_p, &merge->version_states);
     }
-    else
-    {
-        castle_version_live_stats_adjust(version, *stats_p);
-        castle_version_private_stats_adjust(version, *stats_p, &merge->version_states);
-    }
+    castle_version_private_stats_adjust(version, *stats_p, &merge->version_states);
 
     /* Update component tree size stats. */
     castle_tree_size_stats_update(key, &cvt, merge->out_tree, 1 /* Add. */);

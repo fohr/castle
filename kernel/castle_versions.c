@@ -85,7 +85,6 @@ struct castle_version {
      *
      * The delayed stats are updated in a crash-consistent manner as merges
      * get 'snapshotted', see castle_da_merge_serialise(). */
-    struct castle_version_stats live_stats; /**< Up-to-date stats associated with version.      */
     struct castle_version_stats stats;  /**< Stats associated with version (crash consistent).  */
 
     struct list_head hash_list;         /**< List for hash table, protected by hash lock.       */
@@ -922,12 +921,6 @@ static int castle_version_add(c_ver_t version,
     atomic64_set(&v->stats.tombstone_deletes, 0);
     atomic64_set(&v->stats.version_deletes, 0);
     atomic64_set(&v->stats.key_replaces, 0);
-    /* Initialise live version stats. */
-    atomic64_set(&v->live_stats.keys, 0);
-    atomic64_set(&v->live_stats.tombstones, 0);
-    atomic64_set(&v->live_stats.tombstone_deletes, 0);
-    atomic64_set(&v->live_stats.version_deletes, 0);
-    atomic64_set(&v->live_stats.key_replaces, 0);
 
     /* Clean timestamp. */
     memset(&v->creation_timestamp, 0, sizeof(struct timeval));
@@ -1143,98 +1136,40 @@ err_out:
  * Update version stats as described by adjust.
  *
  * @param   adjust      Describe adjustments to be made/retrieved.
- * @param   live        Update live version stats
- * @param   consistent  Update crash consistent version stats
- * @param   private     Update private version stats
  *
- * NOTE: Only one set of stats (live, consistent or private) can be adjusted
+ * NOTE: Only one set of stats (consistent or private) can be adjusted
  *       per call.
  *
  * @also castle_version_stats_adjust()
  * @also castle_version_stats_get()
  */
-cv_nonatomic_stats_t _castle_version_stats_adjust(c_ver_t version,
-                                                  cv_nonatomic_stats_t adjust,
-                                                  int live,
-                                                  int consistent,
-                                                  cv_states_t *private)
+static cv_nonatomic_stats_t _castle_version_stats_adjust(c_ver_t version,
+                                                         cv_nonatomic_stats_t adjust)
 {
     cv_nonatomic_stats_t return_stats;
+    struct castle_version *v;
+    cv_stats_t *stats;
 
-    if (private)
-    {
-        cv_nonatomic_stats_t *stats;
-        cv_state_t *state;
+    read_lock_irq(&castle_versions_hash_lock); // @FIXME do we need irq disabled?
+    v = __castle_versions_hash_get(version);
+    BUG_ON(!v);
+    BUG_ON(!(v->flags & CV_INITED_MASK));
 
-        BUG_ON(live || consistent);
+    stats = &v->stats;
 
-        state = castle_version_states_hash_get_alloc(private, version);
-        stats = &state->stats;
+    return_stats.keys               = atomic64_add_return(adjust.keys, &stats->keys);
+    return_stats.tombstones         = atomic64_add_return(adjust.tombstones,
+                                                          &stats->tombstones);
+    return_stats.tombstone_deletes  = atomic64_add_return(adjust.tombstone_deletes,
+                                                          &stats->tombstone_deletes);
+    return_stats.version_deletes    = atomic64_add_return(adjust.version_deletes,
+                                                          &stats->version_deletes);
+    return_stats.key_replaces       = atomic64_add_return(adjust.key_replaces,
+                                                          &stats->key_replaces);
 
-        return_stats.keys               = (stats->keys += adjust.keys);
-        return_stats.tombstones         = (stats->tombstones += adjust.tombstones);
-        return_stats.tombstone_deletes  = (stats->tombstone_deletes += adjust.tombstone_deletes);
-        return_stats.version_deletes    = (stats->version_deletes += adjust.version_deletes);
-        return_stats.key_replaces       = (stats->key_replaces += adjust.key_replaces);
-    }
-    else
-    {
-        struct castle_version *v;
-        cv_stats_t *stats;
-
-        BUG_ON(live && consistent);
-        BUG_ON(!live && !consistent);
-
-        read_lock_irq(&castle_versions_hash_lock); // @FIXME do we need irq disabled?
-        v = __castle_versions_hash_get(version);
-        BUG_ON(!v);
-        BUG_ON(!(v->flags & CV_INITED_MASK));
-
-        if (live)
-            stats = &v->live_stats;
-        else
-            stats = &v->stats;
-
-        return_stats.keys               = atomic64_add_return(adjust.keys, &stats->keys);
-        return_stats.tombstones         = atomic64_add_return(adjust.tombstones,
-                                                              &stats->tombstones);
-        return_stats.tombstone_deletes  = atomic64_add_return(adjust.tombstone_deletes,
-                                                              &stats->tombstone_deletes);
-        return_stats.version_deletes    = atomic64_add_return(adjust.version_deletes,
-                                                              &stats->version_deletes);
-        return_stats.key_replaces       = atomic64_add_return(adjust.key_replaces,
-                                                              &stats->key_replaces);
-
-        read_unlock_irq(&castle_versions_hash_lock);
-    }
+    read_unlock_irq(&castle_versions_hash_lock);
 
     return return_stats;
-}
-
-/**
- * Adjust state of live per-version stats by amounts in adjust.
- *
- * See _castle_version_stats_adjust() for argument info.
- *
- * @also _castle_version_stats_adjust()
- * @also castle_version_stats_get()
- */
-void castle_version_live_stats_adjust(c_ver_t version, cv_nonatomic_stats_t adjust)
-{
-    _castle_version_stats_adjust(version, adjust, 1 /*live*/, 0 /*consistent*/, NULL /*private*/);
-}
-
-/**
- * Adjust state of crash-consistent per-version stats by amounts in adjust.
- *
- * See _castle_version_stats_adjust() for argument info.
- *
- * @also _castle_version_stats_adjust()
- * @also castle_version_consistent_stats_get()
- */
-void castle_version_consistent_stats_adjust(c_ver_t version, cv_nonatomic_stats_t adjust)
-{
-    _castle_version_stats_adjust(version, adjust, 0 /*live*/, 1 /*consistent*/, NULL /*private*/);
 }
 
 /**
@@ -1248,7 +1183,30 @@ void castle_version_private_stats_adjust(c_ver_t version,
                                          cv_nonatomic_stats_t adjust,
                                          cv_states_t *private)
 {
-    _castle_version_stats_adjust(version, adjust, 0 /*live*/, 0 /*consistent*/, private);
+    cv_nonatomic_stats_t *stats;
+    cv_state_t *state;
+
+    state = castle_version_states_hash_get_alloc(private, version);
+    stats = &state->stats;
+
+    stats->keys += adjust.keys;
+    stats->tombstones += adjust.tombstones;
+    stats->tombstone_deletes += adjust.tombstone_deletes;
+    stats->version_deletes += adjust.version_deletes;
+    stats->key_replaces += adjust.key_replaces;
+}
+
+/**
+ * Adjust state of crash-consistent per-version stats by amounts in adjust.
+ *
+ * See _castle_version_stats_adjust() for argument info.
+ *
+ * @also _castle_version_stats_adjust()
+ * @also castle_version_consistent_stats_get()
+ */
+void castle_version_consistent_stats_adjust(c_ver_t version, cv_nonatomic_stats_t adjust)
+{
+    _castle_version_stats_adjust(version, adjust);
 }
 
 /**
@@ -1262,23 +1220,7 @@ cv_nonatomic_stats_t castle_version_consistent_stats_get(c_ver_t version)
 {
     cv_nonatomic_stats_t null_adjust = { 0, 0, 0, 0, 0 };
 
-    return _castle_version_stats_adjust(version, null_adjust,
-                                        0 /*live*/, 1 /*consistent*/, NULL /*private*/);
-}
-
-/**
- * Return current state of live per-version stats.
- *
- * See _castle_version_stats_adjust() for argument info.
- *
- * @also _castle_version_stats_adjust()
- */
-cv_nonatomic_stats_t castle_version_live_stats_get(c_ver_t version)
-{
-    cv_nonatomic_stats_t null_adjust = { 0, 0, 0, 0, 0 };
-
-    return _castle_version_stats_adjust(version, null_adjust,
-                                        1 /*live*/, 0 /*consistent*/, NULL /*private*/);
+    return _castle_version_stats_adjust(version, null_adjust);
 }
 
 /**
@@ -1930,13 +1872,6 @@ int castle_versions_read(void)
             atomic64_set(&v->stats.tombstone_deletes, mstore_ventry.tombstone_deletes);
             atomic64_set(&v->stats.version_deletes, mstore_ventry.version_deletes);
             atomic64_set(&v->stats.key_replaces, mstore_ventry.key_replaces);
-
-            /* Initialise live version stats (from crash-consistent stats). */
-            atomic64_set(&v->live_stats.keys, mstore_ventry.keys);
-            atomic64_set(&v->live_stats.tombstones, mstore_ventry.tombstones);
-            atomic64_set(&v->live_stats.tombstone_deletes, mstore_ventry.tombstone_deletes);
-            atomic64_set(&v->live_stats.version_deletes, mstore_ventry.version_deletes);
-            atomic64_set(&v->live_stats.key_replaces, mstore_ventry.key_replaces);
 
             /* Misc. */
             v->creation_timestamp.tv_sec  = mstore_ventry.creation_time_s;
