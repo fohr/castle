@@ -962,7 +962,6 @@ int castle_object_replace(struct castle_object_replace *replace,
     c_bvec->tree           = NULL;
     c_bvec->cpu_index      = cpu_index;
     c_bvec->cpu            = castle_double_array_request_cpu(c_bvec->cpu_index);
-    c_bvec->flags          = 0;
     c_bvec->cvt_get        = castle_object_replace_cvt_get;
     c_bvec->queue_complete = castle_object_replace_queue_complete;
     c_bvec->orig_complete  = NULL;
@@ -1404,30 +1403,30 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     /* We are handling a counter if either we just got a counter or we were already
        accumulating counters, and we did not already attempt to resolve timestamps,
        which would have meant this query would not be resolving counters. */
-    if ( get->resolve_counters && (CVT_ANY_COUNTER(cvt) || CVT_ANY_COUNTER(get->cvt)) )
+    if ( test_bit(CBV_PG_RSLV_COUNTERS, &c_bvec->flags) &&
+        (CVT_ANY_COUNTER(cvt) || CVT_ANY_COUNTER(c_bvec->accum)) )
     {
         int finished;
 
-        get->resolve_timestamps = 0;
+        clear_bit(CBV_PG_RSLV_TIMESTAMPS, &c_bvec->flags);
 
         /* Prepare the accumulator, if isn't ready yet. */
-        if(CVT_INVALID(get->cvt) || !CVT_LOCAL_COUNTER(get->cvt))
+        if( !CVT_LOCAL_COUNTER(c_bvec->accum) )
         {
-            CVT_COUNTER_LOCAL_ADD_INIT(get->cvt, 0);
-            /* we don't support timestamped counters but let's explicitly set the timestamp field anyway */
-            get->cvt.user_timestamp = 0;
+            CVT_COUNTER_LOCAL_ADD_INIT(c_bvec->accum, 0);
+            c_bvec->accum.user_timestamp = 0;
         }
 
-        finished = castle_counter_simple_reduce(&get->cvt, cvt);
+        finished = castle_counter_simple_reduce(&c_bvec->accum, cvt);
+        c_bvec->val_put(&cvt);
         /* Return early if we have to keep accumulating. */
         if(!finished)
             return;
-        /* Create local copy of the cvt. Its unsafe to use 'get' structure
-           after start_reply callback. */
-        cvt = get->cvt;
+        cvt = c_bvec->accum;
+        c_bvec->accum = INVAL_VAL_TUP;
     }
-    else
-        get->cvt = cvt;
+
+    get->cvt = cvt;
 
     /* Deal with error case, or non-existent value. */
     if (err || CVT_INVALID(cvt) || CVT_TOMBSTONE(cvt))
@@ -1542,6 +1541,10 @@ int castle_object_get(struct castle_object_get *get,
     c_bvec->val_put         = castle_object_value_release;
     c_bvec->submit_complete = castle_object_get_complete;
     c_bvec->orig_complete   = NULL;
+
+    /* in the beginning, we will be willing to resolve timestamps or counters, but upon
+       retrieval of the first candidate return value, we will pick one or the other. */
+
     atomic_set(&c_bvec->reserv_nodes, 0);
 
     /* @TODO: add bios to the debugger! */
@@ -1760,6 +1763,10 @@ int castle_object_pull(struct castle_object_pull *pull,
     c_bvec->val_put         = castle_object_value_release;
     c_bvec->submit_complete = castle_object_pull_continue;
     c_bvec->orig_complete   = NULL;
+
+    /* in the beginning, we will be willing to resolve timestamps or counters, but upon
+       retrieval of the first candidate return value, we will pick one or the other. */
+
     atomic_set(&c_bvec->reserv_nodes, 0);
 
     /* @TODO: add bios to the debugger! */

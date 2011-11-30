@@ -656,6 +656,7 @@ STATIC_BUG_ON(sizeof(struct castle_value_tuple) != 32);
    (_cvt).type   = CVT_TYPE_INVALID;                                          \
    (_cvt).length = 0;                                                         \
    (_cvt).cep    = INVAL_EXT_POS;                                             \
+   (_cvt).user_timestamp = 0;                                                 \
 }
 #define CVT_NODE_INIT(_cvt, _length, _cep)                                    \
 {                                                                             \
@@ -1405,10 +1406,13 @@ struct castle_cache_block;
 struct castle_request_timeline;
 #define CBV_ONE2ONE_BIT               (0)
 #define CBV_ROOT_LOCKED_BIT           (1)
-#define CBV_PARENT_WRITE_LOCKED       (3)
-#define CBV_CHILD_WRITE_LOCKED        (4)
+#define CBV_PARENT_WRITE_LOCKED       (2)
+#define CBV_CHILD_WRITE_LOCKED        (3)
 /* Temporary variable used to set the above correctly, at the right point in time */
-#define CBV_C2B_WRITE_LOCKED          (5)
+#define CBV_C2B_WRITE_LOCKED          (4)
+/* These 2 flags are used to maintain the peace between timestamps and counters on point gets */
+#define CBV_PG_RSLV_COUNTERS          (5)
+#define CBV_PG_RSLV_TIMESTAMPS        (6)
 
 /**
  * Bloom lookup request structure.
@@ -1458,6 +1462,9 @@ typedef struct castle_bio_vec {
 #ifdef CASTLE_BLOOM_FP_STATS
     int bloom_positive;
 #endif
+
+    c_val_tup_t accum; /**< Accumulates a return value candidate; used to sort
+                            out counters and timestamps.    */
 
     struct work_struct              work;      /**< Used to thread this bvec onto a workqueue    */
     union {
@@ -2039,14 +2046,7 @@ struct castle_object_replace {
 };
 
 struct castle_object_get {
-    /*********************** do not move this block, relying on union alignment *******************/
     c_val_tup_t                   cvt;              /**< Describes value (e.g. disk offset).    */
-    /* in order to maintain the uneasy ceasefire between counters and timestamps, queries need to
-       keep track of whethery they are doing one or the other; the idea is to unset these flags
-       once we know if we are supposed to resolve timestamps, or counters - never attempt both. */
-    uint8_t                      resolve_counters;
-    uint8_t                      resolve_timestamps;
-    /*********************** do not move this block, relying on union alignment *******************/
 
     struct castle_cache_block    *data_c2b;
     uint64_t                      data_c2b_length;
@@ -2070,14 +2070,7 @@ struct castle_object_get {
 };
 
 struct castle_object_pull {
-    /*********************** do not move this block, relying on union alignment *******************/
     c_val_tup_t                   cvt;
-    /* in order to maintain the uneasy ceasefire between counters and timestamps, queries need to
-       keep track of whethery they are doing one or the other; the idea is to unset these flags
-       once we know if we are supposed to resolve timestamps, or counters - never attempt both. */
-    uint8_t                      resolve_counters;
-    uint8_t                      resolve_timestamps;
-    /*********************** do not move this block, relying on union alignment *******************/
 
     struct castle_da_cts_proxy   *cts_proxy;     /**< Reference-taking snapshot of CTs in DA.*/
     uint64_t                      remaining;

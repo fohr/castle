@@ -1732,11 +1732,6 @@ static void castle_back_get(void *data)
     op->get.key = op->key;
     op->get.flags = op->req.flags;
 
-    /* in the beginning, we will be willing to resolve timestamps or counters, but upon
-       retrieval of the first candidate return value, we will pick one or the other. */
-    op->get.resolve_counters   = 1;
-    op->get.resolve_timestamps = 1;
-
     if ((op->req.flags & CASTLE_RING_FLAG_RET_TIMESTAMP) &&
         !castle_attachment_user_timestamping_check(op->attachment))
     {
@@ -3349,11 +3344,6 @@ static void castle_back_big_get(void *data)
 #endif
 
     stateful_op->pull.key = op->key;
-
-    /* in the beginning, we will be willing to resolve timestamps or counters, but upon retrieval
-       of the first candidate return value, we will pick one or the other. */
-    stateful_op->pull.resolve_counters   = 1;
-    stateful_op->pull.resolve_timestamps = 1;
 
     err = castle_object_pull(&stateful_op->pull, attachment, op->cpu_index);
     if (err)

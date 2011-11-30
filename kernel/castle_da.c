@@ -11080,8 +11080,7 @@ void castle_da_next_ct_read(c_bvec_t *c_bvec)
 int castle_da_ct_read_complete_cvt_timestamp_check(c_bvec_t *c_bvec,
                                                    c_val_tup_t *cvt)
 {
-    struct castle_object_get *get = c_bvec->c_bio->get;
-
+    BUG_ON(!c_bvec->tree);
     BUG_ON(CVT_INVALID(*cvt));
 
     if (CVT_ANY_COUNTER(*cvt))
@@ -11090,25 +11089,25 @@ int castle_da_ct_read_complete_cvt_timestamp_check(c_bvec_t *c_bvec,
            timestamped DA after inserting a counter to the same key, which would mean that we
            should have already seen a get candidate cvt that wasn't a counter, which would mean
            the following assertions must hold. */
-        BUG_ON(get->resolve_counters);
-        BUG_ON(CVT_INVALID(get->cvt));
+        BUG_ON(test_bit(CBV_PG_RSLV_COUNTERS, &c_bvec->flags));
+        BUG_ON(CVT_INVALID(c_bvec->accum));
 
         /* If the user is mixing counters and non-counters on the same key, then they must not be
            relying on timestamps. Ignore this counter and terminate the query now before we get
            into any more trouble */
+        castle_printk(LOG_WARN, "Mixing counters and timestamped object on the same key; results undefined!\n");
         return 1;
     }
 
     /* if we make it this far, that means we have seen at least one non-counter and not seen
        any counters, and so we don't expect to resolve counters. */
-    get->resolve_counters = 0;
-
+    clear_bit(CBV_PG_RSLV_COUNTERS, &c_bvec->flags);
     /*
     Further work: Use suspicioun tags to indicate if we can safely terminate
-                  the query; If get->cvt is non-suspicious candidate, and cvt
+                  the query; If c_bvec->accum is non-suspicious candidate, and cvt
                   is ancestral, then we can stop.
-    if(!CVT_INVALID(get->cvt) && !CVT_INVALID(cvt))
-        if(!CVT_SUSPICIOUS(get->cvt) && castle_version_is_ancestor(get->cvt.version, cvt.version))
+    if(!CVT_INVALID(c_bvec->accum) && !CVT_INVALID(cvt))
+        if(!CVT_SUSPICIOUS(c_bvec->accum) && castle_version_is_ancestor(c_bvec->accum.version, cvt.version))
             return 1;
     Note: doing this means we need the version of the cvt, which is not immediately available here.
     */
@@ -11125,21 +11124,22 @@ int castle_da_ct_read_complete_cvt_timestamp_check(c_bvec_t *c_bvec,
             get->cvt.user_timestamp);
 #endif
 
-    if(CVT_INVALID(get->cvt))
-        get->cvt = *cvt;
+    if(CVT_INVALID(c_bvec->accum))
+        c_bvec->accum = *cvt;
     else if(!CVT_INVALID(*cvt))
     {
-        if(cvt->user_timestamp > get->cvt.user_timestamp)
+        if(cvt->user_timestamp > c_bvec->accum.user_timestamp)
         {
-            c_bvec->val_put(&get->cvt);
-            get->cvt = *cvt;
+            /* found a new object */
+            c_bvec->val_put(&c_bvec->accum);
+            c_bvec->accum = *cvt;
         }
         else
         {
-            BUG_ON(!c_bvec->tree);
+            /* found an old object */
             atomic64_inc(&c_bvec->tree->da->stats.user_timestamps.ct_max_uts_false_positives);
             c_bvec->val_put(cvt);
-            *cvt = get->cvt;
+            *cvt = c_bvec->accum;
         }
     }
 
@@ -11165,7 +11165,6 @@ int castle_da_ct_read_complete_cvt_timestamp_check(c_bvec_t *c_bvec,
 static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
 {
     void (*callback) (struct castle_bio_vec *c_bvec, int err, c_val_tup_t cvt);
-    struct castle_object_get *get = c_bvec->c_bio->get;
 
     callback = c_bvec->orig_complete;
 
@@ -11179,19 +11178,15 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
     /* No more candidate trees available, callback now. */
     if (!err && !c_bvec->tree)
     {
-        //TODO@tr this needs to be tightened up considerably - need a careful review
-        //        of how big_get works! - trac #3841
-        if(get->resolve_timestamps &&
+        if(test_bit(CBV_PG_RSLV_TIMESTAMPS, &c_bvec->flags) &&
            CVT_INVALID(cvt) &&
-           !CVT_INVALID(get->cvt) &&
-           !get->resolve_counters) //a hack to hopefully get big gets to do the right thing, TODO@tr unhack this! - trac #3841
+           !CVT_INVALID(c_bvec->accum))
         {
             /* If we had performed any timestamp resolution, we must have disabled
                counter resolution. */
-
-            //TODO@tr tighten this up... with big_gets, the following BUG can be hit
-            //BUG_ON(get->resolve_counters); - trac #3841
-            cvt = get->cvt;
+            BUG_ON(test_bit(CBV_PG_RSLV_COUNTERS, &c_bvec->flags));
+            cvt = c_bvec->accum;
+            c_bvec->accum = INVAL_VAL_TUP;
         }
         goto complete;
     }
@@ -11201,7 +11196,7 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
 
     /* Handle counter accumulation. */
     if (!err &&                    /* no error */
-        get->resolve_counters &&   /* we are still able to resolve counters */
+        test_bit(CBV_PG_RSLV_COUNTERS, &c_bvec->flags) && /* we are still resolving counters */
         CVT_ADD_ALLV_COUNTER(cvt)) /* we have something that needs accumulating */
     {
         /* Callback handles counter accumulation. */
@@ -11212,12 +11207,12 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
         return;
     }
     /* Handle timestamps */
-    else if (!err &&                                /* no error */
-             get->resolve_timestamps &&             /* we are re still able to resolve timestamps */
-             !CVT_INVALID(cvt) &&                   /* this cvt is valid */
+    else if (!err &&                                             /* no error */
+             test_bit(CBV_PG_RSLV_TIMESTAMPS, &c_bvec->flags) && /* still resolving timestamps */
+             !CVT_INVALID(cvt) &&                                /* this cvt is valid */
              castle_da_user_timestamping_check(c_bvec->tree->da) && /* this DA is timestamped */
-             !CVT_ANY_COUNTER(cvt) &&               /* not dealing with a counter */
-             !CVT_ANY_COUNTER(get->cvt))            /* not already accumulating a counter. */
+             !CVT_ANY_COUNTER(cvt) &&                      /* not dealing with a counter */
+             !CVT_ANY_COUNTER(c_bvec->accum))              /* not already accumulating a counter. */
     {
         /* handle timestamps */
         if(!castle_da_ct_read_complete_cvt_timestamp_check(c_bvec, &cvt))
