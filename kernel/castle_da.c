@@ -219,7 +219,10 @@ static int castle_da_rwct_create(struct castle_double_array *da,
                                  int in_tran,
                                  c_lfs_vct_type_t lfs_type);
 static int castle_da_no_disk_space(struct castle_double_array *da);
-static int castle_da_all_rwcts_create(struct castle_double_array *da, int in_tran, int lfs_check);
+static int castle_da_all_rwcts_create(struct castle_double_array *da,
+                                      int in_tran,
+                                      c_lfs_vct_type_t lfs_type,
+                                      int lfs_check);
 void castle_da_next_ct_read(c_bvec_t *c_bvec);
 
 struct workqueue_struct *castle_da_wqs[NR_CASTLE_DA_WQS];
@@ -3496,7 +3499,10 @@ static int castle_da_lfs_all_rwcts_callback(void *data)
 
     /* Reset LFS structure now as it will be reused in all_rwcts_create(). */
     castle_da_lfs_ct_reset(lfs);
-    castle_da_all_rwcts_create(da, 0 /*in_tran*/, 0 /*lfs_check*/);
+    castle_da_all_rwcts_create(da,
+                               0 /*in_tran*/,
+                               LFS_VCT_T_T0_GRP,
+                               0 /*lfs_check*/);
     /* Decrement lfs_victim_count - if all_rwcts_create() failed it will have
      * been incremented, if it succeeded, we may be re-enabling inserts on
      * this doubling-array.  Ensure we do it after all_rwcts_create() to
@@ -9206,12 +9212,16 @@ void castle_double_arrays_pre_writeback(void)
  * @param   da          Doubling array to create T0 CTs for
  * @param   in_tran     Whether CASTLE_TRANSACTION_LOCK is held
  * @param   lfs_check   Whether to perform LFS checks before attempting allocations
+ * @param   lfs_type    Type of LFS allocation (determines LFS CB)
  *
  * @also castle_double_array_start()
  * @also castle_da_rwct_create()
  * @also castle_da_lfs_all_rwcts_callback()
  */
-static int castle_da_all_rwcts_create(struct castle_double_array *da, int in_tran, int lfs_check)
+static int castle_da_all_rwcts_create(struct castle_double_array *da,
+                                      int in_tran,
+                                      c_lfs_vct_type_t lfs_type,
+                                      int lfs_check)
 {
     struct list_head *l, *p;
     LIST_HEAD(list);
@@ -9250,7 +9260,7 @@ static int castle_da_all_rwcts_create(struct castle_double_array *da, int in_tra
         if (__castle_da_rwct_create(da,
                                     cpu_index,
                                     in_tran,
-                                    LFS_VCT_T_T0_GRP,
+                                    lfs_type,
                                     lfs_check) != EXIT_SUCCESS)
         {
             castle_printk(LOG_WARN, "Failed to create T0 %d for DA %u\n", cpu_index, da->id);
@@ -9293,7 +9303,10 @@ err_out:
  */
 static int castle_da_rwct_init(struct castle_double_array *da, void *unused)
 {
-    castle_da_all_rwcts_create(da, 1 /*in_tran*/, 1 /*lfs_check*/);
+    castle_da_all_rwcts_create(da,
+                               1 /*in_tran*/,
+                               LFS_VCT_T_T0_GRP,
+                               1 /*lfs_check*/);
 
     return 0;
 }
@@ -10193,8 +10206,12 @@ int castle_double_array_make(c_da_t da_id, c_ver_t root_version, c_da_opts_t opt
     castle_da_hash_add(da);
     castle_sysfs_da_add(da);
 
-    /* Allocate all T0 RWCTs. */
-    ret = castle_da_all_rwcts_create(da, 1 /*in_tran*/, 0 /*lfs_check*/);
+    /* Allocate all T0 RWCTs - use the invalid LFS type to prevent
+     * LFS callbacks from being generated. */
+    ret = castle_da_all_rwcts_create(da,
+                                     1 /*in_tran*/,
+                                     LFS_VCT_T_INVALID,
+                                     1 /*lfs_check*/);
     if (ret != EXIT_SUCCESS)
     {
         castle_printk(LOG_WARN, "Exiting from failed ct create.\n");
