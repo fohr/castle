@@ -377,11 +377,10 @@ static ssize_t da_tree_list_show(struct kobject *kobj,
 
             ct = list_entry(lh, struct castle_component_tree, da_list);
 
-            if (ct->level >= 2 && test_bit(CASTLE_CT_MERGE_INPUT_BIT, &ct->flags)
-                && !EXT_POS_INVAL(ct->curr_merge_c2b_cep))
-                ct_size = atomic64_read(&ct->tree_ext_free.used) - ct->curr_merge_c2b_cep.offset;
+            if (ct->level >= 2 && test_bit(CASTLE_CT_MERGE_INPUT_BIT, &ct->flags))
+                ct_size = atomic64_read(&ct->nr_bytes) - (unsigned long)ct->nr_drained_bytes;
             else
-                ct_size = atomic64_read(&ct->tree_ext_free.used);
+                ct_size = atomic64_read(&ct->nr_bytes);
 
             ret = snprintf(buf, PAGE_SIZE,
                            "%s[%lu %u %u %u %llu %lu %lu] ",

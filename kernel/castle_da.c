@@ -772,7 +772,6 @@ static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
                merge->latest_mo_cep,
                sizeof(c_ext_pos_t) * merge->nr_drain_exts);
     }
-    iter->tree->curr_merge_c2b_cep = iter->curr_c2b->cep;
 }
 
 static int castle_ct_immut_iter_prep_next(c_immut_iter_t *iter)
@@ -9874,7 +9873,6 @@ struct castle_component_tree * castle_ct_init(struct castle_component_tree *ct,
     ct->data_exts                = castle_zalloc(sizeof(c_ext_id_t) * nr_data_exts, GFP_KERNEL);
     ct->data_exts_count          = nr_data_exts;
     ct->nr_data_exts             = 0;
-    ct->curr_merge_c2b_cep       = INVAL_EXT_POS;
     ct->bloom_exists             = 0;
     ct->merge                    = NULL;
     ct->merge_id                 = INVAL_MERGE_ID;
