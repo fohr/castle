@@ -5887,6 +5887,14 @@ deser_done:
 
 error_out:
     BUG_ON(!ret);
+    if (merge->out_tree)
+    {
+        castle_da_merge_res_pool_detach(merge, ret);
+        if (merge->out_tree->bloom_exists)
+            castle_bloom_abort(&merge->out_tree->bloom);
+        castle_ct_put(merge->out_tree, 0, NULL);
+        merge->out_tree = NULL;
+    }
     castle_printk(LOG_ERROR, "%s::Failed a merge with ret=%d\n", __FUNCTION__, ret);
     castle_da_merge_dealloc(merge, ret, 1 /* In transaction. */);
     debug_merges("Failed a merge with ret=%d\n", ret);
