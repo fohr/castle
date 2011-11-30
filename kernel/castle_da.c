@@ -10188,7 +10188,7 @@ int castle_double_array_make(c_da_t da_id, c_ver_t root_version, c_da_opts_t opt
     castle_sysfs_da_add(da);
 
     /* Allocate all T0 RWCTs. */
-    ret = castle_da_all_rwcts_create(da, 1 /*in_tran*/, 1 /*lfs_check*/);
+    ret = castle_da_all_rwcts_create(da, 1 /*in_tran*/, 0 /*lfs_check*/);
     if (ret != EXIT_SUCCESS)
     {
         castle_printk(LOG_WARN, "Exiting from failed ct create.\n");
