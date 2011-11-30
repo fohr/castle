@@ -9400,6 +9400,11 @@ static int _castle_sysfs_ct_add(struct castle_component_tree *ct, void *_unused)
     if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags))
         return 0;
 
+    /* Don't add T0s to sysfs. This is definetly not possible when DA is being created. As, the
+     * parent doesnt exist yet. */
+    if (ct->level < 2)
+        return 0;
+
     if (castle_sysfs_ct_add(ct))
     {
         castle_printk(LOG_USERINFO, "Failed to add CT: 0x%x to sysfs\n", ct->seq);
@@ -10123,8 +10128,6 @@ static int __castle_da_rwct_create(struct castle_double_array *da,
     /* Invalidate any existing DA CTs proxy structure. */
     castle_da_cts_proxy_invalidate(da);
 
-    castle_sysfs_ct_add(ct);
-
     castle_da_merge_restart(da, NULL);
     return 0;
 
@@ -10198,10 +10201,6 @@ int castle_double_array_make(c_da_t da_id, c_ver_t root_version, c_da_opts_t opt
     da->root_version = root_version;
     da->btree_type = SLIM_TREE_TYPE;
 
-    /* Insert empty DA into hash. */
-    castle_da_hash_add(da);
-    castle_sysfs_da_add(da);
-
     /* Allocate all T0 RWCTs - use the invalid LFS type to prevent
      * LFS callbacks from being generated. */
     ret = castle_da_all_rwcts_create(da,
@@ -10211,19 +10210,19 @@ int castle_double_array_make(c_da_t da_id, c_ver_t root_version, c_da_opts_t opt
     if (ret != EXIT_SUCCESS)
     {
         castle_printk(LOG_WARN, "Exiting from failed ct create.\n");
-
-        castle_sysfs_da_del(da);
-        castle_da_hash_remove(da);
         castle_da_dealloc(da);
-
         return ret;
     }
+
+    /* Insert empty DA into hash. */
+    castle_da_hash_add(da);
+    castle_sysfs_da_add(da);
 
     /* Successfully created a DA. Send event. */
     castle_events_version_tree_created(da->id);
 
     debug("Successfully made a new doubling array, id=%d, for version=%d\n",
-        da_id, root_version);
+           da_id, root_version);
     /* DA make succeeded, start merge threads. */
     castle_da_merge_start(da, NULL);
 

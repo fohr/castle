@@ -1063,7 +1063,6 @@ static struct kobj_type castle_ct_data_extents_ktype = {
     .default_attrs  = castle_ct_data_extents_attrs,
 };
 
-#define DONT_SHOW_T0
 /**
  * Add component tree to the sysfs in vertree directory.
  */
@@ -1071,10 +1070,9 @@ int castle_sysfs_ct_add(struct castle_component_tree *ct)
 {
     int ret, i = 0;
 
-#ifdef DONT_SHOW_T0
-    if (ct->level < 2)
-        return 0;
-#endif
+    /* It is definetly, not recomended, when DA is just getting created as the parent is not
+     * yet created. */
+    BUG_ON(ct->level < 2);
 
     /* Add a directory for list of arrays. */
     memset(&ct->kobj, 0, sizeof(struct kobject));
@@ -1134,10 +1132,8 @@ void castle_sysfs_ct_del(struct castle_component_tree *ct)
 {
     int i;
 
-#ifdef DONT_SHOW_T0
     if (ct->level < 2)
         return;
-#endif
 
     /* Remove all the links for data extents. */
     for (i=0; i<ct->nr_data_exts; i++)
