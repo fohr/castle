@@ -40,10 +40,12 @@ inline cv_state_t*  castle_version_states_hash_get_alloc   (cv_states_t *states,
 void        castle_version_states_commit            (cv_states_t *states);
 int         castle_version_states_free              (cv_states_t *states);
 int         castle_version_states_alloc             (cv_states_t *states, int max_versions);
+void        castle_version_live_stats_adjust        (c_ver_t version, cv_nonatomic_stats_t adjust);
 void        castle_version_consistent_stats_adjust  (c_ver_t version, cv_nonatomic_stats_t adjust);
 void        castle_version_private_stats_adjust     (c_ver_t version, cv_nonatomic_stats_t adjust,
                                                      cv_states_t *private);
 cv_nonatomic_stats_t castle_version_consistent_stats_get (c_ver_t version);
+cv_nonatomic_stats_t castle_version_live_stats_get  (c_ver_t version);
 int         castle_versions_zero_init               (void);
 int         castle_version_new                      (int snap_or_clone,
                                                      c_ver_t parent,

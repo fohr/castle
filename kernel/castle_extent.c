@@ -5505,12 +5505,10 @@ void process_io_do_work(struct work_struct *work)
             BUG_ON(c2b_eio(wi->c2b));
 
             /*
-             * This c2b is not needed any more, and it pollutes the cache, so destroy it.
-             * Note: c2b still contains valid data. Destroy could fail due to other potential consumers
-             * of the c2b. Except in the case logical extents, rebuild is the only consumer accesses in
-             * chunks. So, there shouldnt be any other references to this c2b.
+             * This c2b is not needed any more, and it pollutes the cache, so destroy it (if there
+             * is nobody else using it).
              */
-            BUG_ON(castle_cache_block_destroy(wi->c2b) && LOGICAL_EXTENT(wi->ext->ext_id));
+            castle_cache_block_destroy(wi->c2b);
 
             castle_free(wi->remap_chunks);
 
