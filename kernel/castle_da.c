@@ -185,12 +185,12 @@ static void castle_da_merge_marshall(struct castle_dmserlist_entry *merge_mstore
 static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry *merge_mstore,
                                                   struct castle_double_array *da,
                                                   int level);
-/* des_check checks things like making sure the merge has the right input trees */
-static void castle_da_merge_des_check(struct castle_da_merge *merge, struct castle_double_array *da,
+/* checks things like making sure the merge has the right input trees */
+static void castle_da_merge_deser_check(struct castle_da_merge *merge, struct castle_double_array *da,
                                       int level, int nr_trees,
                                       struct castle_component_tree **in_trees);
-static void castle_da_merge_deserialise(struct castle_da_merge *merge,
-                                        struct castle_double_array *da, int level);
+static void castle_da_merge_struct_deser(struct castle_da_merge *merge,
+                                         struct castle_double_array *da, int level);
 static int castle_da_ct_bloom_build_param_deserialise(struct castle_component_tree *ct,
                                                       struct castle_bbp_entry *bbpm);
 void castle_da_ct_marshall(struct castle_clist_entry *ctm, struct castle_component_tree *ct);
@@ -2934,7 +2934,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
         resume_merge_node_cep = NULL;
         already_complete      = 0;
 
-        /* Fast-forward c2bs */
+        /* Fast-forward node c2bs */
         if(merge->serdes.des)
         {
             struct castle_in_tree_merge_state_entry *in_tree_merge_mstore_arr =
@@ -5711,8 +5711,8 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
 
         castle_printk(LOG_DEBUG, "%s::found serialised merge in da %d level %d, attempting des\n",
                                  __FUNCTION__, da->id, level);
-        castle_da_merge_des_check(merge, da, level, nr_trees, in_trees);
-        castle_da_merge_deserialise(merge, da, level);
+        castle_da_merge_deser_check(merge, da, level, nr_trees, in_trees);
+        castle_da_merge_struct_deser(merge, da, level);
 
         debug_res_pools("Found merge %u with pool: %u\n", merge->id, merge->pool_id);
 
@@ -6680,9 +6680,9 @@ static c2_block_t* castle_da_merge_des_out_tree_c2b_write_fetch(struct castle_da
  * @param da [in] doubling array containing in-flight merge state
  * @param level [in] merge level in doubling array containing in-flight merge state
  */
-static void castle_da_merge_deserialise(struct castle_da_merge *merge,
-                                        struct castle_double_array *da,
-                                        int level)
+static void castle_da_merge_struct_deser(struct castle_da_merge *merge,
+                                         struct castle_double_array *da,
+                                         int level)
 {
     struct castle_dmserlist_entry *merge_mstore;
     struct castle_btree_node *node;
@@ -6697,7 +6697,7 @@ static void castle_da_merge_deserialise(struct castle_da_merge *merge,
                                                   &merge->serdes.mstore_entry->out_tree_bbp);
 
     /* out_btree (type) can be assigned directly because we passed the BUG_ON() btree_type->magic
-       in da_merge_des_check. */
+       in da_merge_deser_check. */
     merge->out_btree         = castle_btree_type_get(da->btree_type);
     merge->completing        = merge_mstore->completing;
     merge->is_new_key        = merge_mstore->is_new_key;
@@ -6876,9 +6876,11 @@ done:
  * @also castle_da_merge_init()
  * @also struct castle_da_merge
  */
-static void castle_da_merge_des_check(struct castle_da_merge *merge, struct castle_double_array *da,
-                                      int level, int nr_trees,
-                                      struct castle_component_tree **in_trees)
+static void castle_da_merge_deser_check(struct castle_da_merge *merge,
+                                        struct castle_double_array *da,
+                                        int level,
+                                        int nr_trees,
+                                        struct castle_component_tree **in_trees)
 {
     struct castle_dmserlist_entry *merge_mstore;
     struct castle_in_tree_merge_state_entry    *in_tree_merge_mstore_arr;
@@ -9414,7 +9416,17 @@ static int _castle_sysfs_ct_add(struct castle_component_tree *ct, void *_unused)
     return 0;
 }
 
-static int castle_da_merge_deser_phase1(void)
+/**
+ * First phase of merge deserialisation. Recover output tree and merge serdes state into a newly
+ * created merge struct. Specific actions are (in sequence):
+ *
+ * 1) merge = merge_alloc()
+ * 2) copy mstore entry into merge->serdes.mstore_entry, so the merge is immediately re-checkpointable
+ * 3) unmarshall output tree into merge->out_tree
+ * 4) recover redirection partition key (if one exists)
+ *
+ */
+static int castle_da_merge_deser_mstore_outtree_recover(void)
 {
     struct castle_mstore_iter *iterator = NULL;
     int ret = 0;
@@ -9422,7 +9434,7 @@ static int castle_da_merge_deser_phase1(void)
     iterator = castle_mstore_iterate(MSTORE_DA_MERGE);
     if (!iterator)
     {
-        ret = -1;
+        ret = -ENOSYS;
         goto out;
     }
 
@@ -9433,7 +9445,7 @@ static int castle_da_merge_deser_phase1(void)
         struct castle_double_array *des_da = NULL;
         struct castle_dmserlist_entry *entry = NULL;
         struct castle_da_merge *merge = NULL;
-        c_ext_id_t *drain_exts;
+        c_ext_id_t *drain_exts = NULL;
         size_t entry_size;
 
         /* alloc temp storage for mstore entry; will be used until we have a struct alloc'd by
@@ -9455,21 +9467,26 @@ static int castle_da_merge_deser_phase1(void)
         if(!des_da)
         {
             castle_printk(LOG_ERROR, "%s::could not find da %d\n", __FUNCTION__, da_id);
-            BUG();
+            ret = -ENOENT;
+            goto out;
         }
 
         if (entry->merge_id > atomic_read(&castle_da_max_merge_id))
             atomic_set(&castle_da_max_merge_id, entry->merge_id);
 
-        drain_exts = castle_zalloc(sizeof(c_ext_id_t) * entry->nr_drain_exts,
-                                   GFP_KERNEL);
-        BUG_ON(!drain_exts);
+        if (entry->nr_drain_exts > 0)
+        {
+            drain_exts = castle_zalloc(sizeof(c_ext_id_t) * entry->nr_drain_exts,
+                                       GFP_KERNEL);
+            BUG_ON(!drain_exts); //TODO@tr handle this better?
+        }
 
         merge = castle_da_merge_alloc(entry->nr_trees, level, des_da,
                                       entry->merge_id, NULL,
                                       entry->nr_drain_exts, drain_exts);
         /* if we failed to malloc at init, something must be horribly wrong */
-        BUG_ON(!merge);
+        BUG_ON(!merge); //TODO@tr handle this better?
+        castle_printk(LOG_DEBUG, "%s::made merge structure at %p.\n", __FUNCTION__, merge);
 
         /* Change the count to 0 for now, while serialising data_ext maps we add them. */
         merge->nr_drain_exts = 0;
@@ -9478,26 +9495,26 @@ static int castle_da_merge_deser_phase1(void)
         merge->pool_id = entry->pool_id;
         BUG_ON(!castle_res_pool_is_alive(merge->pool_id));
 
-        /* we know the da and the level, and we passed some sanity checking - so put the serdes
-           state in the appropriate merge slot */
-        merge->serdes.mstore_entry = entry;
+        /* Copy mstore entry into merge struct so the merge is immediately re-checkpointable */
         memcpy(merge->serdes.mstore_entry, entry, sizeof(struct castle_dmserlist_entry));
         castle_kfree(entry);
         entry = NULL;
+        /* set merge state as immediately re-checkpointable */
+        atomic_set(&merge->serdes.valid, VALID_AND_STALE_DAM_SERDES);
 
         /* Recover partially complete output CT */
         merge->out_tree = castle_da_ct_unmarshall(NULL, &merge->serdes.mstore_entry->out_tree);
-        BUG_ON(!merge->out_tree);
+        BUG_ON(!merge->out_tree); //TODO@tr handle this better
         BUG_ON(da_id != merge->out_tree->da->id);
         castle_printk(LOG_DEBUG, "%s::deserialising merge on da %d level %d with partially-"
                                  "complete ct, seq %d\n",
                                  __FUNCTION__, da_id, level, merge->out_tree->seq);
         set_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &merge->out_tree->flags);
         /* the difference btwn unmarshalling a partially complete in-merge ct and a "normal" ct is
-           unlike a normal ct (see code below), a partially complete in-merge ct does not get
-           added to a DA through cct_add(da, ct, NULL, 1). */
+           unlike a normal ct, a partially complete in-merge ct does not get added to a DA through
+           cct_add(da, ct, NULL, 1). */
 
-        /* bloom_build_param recovery is left to merge thread (castle_da_merge_deserialise) */
+        /* bloom_build_param recovery is left to merge_init() (see castle_da_merge_struct_deser()) */
 
         /* sanity check merge output tree state */
         castle_da_merge_serdes_out_tree_check(merge->serdes.mstore_entry, des_da, level);
@@ -9505,12 +9522,6 @@ static int castle_da_merge_deser_phase1(void)
         /* inc ct seq number if necessary */
         if (merge->out_tree->seq >= atomic64_read(&castle_next_tree_seq))
             atomic64_set(&castle_next_tree_seq, merge->out_tree->seq+1);
-
-        /* notify merge thread that there is a deserialising merge */
-        merge->serdes.des = 1;
-
-        /* set merge state as immediately re-checkpointable */
-        atomic_set(&merge->serdes.valid, VALID_AND_STALE_DAM_SERDES);
 
         /* enable query redirection if necessary */
         if(!EXT_POS_INVAL(merge->serdes.mstore_entry->redirection_partition_node_cep))
@@ -9547,17 +9558,25 @@ static int castle_da_merge_deser_phase1(void)
             out_btree->entry_get(node, node->used - 1,
                     &merge->redirection_partition.key, NULL, NULL);
         }
+        /* notify rest of merge deserialisation process that this is a deserialising merge */
+        merge->serdes.des = 1;
     }
 
     BUG_ON(ret);
 out:
+    if (ret)
+        castle_printk(LOG_ERROR, "%s::failed with err %u.\n", __FUNCTION__, ret);
+
     if (iterator)
         castle_mstore_iterator_destroy(iterator);
 
     return ret;
 }
 
-static int castle_da_merge_deser_phase2(void)
+/**
+ * Reattach input trees to their corresponding merge structure
+ */
+static int castle_da_merge_deser_intrees_attach(void)
 {
     struct castle_mstore_iter *iterator;
     int ret = 0;
@@ -9565,7 +9584,7 @@ static int castle_da_merge_deser_phase2(void)
     iterator = castle_mstore_iterate(MSTORE_DA_MERGE_IN_TREE);
     if (!iterator)
     {
-        ret = -1;
+        ret = -ENOSYS;
         goto out;
     }
 
@@ -9641,6 +9660,9 @@ static int castle_da_merge_deser_phase2(void)
 
     BUG_ON(ret);
 out:
+    if (ret)
+        castle_printk(LOG_ERROR, "%s::failed with err %u.\n", __FUNCTION__, ret);
+
     if (iterator)
         castle_mstore_iterator_destroy(iterator);
 
@@ -9740,48 +9762,34 @@ int castle_double_array_read(void)
     }
     castle_mstore_iterator_destroy(iterator);
 
-    /* Merge deserialisation is roughly a 4-stage process:
+    /***********************************************************************************************
+    Merge deserialisation is a multistage process. To grok it, plot the following with dot:
 
-       Stage 1) Read merge mstore_entry (corresponding to the output tree state and most of the
-                state in the castle_da_merge structure), place in castle_double_array. Set up
-                redirection partition so queries will work as soon as init concludes.
-       Stage 2) Read the input tree state (mainly iterators), variable number of these, place in
-                castle_double_array.
-       Stage 3) LO handling
-       Stage 4) Merge thread deserialises castle_da_merge structure, and initialises then
-                "fast-forwards" iterator state to match serialised state.
+    digraph{
+        castle_da_merge_deser_mstore_outtree_recover -> castle_da_merge_deser_intrees_attach [label="alloc'd merge structure"]
+        castle_da_merge_deser_mstore_outtree_recover -> castle_da_merge_init
+        castle_da_ct_read -> castle_da_merge_deser_intrees_attach
+        castle_data_exts_read -> castle_data_exts_maps_read
+        castle_da_merge_deser_intrees_attach -> castle_da_merge_init
+        castle_data_exts_maps_read -> castle_da_merge_init [label="growth_control recovery does extent_mask_read"]
+        castle_mstore_iterate_MSTORE_LARGE_OBJECTS_ -> castle_da_merge_init [label="extent linking"]
+    }
 
-       DA recovery must preceed all of this so Stage 1 has somewhere to put the deserialising merge
-       state for merge thread to find. OTOH, Stage 1 must preceed LO recovery because we string our
-       partially completed trees onto the ct hash for LO handling.
+    The above illustrates the dependencies between the various stages required for merge
+    deserialisation. Where the rationale for specific dependencies is not immediately obvious,
+    the arc corresponding to the dependency is labeled with a brief explanation.
 
-       Stage 1 will identify the number of trees in the merge, and will therefore allocate space
-       for Stage 2.
-
-       Stage 2 will find iterator state in a some arbitrary sequence (well maybe not, but we assume
-       nothing about expected sequence), but each mstore entry will contain enough information
-       (da id, level, and even the relative tree position within the merge) for the state to be
-       inserted in the right place, provided place has been allocated. Clearly Stage 2 has to come
-       after Stage 1. Having Stage 2 after CT recovery means we san do more sanity checking.
-
-       Stage 3 is then just the normal LO recovery.
-
-       Stage 4 (which happens in the merge thread) will then pull state off castle_double_array.
-
-       IN SUMMARY, merge deserialisation is laid out in the following overall sequence:
-           1) Recover DA
-           2) Merge DES Stage 1
-           3) Recover CTs
-           4) Merge DES Stage 2
-           5) Recover LOs (effectively Merge DES Stage 3)
-            -- end of this func --
-           6) Merge DES Stage 4 (merge thread)
-    */
+    Disclaimer: While these dependencies are necessary, the illustration may not be complete;
+    there may exist other stages that are not illustrated here, and there may be dependencies
+    that are not illustrated here.
+    ***********************************************************************************************/
     /* Stage 1 merge DES */
-    castle_da_merge_deser_phase1();
+    BUG_ON(castle_da_merge_deser_mstore_outtree_recover());
 
     /* Read component trees, but not output trees. They are read by merge deser. */
     castle_da_ct_read();
+
+    BUG_ON(castle_da_merge_deser_intrees_attach());
 
     /* Read all data extents. Also, output tree data extents. */
     castle_data_exts_read();
@@ -9793,10 +9801,7 @@ int castle_double_array_read(void)
             castle_next_da_id,
             atomic64_read(&castle_next_tree_seq));
 
-    castle_da_merge_deser_phase2();
-
     /* Read all Large Objects lists. */
-    /* (implicit Stage 3 merge DES) */
     iterator = castle_mstore_iterate(MSTORE_LARGE_OBJECTS);
     if(!iterator)
         goto error_out;
@@ -9831,7 +9836,7 @@ int castle_double_array_read(void)
     castle_mstore_iterator_destroy(iterator);
     iterator = NULL;
 
-    /* Stage 4: Merge de-serialization. */
+    /* Finalize merge deserialization. */
     __castle_merges_hash_iterate(castle_da_merge_init, NULL);
 
     /* Add CTs to sysfs. */
