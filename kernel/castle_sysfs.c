@@ -474,9 +474,9 @@ static ssize_t slave_size_show(struct kobject *kobj,
     if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
     {
         sb = castle_slave_superblock_get(slave);
-        size = sb->pub.size;
+        size = sb->freespace.disk_size;
         castle_slave_superblock_put(slave, 0);
-        size *= C_BLK_SIZE;
+        size *= C_CHK_SIZE;
     }
     else
         size = 0;
