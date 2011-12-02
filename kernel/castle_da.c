@@ -6270,7 +6270,7 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge)
     {
         /* Don't bother serialising a merge that hasn't gone far enough to produce an output tree
            with > 1 level yet (meaning >2 for ct->tree_depth). */
-        if (atomic_read(&merge->out_tree->tree_depth) < 3)
+        if (atomic_read(&merge->out_tree->tree_depth) < 2)
             return;
 
         castle_printk(LOG_DEBUG, "%s::[%p] init SERDES merge: %u\n", __FUNCTION__, merge, merge->id);
