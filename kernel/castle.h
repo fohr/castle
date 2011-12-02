@@ -1709,8 +1709,9 @@ struct castle_merged_iterator;
 struct component_iterator;
 
 typedef void (*castle_merged_iterator_each_skip) (struct castle_merged_iterator *,
-                                                  struct component_iterator *,
-                                                  struct component_iterator *);
+                                                  c_ver_t version,
+                                                  c_val_tup_t dup_cvt,
+                                                  c_val_tup_t new_cvt);
 
 typedef struct castle_merged_iterator {
     c_async_iterator_t              async_iter;

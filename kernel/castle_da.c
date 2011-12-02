@@ -1599,11 +1599,6 @@ static void castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
                 new_iter = c_iter;
             }
 
-            /* (Conditionally), call the callback. */
-            debug("Duplicate entry found, CVT type=%d.\n", dup_iter->cached_entry.cvt.type);
-            if (iter->each_skip)
-                iter->each_skip(iter, dup_iter, new_iter);
-
             /* The rb_tree and same_kv list have all been updated, return now. */
             return;
         }
@@ -1794,21 +1789,63 @@ static int castle_ct_merged_iter_has_next(c_merged_iter_t *iter)
  * Additionally, skip can be performed in all the iterators mentioned, by setting
  * 'skip' argument to true, and providing the skip key.
  */
-static void castle_ct_merged_iter_consume(struct component_iterator *iter,
+static void castle_ct_merged_iter_consume(c_merged_iter_t *merged_iter,
+                                          struct component_iterator *iter,
                                           int skip,
                                           void *skip_key)
 {
     struct component_iterator *other_iter;
     struct list_head *l;
+    c_val_tup_t prev_cvt;
+    c_ver_t prev_version;
 
-    /* Clear cached flag for each iterator in the same_kv list. */
-    list_for_each(l, &iter->same_kv_head)
+    /* If each_skip() callback isn't provided, skip straight through to draining the cached
+       entries. */
+    if(!merged_iter->each_skip)
+        goto drain_cached;
+
+    /*
+     * Walk the list backwards, and call each_skip() (if provided) for each pair of iterators.
+     * This way we guarantee that each of the iterators will be supplied as the duplicate
+     * iterator precisely once (important for version stats accounting in castle_da_each_skip()).
+     */
+    prev_cvt = INVAL_VAL_TUP;
+    prev_version = INVAL_VERSION;
+    list_for_each_prev(l, &iter->same_kv_head)
     {
         other_iter = list_entry(l, struct component_iterator, same_kv_list);
         /* Each of the component iterators should have something cached. */
         BUG_ON(!other_iter->cached);
         /* Head should be newest. */
         BUG_ON(iter > other_iter);
+
+        /* If previous CVT is valid, callback. */
+        if(!CVT_INVALID(prev_cvt))
+        {
+            BUG_ON(VERSION_INVAL(prev_version));
+            BUG_ON(prev_version != other_iter->cached_entry.v);
+            merged_iter->each_skip(merged_iter,
+                                   prev_version,
+                                   prev_cvt,
+                                   other_iter->cached_entry.cvt);
+        }
+        prev_cvt = other_iter->cached_entry.cvt;
+        prev_version = other_iter->cached_entry.v;
+    }
+    /* Finally, if prev_cvt set, call each_skip for that (providing CVT from 'iter'). */
+    if(!CVT_INVALID(prev_cvt))
+    {
+        BUG_ON(VERSION_INVAL(prev_version));
+        BUG_ON(prev_version != iter->cached_entry.v);
+        merged_iter->each_skip(merged_iter, prev_version, prev_cvt, iter->cached_entry.cvt);
+    }
+
+drain_cached:
+    /* Drain the entires stored in 'cached_entry', by setting the cached flag to false.
+       If we are skipping, call skip on all component iterators. */
+    list_for_each(l, &iter->same_kv_head)
+    {
+        other_iter = list_entry(l, struct component_iterator, same_kv_list);
         if(skip)
             other_iter->iterator_type->skip(other_iter->iterator, skip_key);
         other_iter->cached = 0;
@@ -1989,7 +2026,7 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
     debug("Smallest entry is from iterator: %p.\n", comp_iter);
 
     /* Consume (clear cached flags) from the component iterators. */
-    castle_ct_merged_iter_consume(comp_iter, 0 /* don't skip. */, NULL);
+    castle_ct_merged_iter_consume(iter, comp_iter, 0 /* don't skip. */, NULL);
 
     /* Work out the counter value (handle the case where the iterator contains a counter.
        NOTE: this destroys same_kv list. Don't use it after this point. */
@@ -2042,7 +2079,7 @@ static void castle_ct_merged_iter_skip(c_merged_iter_t *iter,
         castle_ct_merged_iter_rbtree_del(iter, comp_iter);
         /* Consume (clear cached flags & skip) from all component iterators
            on the same_kv list. */
-        castle_ct_merged_iter_consume(comp_iter, 1 /* skip. */, key);
+        castle_ct_merged_iter_consume(iter, comp_iter, 1 /* skip. */, key);
     }
 }
 
@@ -2761,17 +2798,11 @@ static struct castle_iterator_type* castle_da_iter_type_get(struct castle_compon
  * be handled via the merge process (castle_da_merge_unit_do()).
  */
 static void castle_da_each_skip(c_merged_iter_t *iter,
-                                struct component_iterator *dup_iter,
-                                struct component_iterator *new_iter)
+                                c_ver_t version,
+                                c_val_tup_t dup_cvt,
+                                c_val_tup_t new_cvt)
 {
-    c_val_tup_t dup_cvt;
     struct castle_da_merge *merge = iter->merge;
-
-    BUG_ON(!dup_iter->cached);
-    BUG_ON(!new_iter->cached);
-    BUG_ON(dup_iter->cached_entry.v != new_iter->cached_entry.v);
-
-    dup_cvt = dup_iter->cached_entry.cvt;
 
     /* If this is a medium object that is marked not to drain, then change the stats. */
     if (CVT_MEDIUM_OBJECT(dup_cvt))
@@ -2783,9 +2814,9 @@ static void castle_da_each_skip(c_merged_iter_t *iter,
     /* Update per-version statistics, only if not level 1 merge (entries in level 1 merge
        aren't yet known to the version stats). */
     if(merge->level != 1)
-        castle_version_stats_entry_replace(dup_iter->cached_entry.v,
+        castle_version_stats_entry_replace(version,
                                            dup_cvt,
-                                           new_iter->cached_entry.cvt,
+                                           new_cvt,
                                            &merge->version_states);
 }
 
