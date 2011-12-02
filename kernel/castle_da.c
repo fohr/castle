@@ -1705,9 +1705,6 @@ static int castle_ct_merged_iter_prep_next(c_merged_iter_t *iter)
 
     debug_iter("%s:%p\n", __FUNCTION__, iter);
 
-    /* Reset merged version iterator stats. */
-    memset(&iter->stats, 0, sizeof(cv_nonatomic_stats_t));
-
     debug_iter("No of comp_iters: %u\n", iter->nr_iters);
     for (i = 0; i < iter->nr_iters; i++)
     {
@@ -2783,27 +2780,13 @@ static void castle_da_each_skip(c_merged_iter_t *iter,
         merge->nr_bytes += NR_BLOCKS(dup_cvt.length) * C_BLK_SIZE;
     }
 
-    /* Update per-version statistics. */
-    if (!CVT_TOMBSTONE(dup_cvt))
-    {
-        iter->stats.keys--;
-
-        if (CVT_TOMBSTONE(new_iter->cached_entry.cvt))
-            iter->stats.tombstone_deletes++;
-        else
-            iter->stats.key_replaces++;
-    }
-    else
-    {
-        iter->stats.tombstones--;
-
-        /* If the new entry is also a tombstone, don't bump the tombstone delete
-         * counter: deleting something that is already deleted makes no sense. */
-
-        /* If the new entry is a key, don't bump the key replaces counter:
-         * merging a newer key with an older tombstone is logically the same as
-         * inserting a new key. */
-    }
+    /* Update per-version statistics, only if not level 1 merge (entries in level 1 merge
+       aren't yet known to the version stats). */
+    if(merge->level != 1)
+        castle_version_stats_entry_replace(dup_iter->cached_entry.v,
+                                           dup_cvt,
+                                           new_iter->cached_entry.cvt,
+                                           &merge->version_states);
 }
 
 /**
@@ -5399,8 +5382,7 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
                               void *key,
                               c_val_tup_t cvt,
                               c_ver_t version,
-                              uint64_t max_nr_bytes,
-                              cv_nonatomic_stats_t *stats_p)
+                              uint64_t max_nr_bytes)
 {
     int ret;
 
@@ -5423,22 +5405,15 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
          * We do not need to decrement keys/tombstones for level 1 merges
          * as these keys have not yet been accounted for; skip them. */
         merge->skipped_count++;
-        stats_p->version_deletes++;
-        /* Key & tombstones inserts have not been accounted for in
-         * level 1 merges so don't record removals. */
         if(merge->level != 1)
-        {
-            if (CVT_TOMBSTONE(cvt))
-                stats_p->tombstones--;
-            else
-                stats_p->keys--;
-        }
-        castle_version_private_stats_adjust(version, *stats_p, &merge->version_states);
+            castle_version_stats_entry_discard(version,
+                                               cvt,
+                                               CVS_VERSION_DISCARD,
+                                               &merge->version_states);
 
         /*
          * The skipped key gets freed along with the input extent.
          */
-
         return EXIT_SUCCESS;
     }
 
@@ -5479,20 +5454,11 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
     /* Update per-version and merge statistics.
      * We are starting with merged iterator stats (from above). */
     atomic64_inc(&merge->out_tree->item_count);
+    /* Level 1 merge introduces keys/tombstones into the version stats. */
     if (merge->level == 1)
-    {
-        /* Key & tombstone inserts have not been accounted for in private
-         * level 1 merge version stats. Zero any stat adjustments made in
-         * castle_da_each_skip() and perform accounting now. */
-        stats_p->keys = 0;
-        stats_p->tombstones = 0;
-
-        if (CVT_TOMBSTONE(cvt))
-            stats_p->tombstones++;
-        else
-            stats_p->keys++;
-    }
-    castle_version_private_stats_adjust(version, *stats_p, &merge->version_states);
+        castle_version_stats_entry_add(version,
+                                       cvt,
+                                       &merge->version_states);
 
     /* Update component tree size stats. */
     castle_tree_size_stats_update(key, &cvt, merge->out_tree, 1 /* Add. */);
@@ -5508,8 +5474,7 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
 }
 
 static int castle_da_merge_tv_resolver_flush(struct castle_da_merge *merge,
-                                             uint64_t max_nr_bytes, /* pass through */
-                                             cv_nonatomic_stats_t *stats_p) /* pass through */
+                                             uint64_t max_nr_bytes)
 {
     int ret = 0;
 
@@ -5539,8 +5504,7 @@ static int castle_da_merge_tv_resolver_flush(struct castle_da_merge *merge,
                                  tvr_key,
                                  tvr_cvt,
                                  tvr_version,
-                                 max_nr_bytes,
-                                 stats_p);
+                                 max_nr_bytes);
         if(ret != EXIT_SUCCESS)
             return ret;
     }
@@ -5554,7 +5518,6 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
     c_ver_t version;
     c_val_tup_t cvt;
     int ret = 0;
-    cv_nonatomic_stats_t stats;
 #ifdef CASTLE_PERF_DEBUG
     struct timespec ts_start, ts_end;
 #endif
@@ -5577,17 +5540,13 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
                 i, key, *((uint32_t *)key), version, cep2str(cvt.cep));
         BUG_ON(CVT_INVALID(cvt));
 
-        /* Start with merged iterator stats (see castle_da_each_skip()). */
-        stats = merge->merged_iter->stats;
-
-
         /* If we are using a timestamp-version resolver, we handle the buffering here. */
         if(merge->tv_resolver)
         {
             if(castle_dfs_resolver_is_new_key_check(merge->tv_resolver, key))
             {
                 int ret;
-                ret = castle_da_merge_tv_resolver_flush(merge, max_nr_bytes, &stats);
+                ret = castle_da_merge_tv_resolver_flush(merge, max_nr_bytes);
                 if(ret == -ESHUTDOWN)
                     return -ESHUTDOWN;
                 if (ret != EXIT_SUCCESS)
@@ -5598,7 +5557,7 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
         else
         {
             /* not timestamping */
-            ret = castle_da_entry_do(merge, key, cvt, version, max_nr_bytes, &stats);
+            ret = castle_da_entry_do(merge, key, cvt, version, max_nr_bytes);
             if(ret == -ESHUTDOWN)
                 return -ESHUTDOWN;
             if(ret != EXIT_SUCCESS)
@@ -5620,7 +5579,7 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
     if(merge->tv_resolver)
     {
         int ret;
-        ret = castle_da_merge_tv_resolver_flush(merge, max_nr_bytes, &stats);
+        ret = castle_da_merge_tv_resolver_flush(merge, max_nr_bytes);
         if(ret == -ESHUTDOWN)
             return -ESHUTDOWN;
         if (ret != EXIT_SUCCESS)

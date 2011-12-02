@@ -32,18 +32,33 @@ typedef enum castle_version_health {
     CVH_TOTAL,      /**< Total versions (sum of above).         */
 } cv_health_t;
 
+typedef enum castle_version_stats_discard {
+    CVS_VERSION_DISCARD,
+    CVS_TIMESTAMP_DISCARD,
+} cvs_discard_t;
+
 int         castle_versions_count_adjust            (c_da_t da_id, cv_health_t health, int add);
 int         castle_versions_count_get               (c_da_t da_id, cv_health_t health);
 
-inline void         castle_version_states_hash_add         (cv_states_t *states, cv_state_t *state);
-inline cv_state_t*  castle_version_states_hash_get_alloc   (cv_states_t *states, c_ver_t version);
+int         castle_version_states_alloc             (cv_states_t *states, int max_versions);
 void        castle_version_states_commit            (cv_states_t *states);
 int         castle_version_states_free              (cv_states_t *states);
-int         castle_version_states_alloc             (cv_states_t *states, int max_versions);
-void        castle_version_consistent_stats_adjust  (c_ver_t version, cv_nonatomic_stats_t adjust);
-void        castle_version_private_stats_adjust     (c_ver_t version, cv_nonatomic_stats_t adjust,
+
+void        castle_version_stats_entry_replace      (c_ver_t version,
+                                                     c_val_tup_t old_tup,
+                                                     c_val_tup_t new_tup,
                                                      cv_states_t *private);
-cv_nonatomic_stats_t castle_version_consistent_stats_get (c_ver_t version);
+void        castle_version_stats_entry_discard      (c_ver_t version,
+                                                     c_val_tup_t cvt,
+                                                     cvs_discard_t reason,
+                                                     cv_states_t *private);
+void        castle_version_stats_entry_add          (c_ver_t version,
+                                                     c_val_tup_t cvt,
+                                                     cv_states_t *private);
+
+cv_nonatomic_stats_t
+            castle_version_consistent_stats_get     (c_ver_t version);
+
 int         castle_versions_zero_init               (void);
 int         castle_version_new                      (int snap_or_clone,
                                                      c_ver_t parent,

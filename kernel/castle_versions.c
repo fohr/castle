@@ -1054,6 +1054,75 @@ inline cv_state_t* castle_version_states_hash_get_alloc(cv_states_t *states, c_v
 }
 
 /**
+ * Update version stats as described by adjust.
+ *
+ * @param   adjust      Describe adjustments to be made/retrieved.
+ *
+ * NOTE: Only one set of stats (consistent or private) can be adjusted
+ *       per call.
+ *
+ * @also castle_version_stats_adjust()
+ * @also castle_version_stats_get()
+ */
+static cv_nonatomic_stats_t _castle_version_stats_adjust(c_ver_t version,
+                                                         cv_nonatomic_stats_t adjust)
+{
+    cv_nonatomic_stats_t return_stats;
+    struct castle_version *v;
+    cv_stats_t *stats;
+
+    read_lock_irq(&castle_versions_hash_lock); // @FIXME do we need irq disabled?
+    v = __castle_versions_hash_get(version);
+    BUG_ON(!v);
+    BUG_ON(!(v->flags & CV_INITED_MASK));
+
+    stats = &v->stats;
+
+    return_stats.keys               = atomic64_add_return(adjust.keys, &stats->keys);
+    return_stats.tombstones         = atomic64_add_return(adjust.tombstones,
+                                                          &stats->tombstones);
+    return_stats.tombstone_deletes  = atomic64_add_return(adjust.tombstone_deletes,
+                                                          &stats->tombstone_deletes);
+    return_stats.version_deletes    = atomic64_add_return(adjust.version_deletes,
+                                                          &stats->version_deletes);
+    return_stats.key_replaces       = atomic64_add_return(adjust.key_replaces,
+                                                          &stats->key_replaces);
+    return_stats.timestamp_rejects  = atomic64_add_return(adjust.timestamp_rejects,
+                                                          &stats->timestamp_rejects);
+
+    read_unlock_irq(&castle_versions_hash_lock);
+
+    return return_stats;
+}
+
+/**
+ * Adjust state of crash-consistent per-version stats by amounts in adjust.
+ *
+ * See _castle_version_stats_adjust() for argument info.
+ *
+ * @also _castle_version_stats_adjust()
+ * @also castle_version_consistent_stats_get()
+ */
+static void castle_version_consistent_stats_adjust(c_ver_t version, cv_nonatomic_stats_t adjust)
+{
+    _castle_version_stats_adjust(version, adjust);
+}
+
+/**
+ * Return current state of crash consistent per-version stats.
+ *
+ * See _castle_version_stats_adjust() for argument info.
+ *
+ * @also _castle_version_stats_adjust()
+ */
+cv_nonatomic_stats_t castle_version_consistent_stats_get(c_ver_t version)
+{
+    cv_nonatomic_stats_t null_adjust = { 0, 0, 0, 0, 0 };
+
+    return _castle_version_stats_adjust(version, null_adjust);
+}
+
+/**
  * Commit and zero private version stats to global crash-consistent tree.
  */
 void castle_version_states_commit(cv_states_t *states)
@@ -1133,55 +1202,18 @@ err_out:
 }
 
 /**
- * Update version stats as described by adjust.
+ * Update version stats when an entry is replaced by another entry. (k,v) must be the same.
+ * Update is made in the private version stats hash provided as an argument.
  *
- * @param   adjust      Describe adjustments to be made/retrieved.
- *
- * NOTE: Only one set of stats (consistent or private) can be adjusted
- *       per call.
- *
- * @also castle_version_stats_adjust()
- * @also castle_version_stats_get()
+ * @param version Version in which the replace is happenening
+ * @param old_tup CVT being replaced
+ * @param new_tup New CVT
+ * @param pravite Private stats hash
  */
-static cv_nonatomic_stats_t _castle_version_stats_adjust(c_ver_t version,
-                                                         cv_nonatomic_stats_t adjust)
-{
-    cv_nonatomic_stats_t return_stats;
-    struct castle_version *v;
-    cv_stats_t *stats;
-
-    read_lock_irq(&castle_versions_hash_lock); // @FIXME do we need irq disabled?
-    v = __castle_versions_hash_get(version);
-    BUG_ON(!v);
-    BUG_ON(!(v->flags & CV_INITED_MASK));
-
-    stats = &v->stats;
-
-    return_stats.keys               = atomic64_add_return(adjust.keys, &stats->keys);
-    return_stats.tombstones         = atomic64_add_return(adjust.tombstones,
-                                                          &stats->tombstones);
-    return_stats.tombstone_deletes  = atomic64_add_return(adjust.tombstone_deletes,
-                                                          &stats->tombstone_deletes);
-    return_stats.version_deletes    = atomic64_add_return(adjust.version_deletes,
-                                                          &stats->version_deletes);
-    return_stats.key_replaces       = atomic64_add_return(adjust.key_replaces,
-                                                          &stats->key_replaces);
-
-    read_unlock_irq(&castle_versions_hash_lock);
-
-    return return_stats;
-}
-
-/**
- * Adjust state of private per-version stats by amounts in adjust.
- *
- * See _castle_version_stats_adjust() for argument info.
- *
- * @also _castle_version_stats_adjust()
- */
-void castle_version_private_stats_adjust(c_ver_t version,
-                                         cv_nonatomic_stats_t adjust,
-                                         cv_states_t *private)
+void castle_version_stats_entry_replace(c_ver_t version,
+                                        c_val_tup_t old_cvt,
+                                        c_val_tup_t new_cvt,
+                                        cv_states_t *private)
 {
     cv_nonatomic_stats_t *stats;
     cv_state_t *state;
@@ -1189,38 +1221,93 @@ void castle_version_private_stats_adjust(c_ver_t version,
     state = castle_version_states_hash_get_alloc(private, version);
     stats = &state->stats;
 
-    stats->keys += adjust.keys;
-    stats->tombstones += adjust.tombstones;
-    stats->tombstone_deletes += adjust.tombstone_deletes;
-    stats->version_deletes += adjust.version_deletes;
-    stats->key_replaces += adjust.key_replaces;
+    /* If the old cvt was a real key (not a tombstone), decrement the keys count.
+       Increment the delete ops count (decide which one depending what we are
+       replacing with). */
+    if(!CVT_TOMBSTONE(old_cvt))
+    {
+        stats->keys--;
+        if(CVT_TOMBSTONE(new_cvt))
+            stats->tombstone_deletes++;
+        else
+            stats->key_replaces++;
+    }
+    else
+    {
+        /* If the new entry is also a tombstone, don't bump the tombstone delete
+         * counter: deleting something that is already deleted makes no sense. */
+
+        /* If the new entry is a key, don't bump the key replaces counter:
+         * merging a newer key with an older tombstone is logically the same as
+         * inserting a new key. */
+        stats->tombstones--;
+    }
 }
 
 /**
- * Adjust state of crash-consistent per-version stats by amounts in adjust.
+ * Update version stats when an entry is discarded.
+ * Update is made in the private version stats hash provided as an argument.
  *
- * See _castle_version_stats_adjust() for argument info.
- *
- * @also _castle_version_stats_adjust()
- * @also castle_version_consistent_stats_get()
+ * @param version Version in which the discard is happenening
+ * @param old_tup CVT being discarded
+ * @param new_tup Reason for discarding the entry (version delete or timestamp ordering)
+ * @param pravite Private stats hash
  */
-void castle_version_consistent_stats_adjust(c_ver_t version, cv_nonatomic_stats_t adjust)
+void castle_version_stats_entry_discard(c_ver_t version,
+                                        c_val_tup_t cvt,
+                                        cvs_discard_t reason,
+                                        cv_states_t *private)
 {
-    _castle_version_stats_adjust(version, adjust);
+    cv_nonatomic_stats_t *stats;
+    cv_state_t *state;
+
+    state = castle_version_states_hash_get_alloc(private, version);
+    stats = &state->stats;
+
+    /* Adjust the key/tombstone counters. */
+    if (CVT_TOMBSTONE(cvt))
+        stats->tombstones--;
+    else
+        stats->keys--;
+
+    /* Adjust the ops counters. */
+    BUG_ON((reason != CVS_VERSION_DISCARD) && (reason != CVS_TIMESTAMP_DISCARD));
+    switch(reason)
+    {
+        case CVS_VERSION_DISCARD:
+            stats->version_deletes++;
+            break;
+        case CVS_TIMESTAMP_DISCARD:
+            stats->timestamp_rejects++;
+            break;
+        default:
+            BUG();
+    }
 }
 
 /**
- * Return current state of crash consistent per-version stats.
+ * Update version stats when an entry is added.
+ * Update is made in the private version stats hash provided as an argument.
  *
- * See _castle_version_stats_adjust() for argument info.
- *
- * @also _castle_version_stats_adjust()
+ * @param version Version in which the entry is added
+ * @param old_tup CVT being added
+ * @param pravite Private stats hash
  */
-cv_nonatomic_stats_t castle_version_consistent_stats_get(c_ver_t version)
+void castle_version_stats_entry_add(c_ver_t version,
+                                    c_val_tup_t cvt,
+                                    cv_states_t *private)
 {
-    cv_nonatomic_stats_t null_adjust = { 0, 0, 0, 0, 0 };
+    cv_nonatomic_stats_t *stats;
+    cv_state_t *state;
 
-    return _castle_version_stats_adjust(version, null_adjust);
+    state = castle_version_states_hash_get_alloc(private, version);
+    stats = &state->stats;
+
+    /* Adjust the key/tombstone counters. */
+    if (CVT_TOMBSTONE(cvt))
+        stats->tombstones++;
+    else
+        stats->keys++;
 }
 
 /**
@@ -1282,6 +1369,7 @@ static int castle_version_writeback(struct castle_version *v, void *_data)
     mstore_ventry.tombstone_deletes = atomic64_read(&v->stats.tombstone_deletes);
     mstore_ventry.version_deletes   = atomic64_read(&v->stats.version_deletes);
     mstore_ventry.key_replaces      = atomic64_read(&v->stats.key_replaces);
+    mstore_ventry.timestamp_rejects = atomic64_read(&v->stats.timestamp_rejects);
     mstore_ventry.creation_time_s   = v->creation_timestamp.tv_sec;
     mstore_ventry.creation_time_us  = v->creation_timestamp.tv_usec;
     mstore_ventry.immute_time_s     = v->immute_timestamp.tv_sec;
@@ -1872,6 +1960,7 @@ int castle_versions_read(void)
             atomic64_set(&v->stats.tombstone_deletes, mstore_ventry.tombstone_deletes);
             atomic64_set(&v->stats.version_deletes, mstore_ventry.version_deletes);
             atomic64_set(&v->stats.key_replaces, mstore_ventry.key_replaces);
+            atomic64_set(&v->stats.timestamp_rejects, mstore_ventry.timestamp_rejects);
 
             /* Misc. */
             v->creation_timestamp.tv_sec  = mstore_ventry.creation_time_s;

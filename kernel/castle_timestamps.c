@@ -365,9 +365,11 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
     struct castle_btree_type *btree;
     uint32_t entries_included = 0;
     uint32_t entries_excluded = 0;
+    struct castle_da_merge *merge;
 
     BUG_ON(!dfs_resolver);
-    btree = dfs_resolver->merge->out_btree;
+    merge = dfs_resolver->merge;
+    btree = merge->out_btree;
     BUG_ON(!btree);
 
     if(dfs_resolver->mode == DFS_RESOLVER_NULL)
@@ -427,7 +429,7 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
             if( (dfs_resolver->stack->top == 0) || !(stack_top_ts > entry_i_ts) )
                 entry_included = 1;
             else
-                atomic64_inc(&dfs_resolver->merge->da->stats.user_timestamps.merge_discards);
+                atomic64_inc(&merge->da->stats.user_timestamps.merge_discards);
         }
         else /* No timestamping, so entries cannot be timestamp deprecated */
             entry_included = 1;
@@ -457,9 +459,9 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
 
             if( discard_tombstone )
             {
-                atomic64_inc(&dfs_resolver->merge->da->stats.tombstone_discard.tombstone_discards);
+                atomic64_inc(&merge->da->stats.tombstone_discard.tombstone_discards);
                 debug("%s::merge id %u, tombstone discarded\n",
-                        __FUNCTION__, dfs_resolver->merge->id);
+                        __FUNCTION__, merge->id);
                 entry_included = 0;                         /* ... so, we can discard it! */
             }
         }
@@ -483,6 +485,12 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
             BUG_ON( !( dfs_resolver->functions & DFS_RESOLVE_TOMBSTONES ) &&
                     dfs_resolver->stack->top == 0);
             dfs_resolver->inclusion_flag[i] = 0;
+            if(merge->level != 1)
+                castle_version_stats_entry_discard(entry_i_version,
+                                                   entry_i_cvt,
+                                                   CVS_TIMESTAMP_DISCARD,
+                                                   &merge->version_states);
+
             entries_excluded++;
         }
     }//for each entry (reverse iter)
@@ -494,7 +502,7 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
 
     debug("%s::merge id %u, entries included = %u out of %u\n",
                   __FUNCTION__,
-                  dfs_resolver->merge->id,
+                  merge->id,
                   entries_included,
                   dfs_resolver->top_index);
     return entries_included;

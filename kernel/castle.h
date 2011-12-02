@@ -1292,11 +1292,12 @@ struct castle_vlist_entry {
     /*         48 */ uint64_t     tombstone_deletes;    /**< stats.tombstone_deletes            */
     /*         56 */ uint64_t     version_deletes;      /**< stats.version_deletes              */
     /*         64 */ uint64_t     key_replaces;         /**< stats.key_replaces                 */
-    /*         72 */ uint64_t     creation_time_s;      /**< seconds of the creation timestamp  */
-    /*         80 */ uint64_t     creation_time_us;     /**< useconds of the creation timestamp */
-    /*         88 */ uint64_t     immute_time_s;        /**< seconds of the immute timestamp  */
-    /*         96 */ uint64_t     immute_time_us;       /**< useconds of the immute timestamp */
-    /*        104 */ uint8_t      _unused[152];
+    /*         72 */ uint64_t     timestamp_rejects;    /**< stats.timestamp_rejects            */
+    /*         80 */ uint64_t     creation_time_s;      /**< seconds of the creation timestamp  */
+    /*         88 */ uint64_t     creation_time_us;     /**< useconds of the creation timestamp */
+    /*         96 */ uint64_t     immute_time_s;        /**< seconds of the immute timestamp  */
+    /*        104 */ uint64_t     immute_time_us;       /**< useconds of the immute timestamp */
+    /*        112 */ uint8_t      _unused[144];
     /*        256 */
 } PACKED;
 STATIC_BUG_ON(sizeof(struct castle_vlist_entry) != 256);
@@ -1649,15 +1650,21 @@ struct node_buf_t {
 
 /**
  * Non-atomic statistics specific to a given version.
+ * This structure is used to store the stats, but also to do adjustements. This is why
+ * signed integers are used.
  *
  * @also castle_version_stats
  */
 typedef struct castle_version_nonatomic_stats {
-    long        keys;               /**< castle_version_stats.keys                          */
-    long        tombstones;         /**< castle_version_stats.tombstones                    */
-    long        tombstone_deletes;  /**< castle_version_stats.tombstone_deletes             */
-    long        version_deletes;    /**< castle_version_stats.version_deletes               */
-    long        key_replaces;       /**< castle_version_stats.key_replaces                  */
+    /* Item counts. */
+    long        keys;               /**< @see castle_version_stats.keys                 */
+    long        tombstones;         /**< @see castle_version_stats.tombstones           */
+
+    /* Operation counts. */
+    long        tombstone_deletes;  /**< @see castle_version_stats.tombstone_deletes    */
+    long        version_deletes;    /**< @see castle_version_stats.version_deletes      */
+    long        key_replaces;       /**< @see castle_version_stats.key_replaces         */
+    long        timestamp_rejects;  /**< @see castle_version_stats.timestamp_rejects    */
 } cv_nonatomic_stats_t;
 
 typedef struct castle_async_iterator {
@@ -1736,7 +1743,6 @@ typedef struct castle_merged_iterator {
         };
     } *iterators;
     struct rb_root                   rb_root;
-    cv_nonatomic_stats_t             stats;         /**< Stat changes during last _next().  */
     castle_merged_iterator_each_skip each_skip;
     struct castle_da_merge          *merge;
     struct castle_double_array      *da;
@@ -2427,14 +2433,20 @@ typedef enum castle_version_stat_id {
  * @also castle_version_nonatomic_stats
  */
 typedef struct castle_version_stats {
+    /* Item counts. */
     atomic64_t  keys;               /**< Number of live keys.  May be inaccurate until all
                                          merges complete and duplicates are handled.        */
     atomic64_t  tombstones;         /**< Number of tombstones.                              */
+
+
+    /* Operation counts. */
     atomic64_t  tombstone_deletes;  /**< Number of keys deleted by tombstones (does not
                                          include tombstones deleted by tombstones).         */
     atomic64_t  version_deletes;    /**< Number of entries deleted due to version delete.   */
     atomic64_t  key_replaces;       /**< Number of keys replaced by newer keys (excludes
                                          tombstones).                                       */
+    atomic64_t  timestamp_rejects;  /**< Number of keys discraded due to out of timestamp
+                                         order writes.                                      */
 } cv_stats_t;
 
 /**

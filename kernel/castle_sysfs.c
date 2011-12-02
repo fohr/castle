@@ -138,6 +138,7 @@ static ssize_t versions_list_show(struct kobject *kobj, struct attribute *attr, 
                 "TombstoneDeletes: %ld\n"
                 "VersionDeletes: %ld\n"
                 "KeyReplaces: %ld\n"
+                "TimestampRejects: %ld\n"
                 "CreationTimestamp: %ld.%.6ld\n",
                  v->version,
                  castle_version_da_id_get(v->version),
@@ -149,6 +150,7 @@ static ssize_t versions_list_show(struct kobject *kobj, struct attribute *attr, 
                  stats.tombstone_deletes,
                  stats.version_deletes,
                  stats.key_replaces,
+                 stats.timestamp_rejects,
                  creation_timestamp.tv_sec,
                  creation_timestamp.tv_usec);
 
