@@ -1194,7 +1194,7 @@ static void castle_object_value_acquire(c_val_tup_t *cvt)
 
 static void castle_object_value_release(c_val_tup_t *cvt)
 {
-    if (CVT_INLINE(*cvt))
+    if (CVT_INLINE(*cvt) && !CVT_ANY_COUNTER(*cvt))
     {
         CVT_INLINE_FREE(*cvt);
     }
@@ -1418,7 +1418,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
         }
 
         finished = castle_counter_simple_reduce(&c_bvec->accum, cvt);
-        c_bvec->val_put(&cvt);
+        castle_object_value_release(&cvt);
         /* Return early if we have to keep accumulating. */
         if(!finished)
             return;
@@ -1462,7 +1462,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
                          cvt.length,
                          CVT_INLINE_VAL_PTR(cvt),
                          cvt.length);
-        CVT_INLINE_FREE(cvt);
+        castle_object_value_release(&cvt);
 
         FAULT(GET_FAULT);
     }
