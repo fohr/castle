@@ -142,7 +142,7 @@ DEFINE_HASH_TBL(castle_da, castle_da_hash, CASTLE_DA_HASH_SIZE, struct castle_do
 DEFINE_HASH_TBL(castle_ct, castle_ct_hash, CASTLE_CT_HASH_SIZE, struct castle_component_tree, hash_list, tree_seq_t, seq);
 DEFINE_HASH_TBL(castle_data_exts, castle_data_exts_hash, CASTLE_DATA_EXTS_HASH_SIZE, struct castle_data_extent, hash_list, c_ext_id_t, ext_id);
 
-atomic_t castle_zomby_da_count = ATOMIC(0);
+atomic_t castle_zombie_da_count = ATOMIC(0);
 
 typedef enum {
     DAM_MARSHALL_ALL = 0,  /**< Marshall all merge state          */
@@ -11745,7 +11745,7 @@ void castle_double_array_merges_fini(void)
     __castle_da_hash_iterate(castle_da_merge_stop, NULL);
 
     /* Also, wait for merges on deleted DAs. Merges will hold the last references to those DAs. */
-    while (atomic_read(&castle_zomby_da_count))
+    while (atomic_read(&castle_zombie_da_count))
         msleep(10);
 }
 
@@ -11832,7 +11832,7 @@ void castle_da_destroy_complete(struct castle_double_array *da)
     castle_da_dealloc(da);
 
     /* Delete the DA from the list of deleted DAs. */
-    atomic_dec(&castle_zomby_da_count);
+    atomic_dec(&castle_zombie_da_count);
 }
 
 static void castle_da_get(struct castle_double_array *da)
@@ -12002,8 +12002,8 @@ int castle_double_array_destroy(c_da_t da_id)
     /* Restart the merge threads, so that they get to exit, and drop their da refs. */
     castle_da_merge_restart(da, NULL);
 
-    /* Increment count of zomby DAs. */
-    atomic_inc(&castle_zomby_da_count);
+    /* Increment count of zombie DAs. */
+    atomic_inc(&castle_zombie_da_count);
 
     /* Put the (usually) last reference to the DA. */
     castle_da_put_locked(da);
