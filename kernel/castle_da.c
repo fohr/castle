@@ -8578,8 +8578,8 @@ static void __castle_da_level0_modified_promote(struct work_struct *work)
     castle_da_growing_rw_clear(da);
 
     /* Drop DA reference, adjust promoting DAs counter and signal caller. */
-    castle_da_put(da);
     atomic_dec((atomic_t *)da->private);
+    castle_da_put(da);
     wake_up(&castle_da_promote_wq);
 }
 
