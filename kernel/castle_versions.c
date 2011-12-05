@@ -1245,13 +1245,12 @@ void castle_version_stats_entry_replace(c_ver_t version,
 }
 
 /**
- * Update version stats when an entry is discarded.
- * Update is made in the private version stats hash provided as an argument.
+ * Update private version stats when an entry is discarded.
  *
  * @param version Version in which the discard is happenening
  * @param old_tup CVT being discarded
  * @param new_tup Reason for discarding the entry (version delete or timestamp ordering)
- * @param pravite Private stats hash
+ * @param private Private stats hash
  */
 void castle_version_stats_entry_discard(c_ver_t version,
                                         c_val_tup_t cvt,
@@ -1286,12 +1285,11 @@ void castle_version_stats_entry_discard(c_ver_t version,
 }
 
 /**
- * Update version stats when an entry is added.
- * Update is made in the private version stats hash provided as an argument.
+ * Update private version stats when an entry is added.
  *
  * @param version Version in which the entry is added
  * @param old_tup CVT being added
- * @param pravite Private stats hash
+ * @param private Private stats hash
  */
 void castle_version_stats_entry_add(c_ver_t version,
                                     c_val_tup_t cvt,
