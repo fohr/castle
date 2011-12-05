@@ -6020,7 +6020,7 @@ int work_io_check(void)
 /* Extent processing ratelimiting. */
 unsigned long expected_time;
 unsigned long delta_time;
-#define BATCHSIZE 100        /* 100 x 1m I/Os per process I/O batch. */
+#define BATCHSIZE 10        /* 100 x 1m I/Os per process I/O batch. */
 #define RATELIMIT_DEFAULT 0
 #define RATELIMIT_MIN 0     /* No ratelimiting */
 #define RATELIMIT_MAX 10000 /* 10Gb/s max */
