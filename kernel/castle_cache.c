@@ -3976,17 +3976,20 @@ static c2_pref_window_t *c2_pref_window_find_and_remove(c_ext_pos_t cep, int exa
  * @also c2_pref_window_advance()
  * @also castle_cache_block_free().
  */
-static int c2_pref_window_insert(c2_pref_window_t *window, c2_block_t *start_c2b)
+static int c2_pref_window_insert(c2_pref_window_t *window)
 {
     struct rb_node **p, *parent = NULL;
     c2_pref_window_t *tree_window;
     c_ext_pos_t cep, tree_cep;
+    c2_block_t *start_c2b;
     int cmp;
 
     pref_debug(0, "Asked to insert %s\n", c2_pref_window_to_str(window));
 
     cep.ext_id = window->ext_id;
     cep.offset = window->start_off;
+    /* The c2b at the start of the window must be held when inserting into the rbtree. */
+    start_c2b = castle_cache_block_get(cep, BLKS_PER_CHK);
 
     /* We must hold the prefetch tree lock while manipulating the tree. */
     spin_lock(&c2_prefetch_lock);
@@ -4009,6 +4012,8 @@ static int c2_pref_window_insert(c2_pref_window_t *window, c2_block_t *start_c2b
             /* We found an identical starting point.  Do not insert. */
             spin_unlock(&c2_prefetch_lock);
             pref_debug(0, "Starting point already exists.  Not inserting.\n");
+            /* Release start_c2b ref. */
+            put_c2b(start_c2b);
 
             return -EINVAL;
         }
@@ -4034,6 +4039,8 @@ static int c2_pref_window_insert(c2_pref_window_t *window, c2_block_t *start_c2b
      * first block in the window we try to prevent holes from occurring in the
      * window during cache eviction. */
     set_c2b_windowstart(start_c2b);
+    /* Release start_c2b ref. */
+    put_c2b(start_c2b);
 
     return EXIT_SUCCESS;
 }
@@ -4418,7 +4425,6 @@ static int c2_pref_window_advance(c2_pref_window_t *window,
     int size, from_end, pages, falloff_pages;
     c_ext_pos_t submit_cep; // old window->end_off cep (prefetch pages from here)
     c_ext_pos_t start_cep;  // old window->start_off cep
-    c2_block_t *start_c2b;
 
     BUG_ON(cep.ext_id != window->ext_id);
     BUG_ON(CHUNK_OFFSET(cep.offset));
@@ -4473,9 +4479,7 @@ static int c2_pref_window_advance(c2_pref_window_t *window,
 
 insert_and_exit:
     BUG_ON(cep.ext_id != window->ext_id);
-    cep.offset = window->start_off;
-    start_c2b = castle_cache_block_get(cep, BLKS_PER_CHK);
-    if (c2_pref_window_insert(window, start_c2b) != EXIT_SUCCESS)
+    if (c2_pref_window_insert(window) != EXIT_SUCCESS)
     {
         /* A window covering the same range already exists.
          * This is a race but no major deal: the data for cep will already have
@@ -4483,12 +4487,9 @@ insert_and_exit:
         castle_printk(LOG_WARN, "WARNING: %s already in the tree.\n",
                 c2_pref_window_to_str(window));
         c2_pref_window_drop(window);
-        put_c2b(start_c2b);
 
         return -EEXIST;
     }
-    /* Drop the ref to start_c2b. */
-    put_c2b(start_c2b);
 
     return ret;
 }
