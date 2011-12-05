@@ -3921,17 +3921,17 @@ static c2_pref_window_t *c2_pref_window_find_and_remove(c_ext_pos_t cep, int exa
         window_cep.offset = window->start_off;
 
         if(exact_match)
-        /* Do they have identical offsets? */
+            /* Do they have identical offsets? */
             cmp = EXT_POS_COMP(cep, window_cep);
         else
-        /* Does the offset fall within the window? */
+            /* Does the offset fall within the window? */
             cmp = c2_pref_window_compare(window, cep);
 
         if(cmp < 0)
-        /* Window is prior to cep; go left. */
+            /* Window is prior to cep; go left. */
             n = n->rb_left;
         else if (cmp > 0)
-        /* Window is after cep; go right. */
+            /* Window is after cep; go right. */
             n = n->rb_right;
         else
         {
@@ -4223,7 +4223,7 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b)
             cep2str(c2b->cep), c2b->nr_pages);
 
     /* Try and find a window matching c2b. */
-    if (!(window = c2_pref_window_find_and_remove(c2b->cep, 1)))
+    if (!(window = c2_pref_window_find_and_remove(c2b->cep, 1 /*exact_match*/)))
     {
         pref_debug(0, "No window found for c2b->ceb="cep_fmt_str_nl, cep2str(c2b->cep));
         return;
@@ -4397,16 +4397,27 @@ static void c2_pref_window_submit(c2_pref_window_t *window, c_ext_pos_t cep, int
 /*
  * Advance the window and kick off prefetch I/O if necessary.
  *
+ * @param window    Window to advance
+ * @param cep       User-requested offset
+ * @param advise    User-specified prefetch paramaters
+ * @param chunks    Unused
+ * @param priority  Unused
+ *
  * @return 0        Window not advanced (cep already satisfied by window)
  * @return 1        Window advanced (cep now satisfied by window)
  * @return -EEXIST  Window already existed within tree, dropped
  */
-static int c2_pref_window_advance(c2_pref_window_t *window, c_ext_pos_t cep, c2_advise_t advise,
-                                  int chunks, int priority, int debug)
+static int c2_pref_window_advance(c2_pref_window_t *window,
+                                  c_ext_pos_t cep,
+                                  c2_advise_t advise,
+                                  int chunks,
+                                  int priority,
+                                  int debug)
 {
     int ret = EXIT_SUCCESS;
     int size, from_end, pages, falloff_pages;
-    c_ext_pos_t submit_cep, start_cep;
+    c_ext_pos_t submit_cep; // old window->end_off cep (prefetch pages from here)
+    c_ext_pos_t start_cep;  // old window->start_off cep
     c2_block_t *start_c2b;
 
     BUG_ON(cep.ext_id != window->ext_id);
@@ -4425,8 +4436,8 @@ static int c2_pref_window_advance(c2_pref_window_t *window, c_ext_pos_t cep, c2_
         goto insert_and_exit;
 
     /* Pages doesn't meet advance threshold. */
-    size = (window->end_off - window->start_off) >> PAGE_SHIFT;
-    from_end = (window->end_off - cep.offset) >> PAGE_SHIFT;
+    size     = (window->end_off - window->start_off) >> PAGE_SHIFT;
+    from_end = (window->end_off - cep.offset)        >> PAGE_SHIFT;
     if (size > window->adv_thresh && from_end > window->adv_thresh)
         goto insert_and_exit;
 
@@ -4435,10 +4446,11 @@ static int c2_pref_window_advance(c2_pref_window_t *window, c_ext_pos_t cep, c2_
     ret = 1;
 
     /* We're going to slide the window forward by pages. */
-    start_cep.ext_id  = submit_cep.ext_id = window->ext_id;
+    start_cep.ext_id  = window->ext_id;
     start_cep.offset  = window->start_off;
-    submit_cep.offset   = window->end_off;
-    falloff_pages       = (cep.offset - window->start_off) >> PAGE_SHIFT;
+    submit_cep.ext_id = window->ext_id;
+    submit_cep.offset = window->end_off;
+    falloff_pages = (cep.offset - window->start_off) >> PAGE_SHIFT;
 
     /* Window is not in the tree, its safe to update it. */
     window->start_off = cep.offset;
@@ -4446,13 +4458,16 @@ static int c2_pref_window_advance(c2_pref_window_t *window, c_ext_pos_t cep, c2_
     if (window->state & PREF_WINDOW_ADAPTIVE && window->pref_pages < PREF_ADAP_MAX)
     {
         /* Double the number of prefetch pages. */
-        pref_debug(debug, "Window pref_pages %d->%d chunks for next advance.\n",
-                window->pref_pages / BLKS_PER_CHK, window->pref_pages * 2 / BLKS_PER_CHK);
+#ifdef PREF_DEBUG
+        uint32_t old_pref_pages = window->pref_pages;
+#endif
         window->pref_pages *= 2;
         if (window->pref_pages > PREF_ADAP_MAX)
             window->pref_pages = PREF_ADAP_MAX;
+        pref_debug(debug, "Window pref_pages %d->%d chunks for next advance.\n",
+                old_pref_pages / BLKS_PER_CHK, window->pref_pages / BLKS_PER_CHK);
     }
-    /* End of operations on while while not in tree. */
+    /* End of operations on window while not in tree. */
     c2_pref_window_falloff(start_cep, falloff_pages, window, debug);
     c2_pref_window_submit(window, submit_cep, pages, debug);
 
@@ -4503,8 +4518,11 @@ insert_and_exit:
  * @also c2_pref_window_get()
  * @also c2_pref_window_advance()
  */
-static int castle_cache_prefetch_advise(c_ext_pos_t cep, c2_advise_t advise,
-                                        int chunks, int priority, int debug)
+static int castle_cache_prefetch_advise(c_ext_pos_t cep,
+                                        c2_advise_t advise,
+                                        int chunks,
+                                        int priority,
+                                        int debug)
 {
     c2_pref_window_t *window;
 
@@ -4525,17 +4543,16 @@ static int castle_cache_prefetch_advise(c_ext_pos_t cep, c2_advise_t advise,
      * Once the window is updated (possibly after scheduling the IO) it is (re-)inserted
      * into the tree.
      */
-     if (!(window = c2_pref_window_get(cep, advise)))
-     {
-         castle_printk(LOG_WARN, "WARNING: Failed to allocate prefetch window.\n");
-         return -ENOMEM;
-     }
+    if (!(window = c2_pref_window_get(cep, advise)))
+    {
+        castle_printk(LOG_WARN, "WARNING: Failed to allocate prefetch window.\n");
+        return -ENOMEM;
+    }
+    pref_debug(debug, "%sfor cep="cep_fmt_str"\n",
+            c2_pref_window_to_str(window), cep2str(cep));
+    /* cep must be within the window. */
+    BUG_ON(c2_pref_window_compare(window, cep));
 
-     pref_debug(debug, "%sfor cep="cep_fmt_str"\n",
-             c2_pref_window_to_str(window), cep2str(cep));
-
-     /* cep must be within the window. */
-     BUG_ON(c2_pref_window_compare(window, cep));
     /* Update window advice to match prefetch advice.  Do this once we know we
      * aren't racing so we don't pollute other bystanding windows. */
     if (advise & C2_ADV_SOFTPIN)
