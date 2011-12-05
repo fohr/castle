@@ -10658,32 +10658,40 @@ err:
 static struct castle_da_cts_proxy* castle_da_cts_proxy_get(struct castle_double_array *da)
 {
     struct castle_da_cts_proxy *proxy;
+    int already_creating;
 
 retry:
     read_lock(&da->lock);
     proxy = da->cts_proxy;
-    if (proxy)
+
+    if (likely(proxy))
+    {
         /* Take a reference to an existing proxy. */
         atomic_inc(&proxy->ref_cnt);
-    read_unlock(&da->lock);
+        read_unlock(&da->lock);
 
-    if (unlikely(!proxy))
+        return proxy;
+    }
+    else
     {
-        if (!test_and_set_bit(CASTLE_DA_CTS_PROXY_CREATE_BIT, &da->flags))
+        /* Create a new proxy (or wait on creation). */
+        already_creating = test_and_set_bit(CASTLE_DA_CTS_PROXY_CREATE_BIT, &da->flags);
+        read_unlock(&da->lock);
+
+        if (unlikely(already_creating))
         {
-            /* Create the CTs proxy (bit not previously set). */
-            proxy = castle_da_cts_proxy_create(da); /* ref_cnt == 2 */
-            clear_bit(CASTLE_DA_CTS_PROXY_CREATE_BIT, &da->flags);
-        }
-        else
-        {
-            /* Wait for CTs proxy to be created (bit already set). */
+            /* Wait for another thread to create proxy. */
             msleep(10);
+
             goto retry;
         }
-    }
 
-    return proxy;
+        /* Create a new proxy. */
+        proxy = castle_da_cts_proxy_create(da); /* ref_cnt == 2 */
+        clear_bit(CASTLE_DA_CTS_PROXY_CREATE_BIT, &da->flags);
+
+        return proxy; // may be NULL
+    }
 }
 
 /**
