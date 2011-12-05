@@ -4561,6 +4561,10 @@ typedef struct process_work_item {
 #define CLEANUP 3
 
 #define                     MAX_WORK_ITEMS 512
+#define                     MIN_WORK_ITEMS 16
+#define                     MAX_CACHE_USAGE 15
+static int castle_nr_work_items = MAX_WORK_ITEMS;
+
 static process_work_item_t  process_work_items[MAX_WORK_ITEMS];
 
 spinlock_t io_list_lock; /* Serialise access to io free and error lists. */
@@ -5540,7 +5544,23 @@ static void init_io_work(void)
 
     init_waitqueue_head(&process_io_waitq);
 
-    for (i=0; i<MAX_WORK_ITEMS; i++)
+    /*
+     * Limit the number of work items we can use based on the castle_cache_size.
+     * MAX_CACHE_USAGE defines the percentage of the cache that we should limit the number of
+     * concurrent 1m work items to.
+     * The number of work items is bounded by MIN_WORK_ITEMS/MAX_WORK_ITEMS to ensure there is
+     * a reasonable minimum, and that the size of the work_item array is not exceeded.
+     */
+    castle_nr_work_items = (castle_cache_size_get() * MAX_CACHE_USAGE / 100)
+                            / BLKS_PER_CHK;
+
+    if (castle_nr_work_items < MIN_WORK_ITEMS) castle_nr_work_items = MIN_WORK_ITEMS;
+    if (castle_nr_work_items > MAX_WORK_ITEMS) castle_nr_work_items = MAX_WORK_ITEMS;
+
+    castle_printk(LOG_USERINFO, "Rebuild limited to %d concurrent chunk I/Os\n",
+                  castle_nr_work_items);
+
+    for (i=0; i<castle_nr_work_items; i++)
     {
         CASTLE_INIT_WORK(&process_work_items[i].work, process_io_do_work);
         list_add_tail(&process_work_items[i].free_list, &io_free_list);
@@ -5991,7 +6011,7 @@ int work_io_check(void)
     }
     spin_unlock_irq(&io_list_lock);
 
-    if (atomic_read(&wi_in_flight) < MAX_WORK_ITEMS)
+    if (atomic_read(&wi_in_flight) < castle_nr_work_items)
         return 1;
 
     return 0;
