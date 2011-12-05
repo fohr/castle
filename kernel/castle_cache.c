@@ -3175,14 +3175,8 @@ static int castle_cache_block_hash_clean(void)
     if (hlist_empty(&victims))
     {
         if (nr_pages > castle_cache_size / 2)
-        {
-            static atomic_t nr_allowed = ATOMIC_INIT(1000);
-
             castle_printk(LOG_WARN, "Couldn't find a victim page in %d pages, cache size %d\n",
                     nr_pages, castle_cache_size);
-            if (atomic_dec_and_test(&nr_allowed))
-                BUG();
-        }
         debug("No victims found!!\n");
         return 1;
     }
