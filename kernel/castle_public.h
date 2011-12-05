@@ -705,13 +705,32 @@ typedef struct castle_var_length_btree_key {
 
 /*
  * Castle request interface definitions.
+ *
+ * CASTLE_RING_SIZE (and hence CASTLE_RING_PAGES) must be a power of two or code
+ * will silently break.
+ *
+ * The __RING_SIZE macro determines how many requests can be present on the ring
+ * at a time.  This macro allocates some space for the ring structures before
+ * rounding down the remaining space to the next power of two.  Hence the Bytes
+ * available for requests tends to be CASTLE_RING_SIZE/2 (which should be a
+ * power of two).
+ *
+ * Requests on the ring are represented as castle_back_op structures.  As such
+ * there are (CASTLE_RING_SIZE/2)/sizeof(castle_back_op) slots on the ring.
+ *
+ * CASTLE_STATEFUL_OPS determines the maximum number of stateful_ops.  In the
+ * frontend code (libcastle) CASTLE_STATEFUL_OPS slots are reserved on the ring.
+ * These slots cannot be used except by ongoing stateful_ops.  Therefore there
+ * can be at most
+ * (CASTLE_RING_SIZE/2)/sizeof(castle_back_request)-CASTLE_STATEFUL_OPS requests
+ * on the ring that are not ongoing stateful ops.  Furthermore, the total ring
+ * capacity must not exactly match CASTLE_STATEFUL_OPS or no requests may be
+ * queued.
  */
+#define CASTLE_RING_PAGES   (32)                                /**< Must be a power of 2.  */
+#define CASTLE_RING_SIZE    (CASTLE_RING_PAGES << PAGE_SHIFT)
+#define CASTLE_STATEFUL_OPS 512                                 /**< Must be < total slots. */
 
-#define CASTLE_RING_PAGES (32)                              /**< 32 requests/page.              */
-#define CASTLE_RING_SIZE (CASTLE_RING_PAGES << PAGE_SHIFT)  /**< Must be ^2 or things break.    */
-
-#define CASTLE_STATEFUL_OPS 512                             /**< Must be adjusted along with
-                                                                 CASTLE_RING_PAGES.             */
 
 #define CASTLE_IOCTL_POKE_RING 2
 #define CASTLE_IOCTL_WAIT 3
