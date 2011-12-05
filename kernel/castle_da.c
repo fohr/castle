@@ -12048,7 +12048,7 @@ static int castle_merge_thread_start(void *_data)
 
     do {
         int ret, ignore;
-        uint64_t prev_nr_bytes;
+        uint64_t prev_nr_bytes, total_nr_bytes;
 
         /* Wait for next merge work unit assignment or the exit condition. */
         __wait_event_interruptible(da->merge_waitq,
@@ -12071,7 +12071,8 @@ static int castle_merge_thread_start(void *_data)
         BUG_ON(!merge_thread->cur_work_size);
         BUG_ON(!merge);
 
-        prev_nr_bytes = merge->nr_bytes;
+        prev_nr_bytes   = merge->nr_bytes;
+        total_nr_bytes  = merge->total_nr_bytes;
         ret = castle_da_merge_do(merge, merge_thread->cur_work_size);
 
         merge_thread->cur_work_size = 0;
@@ -12080,11 +12081,11 @@ static int castle_merge_thread_start(void *_data)
         /* Check if merge completed successfully. */
         if (!ret)
         {
-            BUG_ON(merge->nr_bytes < prev_nr_bytes);
+            BUG_ON(total_nr_bytes < prev_nr_bytes);
             castle_events_merge_work_finished(merge_thread->da->id,
                                               merge_thread->merge_id,
                                               merge_thread->work_id,
-                                              merge->nr_bytes - prev_nr_bytes, 1);
+                                              total_nr_bytes - prev_nr_bytes, 1);
             merge_thread->merge_id = INVAL_MERGE_ID;
 
             /* One thread per merge, for now. Exit thread. */
