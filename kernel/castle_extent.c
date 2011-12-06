@@ -4562,7 +4562,7 @@ typedef struct process_work_item {
 
 #define                     MAX_WORK_ITEMS 512
 #define                     MIN_WORK_ITEMS 16
-#define                     MAX_CACHE_USAGE 15
+#define                     MAX_CACHE_USAGE 15 /* Max percentage of cache work items can use. */
 static int castle_nr_work_items = MAX_WORK_ITEMS;
 
 static process_work_item_t  process_work_items[MAX_WORK_ITEMS];
@@ -5551,7 +5551,7 @@ static void init_io_work(void)
      * The number of work items is bounded by MIN_WORK_ITEMS/MAX_WORK_ITEMS to ensure there is
      * a reasonable minimum, and that the size of the work_item array is not exceeded.
      */
-    castle_nr_work_items = (castle_cache_size_get() * MAX_CACHE_USAGE / 100)
+    castle_nr_work_items = ((castle_cache_size_get() / 100) * MAX_CACHE_USAGE)
                             / BLKS_PER_CHK;
 
     if (castle_nr_work_items < MIN_WORK_ITEMS) castle_nr_work_items = MIN_WORK_ITEMS;
