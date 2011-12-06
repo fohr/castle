@@ -6468,7 +6468,7 @@ void castle_extents_rebuild_startup_check(int need_rebuild)
     if (fs_sb->fs_in_rebuild || need_rebuild)
     {
         rebuild_to_seqno = atomic_read(&current_rebuild_seqno) - 1;
-        castle_printk(LOG_USERINFO, "Rebuild startup check: Restarting rebuild.\n");
+        castle_printk(LOG_USERINFO, "Rebuild startup check: Starting rebuild.\n");
 
         /* Wake the rebuild thread */
         wake_up(&process_waitq);
