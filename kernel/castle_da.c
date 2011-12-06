@@ -9946,7 +9946,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
         return NULL;
     }
 
-    ct->dynamic         = level == 0;
+    ct->dynamic         = (level == 0);
     ct->level           = level;
 
     castle_ct_hash_add(ct);
@@ -12213,7 +12213,7 @@ static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_id
         /* Check if the tree is dynamic. */
         if (ct->dynamic)
         {
-            castle_printk(LOG_USERINFO, "Array is dynamic. Can't start merg on: 0x%x\n",
+            castle_printk(LOG_USERINFO, "Array is dynamic. Can't start merge on: 0x%x\n",
                                     array_ids[i]);
             return C_ERR_MERGE_ARRAY_KERNEL;
         }

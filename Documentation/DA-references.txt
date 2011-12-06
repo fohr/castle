@@ -23,7 +23,7 @@ Reference counting in DA:
       structure.
 
 
-Reference counting in DA:
+Reference counting in CT:
 ========= ======== == ==
 
 - Clients
