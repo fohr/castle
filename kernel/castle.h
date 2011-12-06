@@ -37,7 +37,7 @@ void ATTRIB_NORET bug_fn(char *file, unsigned long line);
 #define MAX_KMALLOC_SIZE    MAX_KMALLOC_PAGES << PAGE_SHIFT     /**< Maximum Bytes we can kmalloc */
 
 /* Printk implementation used in the entire filesystem. */
-#define PRINTKS_PER_SEC_STEADY_STATE    500
+#define PRINTKS_PER_SEC_STEADY_STATE    5
 #define PRINTKS_IN_BURST                100
 #define PRINTK_BUFFER_MBS               10          /**< Size of printk ring buffer (in MB).    */
 #define PRINTK_BUFFER_SIZE              PRINTK_BUFFER_MBS*1024*1024 /**< Size of printk buffer. */
