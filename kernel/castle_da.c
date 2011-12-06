@@ -5142,7 +5142,7 @@ static void castle_da_counter_delete(struct castle_da_merge *merge,
            do the accumulation, and update vars.
            If the entry isn't a counter add, accumulation is a noop.
          */
-        child_version = version;
+        child_version = entry_version;
         if(!CVT_ADD_COUNTER(entry_cvt))
             continue;
 
