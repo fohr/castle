@@ -12056,7 +12056,7 @@ void castle_da_threads_priority_set(int nice_value)
  * Golden Nugget.
  */
 
-static int castle_merge_thread_start(void *_data)
+static int castle_merge_run(void *_data)
 {
     struct castle_merge_thread *merge_thread = (struct castle_merge_thread *)_data;
     struct castle_da_merge *merge;
@@ -12069,7 +12069,7 @@ static int castle_merge_thread_start(void *_data)
 
     do {
         int ret, ignore;
-        uint64_t prev_nr_bytes, total_nr_bytes;
+        uint64_t prev_nr_bytes;
 
         /* Wait for next merge work unit assignment or the exit condition. */
         __wait_event_interruptible(da->merge_waitq,
@@ -12093,7 +12093,6 @@ static int castle_merge_thread_start(void *_data)
         BUG_ON(!merge);
 
         prev_nr_bytes   = merge->nr_bytes;
-        total_nr_bytes  = merge->total_nr_bytes;
         ret = castle_da_merge_do(merge, merge_thread->cur_work_size);
 
         merge_thread->cur_work_size = 0;
@@ -12102,11 +12101,10 @@ static int castle_merge_thread_start(void *_data)
         /* Check if merge completed successfully. */
         if (!ret)
         {
-            BUG_ON(total_nr_bytes < prev_nr_bytes);
             castle_events_merge_work_finished(merge_thread->da->id,
                                               merge_thread->merge_id,
                                               merge_thread->work_id,
-                                              total_nr_bytes - prev_nr_bytes, 1);
+                                              0, 1);
             merge_thread->merge_id = INVAL_MERGE_ID;
 
             /* One thread per merge, for now. Exit thread. */
@@ -12159,7 +12157,7 @@ static int castle_merge_thread_create(c_thread_id_t *thread_id, struct castle_do
     merge_thread->merge_id      = INVAL_MERGE_ID;
     merge_thread->cur_work_size = 0;
     merge_thread->da            = da;
-    merge_thread->thread        = kthread_create(castle_merge_thread_start, merge_thread,
+    merge_thread->thread        = kthread_create(castle_merge_run, merge_thread,
                                                  "castle_mt_%u", castle_merge_threads_count);
     if (IS_ERR(merge_thread->thread))
     {
