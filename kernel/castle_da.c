@@ -6910,7 +6910,6 @@ static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_bytes)
     int ret = 0;
     int i;
 
-
     debug("%s::MERGE START - DA %d L %d, with input cts: ",
             __FUNCTION__, da->id, level);
     FOR_EACH_MERGE_TREE(i, merge)

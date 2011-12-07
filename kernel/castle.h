@@ -1820,11 +1820,11 @@ struct castle_slave_block_cnts
  * Structure describing the printk ring buffer.
  */
 struct castle_printk_buffer {
-    char           *buf;    /**< Ring buffer.           */
-    c_byte_off_t    off;    /**< Write pointer.         */
-    c_byte_off_t    size;   /**< Size of ring buffer.   */
-    int             wraps;  /**< Times buf has wrapped. */
-    spinlock_t      lock;   /**< Protects structure.    */
+    char           *buf;    /**< Ring buffer.                                               */
+    c_byte_off_t    off;    /**< Write pointer (points to \0 from last castle_printk().     */
+    c_byte_off_t    size;   /**< Size of ring buffer.                                       */
+    int             wraps;  /**< Times buf has wrapped.                                     */
+    spinlock_t      lock;   /**< Protects structure.                                        */
 };
 
 /* First class structures */

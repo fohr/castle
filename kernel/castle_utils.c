@@ -10,7 +10,7 @@
 #include "castle_objects.h"
 #include "castle.h"
 
-static unsigned int castle_fast_panic = 1;
+static unsigned int castle_fast_panic = 0;
 module_param(castle_fast_panic, uint, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_fast_panic, "Dumps Castle dmesg if unset");
 
@@ -29,6 +29,9 @@ void ATTRIB_NORET bug_fn(char *file, unsigned long line)
 
     /* Dump Castle dmesg output before panicking. */
     castle_dmesg();
+
+    /* Print another stack backtrace (useful). */
+    dump_stack();
 
     /* Generate a crashdump. */
     panic("Castle BUG, from: %s:%lu\n", file, line);
@@ -554,12 +557,13 @@ void castle_printk(c_printk_level_t level, const char *fmt, ...)
  * Dump CASTLE_DMESG_DUMP_SIZE worth of the Castle dmesg ring-buffer.
  */
 #define CASTLE_DMESG_DUMP_SIZE  (1*1024*1024)   /**< How much of the printk buffer to dump (1MB). */
+#define CASTLE_PRINTK_MAX_LINE_SIZE 1023        /**< printk() appends \0 taking it to 1024.       */
+STATIC_BUG_ON(CASTLE_DMESG_DUMP_SIZE > PRINTK_BUFFER_SIZE);
 void castle_dmesg(void)
 {
-    c_byte_off_t read_off, write_off, size;
-    char *buf, line[1024];
+    long read_off, remaining;
+    char *read_ptr, line[CASTLE_PRINTK_MAX_LINE_SIZE];
     unsigned long flags;
-    int wraps;
 
     if (castle_fast_panic)
     {
@@ -570,56 +574,54 @@ void castle_dmesg(void)
         return;
     }
 
-    /* Allocate a buffer to store CASTLE_DMESG_DUMP_SIZE of buffer. */
-    buf = castle_alloc(CASTLE_DMESG_DUMP_SIZE);
-    if (!buf)
-        printk("Couldn't allocate lines buffer to print castle_dmesg().\n");
-
-    /* Populate the local buffer under printk_buf lock. */
     spin_lock_irqsave(&printk_buf.lock, flags);
 
-    /* Fill at end, in case we wrapped and need to push more at the front. */
+    /* Determine initial read_off and how much to read. */
+    read_off = 0;
     if (printk_buf.off >= CASTLE_DMESG_DUMP_SIZE)
-        size = CASTLE_DMESG_DUMP_SIZE;
-    else
-        size = printk_buf.off;
-    read_off = printk_buf.off - size;
-    write_off = CASTLE_DMESG_DUMP_SIZE - size;
-    memcpy(&buf[write_off], &printk_buf.buf[read_off], size);
-
-    /* Fill the front of the local buffer from the end of the printk_buf if
-     * we wrapped. */
-    if (write_off && printk_buf.wraps)
     {
-        size = write_off;
-        read_off = printk_buf.size - size;
-        write_off = 0;
-
-        memcpy(&buf[write_off], &printk_buf.buf[read_off], size);
+        /* Simple case: already so far through the ring buffer that we don't
+         * need to worry about wrapping, etc. */
+        remaining = CASTLE_DMESG_DUMP_SIZE;
+        read_off += printk_buf.off - remaining;
     }
-
-    wraps = printk_buf.wraps;
-    read_off = write_off;
-
-    spin_unlock_irqrestore(&printk_buf.lock, flags);
+    else if (printk_buf.wraps)
+    {
+        /* Complex case: worry about wrapping and ensure we dump the full
+         * amount of text. */
+        long from_end;
+        remaining = CASTLE_DMESG_DUMP_SIZE;
+        from_end  = printk_buf.off - remaining;
+        BUG_ON(from_end >= 0);
+        read_off += printk_buf.size + from_end; // from_end is -ve
+    }
+    else
+        /* Simple case: dump everything available. */
+        remaining = printk_buf.off;
 
     printk("================================================================================\n");
-    printk("DUMPING %lld BYTES OF CASTLE PRINTK BUFFER WRAPPED %d TIME(S)\n",
-            CASTLE_DMESG_DUMP_SIZE - read_off, wraps);
+    printk("DUMPING %ld BYTES OF CASTLE PRINTK BUFFER WRAPPED %d TIME(S)\n",
+            remaining, printk_buf.wraps);
     printk("SECONDS.NANOSECONDS C=CPU_ID L=LOG_LEVEL: MESSAGE\n");
     printk("================================================================================\n");
 
-    /* Dump the buffer in lines as large as possible (1024). */
-    while (read_off < CASTLE_DMESG_DUMP_SIZE - 1)
+    while (remaining > 0)
     {
-        if (likely(read_off + 1024 < CASTLE_DMESG_DUMP_SIZE))
-            size = 1024;
-        else
-            size = CASTLE_DMESG_DUMP_SIZE - read_off;
+        int line_size = CASTLE_PRINTK_MAX_LINE_SIZE;
 
-        memset(&line, 0, 1024);
-        memcpy(&line, &buf[read_off], size);
-        read_off += size - 1;
+        if (unlikely(read_off + line_size > printk_buf.size))
+        {
+            memset(&line, 0, line_size);
+            line_size = printk_buf.size - read_off;
+        }
+
+        read_ptr = printk_buf.buf + read_off;
+        memcpy(&line, read_ptr, line_size);
+        remaining -= line_size;
+        if (likely(line_size == CASTLE_PRINTK_MAX_LINE_SIZE))
+            read_off += line_size;
+        else
+            read_off = 0;
 
         printk("%s", line);
     }
@@ -628,7 +630,7 @@ void castle_dmesg(void)
     printk("END OF CASTLE PRINTK BUFFER\n");
     printk("================================================================================\n");
 
-    castle_free(buf);
+    spin_unlock_irqrestore(&printk_buf.lock, flags);
 }
 
 /**
