@@ -12177,40 +12177,6 @@ static int castle_merge_thread_create(c_thread_id_t *thread_id, struct castle_do
     return 0;
 }
 
-#if 0
-static struct castle_component_tree *castle_da_next_array(struct castle_component_tree *ct)
-{
-    struct castle_double_array *da = ct->da;
-    struct castle_component_tree *next_ct = NULL;
-    int level = ct->level;
-
-    read_lock(&da->lock);
-
-    /* If this is not the last tree in level, return next tree. */
-    if (!list_is_last(&ct->da_list, &da->levels[level].trees))
-    {
-        next_ct = list_entry(ct->da_list.next, struct castle_component_tree, da_list);
-        goto out;
-    }
-
-    /* Go upto next nom-empty level. */
-    for (level++; list_empty(&da->levels[level].trees) && level < MAX_DA_LEVEL; level++);
-
-    if (level == MAX_DA_LEVEL)
-    {
-        BUG_ON(next_ct);
-        goto out;
-    }
-
-    next_ct = list_entry(da->levels[level].trees.next, struct castle_component_tree, da_list);
-
-out:
-    read_unlock(&da->lock);
-
-    return next_ct;
-}
-#endif
-
 static int castle_da_id_get_from_ct(tree_seq_t ct_seq, c_da_t *da_id)
 {
     struct castle_component_tree *ct;
