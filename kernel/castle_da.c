@@ -11859,21 +11859,40 @@ int castle_double_array_alive(c_da_t da_id)
     return (castle_da_hash_get(da_id)?1:0);
 }
 
+static struct castle_double_array * castle_da_ptr_get_from_id(c_da_t da_id)
+{
+    struct castle_double_array *da;
+    unsigned long flags;
+
+    read_lock_irqsave(&castle_da_hash_lock, flags);
+
+    if ((da = __castle_da_hash_get(da_id)))
+        castle_da_get(da);
+
+    read_unlock_irqrestore(&castle_da_hash_lock, flags);
+
+    return da;
+}
+
 int castle_double_array_get(c_da_t da_id)
 {
     struct castle_double_array *da;
     unsigned long flags;
 
     read_lock_irqsave(&castle_da_hash_lock, flags);
-    da = __castle_da_hash_get(da_id);
-    if(!da)
-        goto out;
+    if ((da = __castle_da_hash_get(da_id)) == NULL)
+    {
+        read_unlock_irqrestore(&castle_da_hash_lock, flags);
+        return -EINVAL;
+    }
+
     castle_da_get(da);
+
     da->attachment_cnt++;
-out:
+
     read_unlock_irqrestore(&castle_da_hash_lock, flags);
 
-    return (da == NULL ? -EINVAL : 0);
+    return 0;
 }
 
 void castle_double_array_put(c_da_t da_id)
@@ -11883,11 +11902,14 @@ void castle_double_array_put(c_da_t da_id)
     /* We only call this for attached DAs which _must_ be in the hash. */
     da = castle_da_hash_get(da_id);
     BUG_ON(!da);
+
     /* DA allocated + our ref count on it. */
     BUG_ON(atomic_read(&da->ref_cnt) < 2);
+
     write_lock(&da->lock);
     da->attachment_cnt--;
     write_unlock(&da->lock);
+
     /* Put the ref cnt too. */
     castle_da_put(da);
 }
@@ -12155,6 +12177,7 @@ static int castle_merge_thread_create(c_thread_id_t *thread_id, struct castle_do
     return 0;
 }
 
+#if 0
 static struct castle_component_tree *castle_da_next_array(struct castle_component_tree *ct)
 {
     struct castle_double_array *da = ct->da;
@@ -12186,35 +12209,94 @@ out:
 
     return next_ct;
 }
+#endif
+
+static int castle_da_id_get_from_ct(tree_seq_t ct_seq, c_da_t *da_id)
+{
+    struct castle_component_tree *ct;
+
+    read_lock_irq(&castle_ct_hash_lock);
+
+    ct = __castle_ct_hash_get(ct_seq);
+    if (!ct)
+    {
+        castle_printk(LOG_USERINFO, "No active array with ID: 0x%llx\n", ct_seq);
+        read_unlock_irq(&castle_ct_hash_lock);
+
+        return C_ERR_MERGE_INVAL_ARRAY;
+    }
+
+    /* Note: It is safe to access da pointer. Yes, it is possible to race this with
+     * da_destroy_complete(). But, destroy_complete() makes sure that all CTs are
+     * gone before freeing DA structure. */
+    *da_id = ct->da->id;
+
+    read_unlock_irq(&castle_ct_hash_lock);
+
+    return 0;
+}
 
 static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_ids,
                                       struct castle_component_tree **in_trees)
 {
-    int i;
+    int i, found, ret;
+    c_da_t da_id;
+    struct list_head *lh;
+    struct castle_double_array *da;
 
-    /* Fetch all ct/array structures. And do sanity checks on cts. */
-    for (i=0; i<nr_arrays; i++)
+    /* Get the DA id that these arrays belong to. */
+    ret = castle_da_id_get_from_ct(array_ids[0], &da_id);
+    if (ret)
     {
-        struct castle_component_tree *ct = castle_ct_hash_get(array_ids[i]);
-        if (!ct)
+        castle_printk(LOG_USERINFO, "Couldn't find DA associated with array: 0x%llx\n", array_ids[0]);
+        return ret;
+    }
+
+    /* Get a reference on DA with ID. As it looks at da_hash */
+    da = castle_da_ptr_get_from_id(da_id);
+    if (!da)
+    {
+        castle_printk(LOG_USERINFO, "Associated DA is not valid anymore. DA_ID: 0x%x\n", da_id);
+        return C_ERR_MERGE_INVAL_ARRAY;
+    }
+
+    read_lock(&da->lock);
+
+    found = i = ret = 0;
+    list_for_each(lh, &da->levels[2].trees)
+    {
+        struct castle_component_tree *ct = list_entry(lh, struct castle_component_tree, da_list);
+
+        /* Skip trees, until we find the first one. */
+        if (!found && ct->seq != array_ids[0])
+            continue;
+
+        found = 1;
+
+        /* Once we find the first tree, trees should be in the same order. */
+        if (ct->seq != array_ids[i])
         {
-            castle_printk(LOG_USERINFO, "Couldn't find the array: 0x%x\n", array_ids[i]);
-            return C_ERR_MERGE_INVAL_ARRAY;
+            BUG_ON(i == 0);
+            castle_printk(LOG_USERINFO, "Expected contiguous arrays in the order latest(data) "
+                                        "array first. But, array 0x%llx is not following 0x%llx\n",
+                                        array_ids[i], array_ids[i-1]);
+            ret = C_ERR_MERGE_ARRAYS_OOO;
+            goto err_out;
         }
 
-        /* Check if the tree is alrady marked for merge. */
+        /* Check if the tree is already marked for merge. */
         if (ct->merge)
         {
-            castle_printk(LOG_USERINFO, "Array is already merging: 0x%x\n", array_ids[i]);
-            return C_ERR_MERGE_ARRAY_BUSY;
+            castle_printk(LOG_USERINFO, "Array is already merging: 0x%llx\n", array_ids[i]);
+            ret = C_ERR_MERGE_ARRAY_BUSY;
+            goto err_out;
         }
 
-        /* Check if the tree is dynamic. */
-        if (ct->dynamic)
+        /* Work out what type of trees we are going to merge. Return, if in_trees don't match. */
+        if (i && (in_trees[i-1]->btree_type != ct->btree_type))
         {
-            castle_printk(LOG_USERINFO, "Array is dynamic. Can't start merge on: 0x%x\n",
-                                    array_ids[i]);
-            return C_ERR_MERGE_ARRAY_KERNEL;
+            castle_printk(LOG_USERINFO, "Arrays are not of same type\n");
+            ret = C_ERR_MERGE_ERROR;
         }
 
         /* Shouldn't be any outstanding write references. */
@@ -12223,33 +12305,23 @@ static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_id
         /* Shouldn't be a empty tree. */
         BUG_ON(atomic64_read(&ct->item_count) == 0);
 
-        if (i != 0)
-        {
-            /* Check if the tree is contiguous to the previous one or not. */
-            if (castle_da_next_array(in_trees[i-1]) != ct)
-            {
-                castle_printk(LOG_USERINFO, "Array 0x%x is not following 0x%x\n",
-                                        array_ids[i], array_ids[i-1]);
-                return C_ERR_MERGE_ARRAYS_OOO;
-            }
+        in_trees[i++] = ct;
 
-            /* Work out what type of trees are we going to be merging. Return, if
-             * in_trees don't match. */
-            if (in_trees[i-1]->btree_type != ct->btree_type)
-            {
-                castle_printk(LOG_USERINFO, "Arrays are not of same type\n");
-                return C_ERR_MERGE_ERROR;
-            }
+        /* If found all the trees in sequence, break. */
+        if (i == nr_arrays)
+            break;
+    }
 
-            if (ct->level != in_trees[i-1]->level)
-            {
-                castle_printk(LOG_USERINFO, "Don't belong to same level\n");
-                return C_ERR_MERGE_ERROR;
-            }
-        }
+err_out:
+    read_unlock(&da->lock);
 
-        in_trees[i] = ct;
-        debug_gn("\tArray: 0x%llx\n", array_ids[i]);
+    if (ret)
+        return ret;
+
+    if (i != nr_arrays)
+    {
+        castle_printk(LOG_USERINFO, "Couldn't find the array 0x%llx in the array list\n", array_ids[i]);
+        return C_ERR_MERGE_INVAL_ARRAY;
     }
 
     return 0;
