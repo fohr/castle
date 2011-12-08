@@ -51,9 +51,12 @@ int castle_ctrl_prog_ioctl(cctrl_ioctl_t *ioctl)
     switch(ioctl->cmd)
     {
         case CASTLE_CTRL_PROG_REGISTER:
-            castle_printk(LOG_DEBUG, "Registering, from pid=%d\n", castle_ctrl_prog_curr_pid_get());
+            castle_printk(LOG_USERINFO, "Registering, from pid=%d\n", castle_ctrl_prog_curr_pid_get());
             if(castle_ctrl_prog_state != CTRL_PROG_NOT_PRESENT)
             {
+                castle_printk(LOG_USERINFO,
+                              "Rejecting registration since in %d state.\n",
+                               castle_ctrl_prog_state);
                 ioctl->ctrl_prog_register.ret = C_ERR_EXISTS;
                 break;
             }
@@ -65,7 +68,7 @@ int castle_ctrl_prog_ioctl(cctrl_ioctl_t *ioctl)
             break;
 
         case CASTLE_CTRL_PROG_DEREGISTER:
-            castle_printk(LOG_DEBUG, "Deregistering, from pid=%d\n", castle_ctrl_prog_curr_pid_get());
+            castle_printk(LOG_USERINFO, "Deregistering, from pid=%d\n", castle_ctrl_prog_curr_pid_get());
             if(ioctl->ctrl_prog_deregister.shutdown)
             {
                 if(castle_ctrl_prog_state == CTRL_PROG_PRESENT)
@@ -159,7 +162,7 @@ static void castle_ctrl_prog_work_do(void *unused)
             castle_ctrl_prog_state = CTRL_PROG_NOT_PRESENT;
             break;
         case CTRL_PROG_SHUTDOWN:
-            castle_printk(LOG_DEBUG, "Expected shutdown didn't happen.\n");
+            castle_printk(LOG_WARN, "Expected shutdown didn't happen.\n");
             castle_ctrl_prog_state = CTRL_PROG_NOT_PRESENT;
             break;
     }
