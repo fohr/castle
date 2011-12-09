@@ -70,9 +70,6 @@ struct castle_da_merge {
 #ifdef CASTLE_DEBUG
     uint8_t                       is_recursion;
 #endif
-#ifdef DEBUG
-    int                           new_partition_activations;
-#endif
     uint32_t                      skipped_count;        /**< Count of entries from deleted
                                                              versions.                          */
 
@@ -95,7 +92,6 @@ struct castle_da_merge {
     growth_control_state_t        growth_control_data; /* medium objects extent growth control */
 
     /* partition key update pipeline */
-    struct castle_key_ptr_t       new_redirection_partition;
     struct castle_key_ptr_t       redirection_partition; /**< The key used to decide if a query
                                                               should be redirected to output ct */
 

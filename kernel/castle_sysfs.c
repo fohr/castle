@@ -280,8 +280,6 @@ static ssize_t da_io_stats_show(struct kobject *kobj,
 
     sprintf(buf + strlen(buf), "PM partition updates: %lu\n",
             atomic64_read(&da->stats.partial_merges.partition_updates));
-    sprintf(buf + strlen(buf), "PM partition activations: %lu\n",
-            atomic64_read(&da->stats.partial_merges.partition_activations));
     sprintf(buf + strlen(buf), "PM extent shrinks: %lu\n",
             atomic64_read(&da->stats.partial_merges.extent_shrinks));
 

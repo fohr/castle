@@ -2381,7 +2381,6 @@ struct castle_double_array {
     struct {
         struct{
             atomic64_t partition_updates;
-            atomic64_t partition_activations;
             atomic64_t extent_shrinks;
         } partial_merges;
         struct{

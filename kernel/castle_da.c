@@ -197,8 +197,6 @@ void castle_da_ct_marshall(struct castle_clist_entry *ctm, struct castle_compone
 static struct castle_component_tree* castle_da_ct_unmarshall(struct castle_component_tree *ct,
                                                              struct castle_clist_entry *ctm);
 /* partial merges: partition handling */
-//TODO@tr get rid of partition_activate if this stage no longer needed? - trac #3840
-static void castle_da_merge_new_partition_activate(struct castle_da_merge *merge);
 static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
                                                  c2_block_t *node_c2b,
                                                  void *key);
@@ -4912,36 +4910,28 @@ static void castle_da_merge_trees_cleanup(struct castle_da_merge *merge, int err
                             merge->level, merge->skipped_count);
 }
 
-static void castle_da_merge_partial_merge_cleanup(struct castle_da_merge *merge, int err)
+static void castle_da_merge_partial_merge_cleanup(struct castle_da_merge *merge)
 {
     c_merge_serdes_state_t serdes_state;
+    BUG_ON(!MERGE_CHECKPOINTABLE(merge));
 
     mutex_lock(&merge->serdes.mutex);
     serdes_state = atomic_read(&merge->serdes.valid);
-
-    /* Release the redirection partition. */
-    if (merge->new_redirection_partition.node_c2b)
-        castle_key_ptr_destroy(&merge->new_redirection_partition);
 
     if ((serdes_state == VALID_AND_FRESH_DAM_SERDES) || (serdes_state == VALID_AND_STALE_DAM_SERDES))
         castle_da_merge_serdes_out_tree_check(merge->serdes.mstore_entry,
                                               merge->da,
                                               merge->level);
 
-    if (MERGE_CHECKPOINTABLE(merge))
-        castle_da_merge_serdes_dealloc(merge);
-
+    castle_da_merge_serdes_dealloc(merge);
     mutex_unlock(&merge->serdes.mutex);
 
-    if (MERGE_CHECKPOINTABLE(merge))
-    {
-        castle_check_free(merge->shrinkable_extent_boundaries.tree);
-        castle_check_free(merge->latest_mo_cep);
-        castle_check_free(merge->shrinkable_extent_boundaries.data);
-        castle_check_free(merge->in_tree_shrink_activatable_cep);
-        castle_check_free(merge->in_tree_shrinkable_cep);
-        castle_check_free(merge->serdes.shrinkable_cep);
-    }
+    castle_check_free(merge->shrinkable_extent_boundaries.tree);
+    castle_check_free(merge->latest_mo_cep);
+    castle_check_free(merge->shrinkable_extent_boundaries.data);
+    castle_check_free(merge->in_tree_shrinkable_cep);
+    castle_check_free(merge->serdes.shrinkable_cep);
+
 }
 
 /**
@@ -4990,7 +4980,8 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err, int 
     /* Cleanup everything realted partial merges and merge checkpointing. This function depends
      * on merge trees, so this gets executed before tree_cleanup(). But, this doesn't cleanup
      * redirection key. That should happen in-sync tree_cleanup() and it left for it. */
-    castle_da_merge_partial_merge_cleanup(merge, err);
+    if (MERGE_CHECKPOINTABLE(merge))
+        castle_da_merge_partial_merge_cleanup(merge);
 
     /* Detach and destroy reservation pool. */
     castle_da_merge_res_pool_detach(merge, err);
@@ -5170,96 +5161,19 @@ static void castle_da_counter_delete(struct castle_da_merge *merge,
 
     1) castle_ct_immut_iter_next: update the latest_mo_cep, potentially updated
        on every insert! This is tricky to avoid if we want to shrink the MO extent
-       aggressively.
+       as much as possible.
     2) castle_ct_immut_iter_next_node: set valid extent boundaries for the input tree,
        i.e. the node boundary and the current latest_mo_cep. Updated on every new node
        in the iter.
-    3) castle_da_merge_new_partition_activate: activate the partition redirection key,
-       and propogate the valid extent boundary ceps set in step 2 into the merge structure.
-       At this point we *could* drop the input tree extents accordingly, but crash
-       consistency is not yet guaranteed - for that we have to wait for...
+    3) castle_da_merge_new_partition_update: create a partition key, and collect all
+       valid extent boundaries into a single array of ceps. At this point we cannot drop
+       the input tree extents because crash consistency is not yet guaranteed - for that
+       we have to wait for...
     4) castle_da_merge_serialise: when setting the merge state as checkpointable, propogate
-       the extent boundary arrays into the da structure so that checkpoint can find them
+       the extent boundary array into the serdes structure so that checkpoint can find them
        and call extent_shrink.
     5) merge_writeback: call extent_shrink.
 */
-static void castle_da_merge_new_partition_activate(struct castle_da_merge *merge)
-{
-    int i;
-
-    BUG_ON(!merge);
-    if(!merge->new_redirection_partition.key)
-        return;
-    BUG_ON(!merge->new_redirection_partition.node_c2b);
-
-    /* == activate redirection partition key == */
-    debug("%s::[da %d level %d] activating partition at " cep_fmt_str", key = ",
-          __FUNCTION__, merge->da->id, merge->level,
-          cep2str(merge->new_redirection_partition.node_c2b->cep));
-    //btree->key_print(LOG_DEBUG, merge->new_redirection_partition.key);
-
-    write_lock(&merge->da->lock);
-    if(!test_bit(CASTLE_CT_PARTIAL_TREE_BIT, &merge->out_tree->flags))
-    {
-        /* Tree not yet queriable, so this is the first time setting a redirection partition;
-           set tree as queriable. */
-        BUG_ON(merge->redirection_partition.node_c2b);
-        BUG_ON(merge->redirection_partition.key);
-
-        /* Mark all input/outtrees as partial trees. */
-        BUG_ON(test_and_set_bit(CASTLE_CT_PARTIAL_TREE_BIT, &merge->out_tree->flags));
-        for (i=0; i<merge->nr_trees; i++)
-            BUG_ON(test_and_set_bit(CASTLE_CT_PARTIAL_TREE_BIT, &merge->in_trees[i]->flags));
-
-        castle_printk(LOG_DEBUG, "%s::[da %d level %d] making output tree %p queriable;",
-                                 __FUNCTION__, merge->da->id, merge->level,
-                                 merge->out_tree);
-    }
-    else
-    {
-        struct castle_btree_type *btree = merge->out_btree;
-        BUG_ON(!merge->redirection_partition.node_c2b);
-        BUG_ON(!merge->redirection_partition.key);
-        /* The new redirection partition key must not be less than the existing
-           redirection partition key (but could be the same). */
-        BUG_ON(btree->key_compare(merge->new_redirection_partition.key,
-                    merge->redirection_partition.key)
-                < 0 );
-
-        castle_key_ptr_destroy(&merge->redirection_partition);
-    }
-    castle_key_ptr_ref_cp(&merge->redirection_partition,
-                          &merge->new_redirection_partition);
-    BUG_ON(merge->redirection_partition.node_size == 0 ||
-            merge->redirection_partition.node_size > 256);
-    BUG_ON(!merge->redirection_partition.node_c2b);
-    BUG_ON(!merge->redirection_partition.key);
-    castle_key_ptr_destroy(&merge->new_redirection_partition);
-    write_unlock(&merge->da->lock);
-#ifdef DEBUG
-    merge->new_partition_activations++;
-#endif
-    atomic64_inc(&merge->da->stats.partial_merges.partition_activations);
-
-    /* == propogate extents shrink boundaries == */
-    if(!MERGE_CHECKPOINTABLE(merge))
-        return; /* cannot shrink extents for non-checkpointable merges */
-
-    BUG_ON(!merge->in_tree_shrinkable_cep);
-    BUG_ON(!merge->in_tree_shrink_activatable_cep);
-
-    memcpy(merge->in_tree_shrinkable_cep,
-            merge->in_tree_shrink_activatable_cep,
-            sizeof(c_ext_pos_t) * (merge->nr_trees + merge->nr_drain_exts ));
-
-    for(i=0; i<(merge->nr_trees +merge->nr_drain_exts); i++)
-        if(!EXT_POS_INVAL(merge->in_tree_shrinkable_cep[i]))
-        {
-            castle_printk(LOG_DEBUG, "%s::activating shrink partition "cep_fmt_str_nl,
-                    __FUNCTION__, cep2str(merge->in_tree_shrinkable_cep[i]));
-        }
-}
-
 static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
                                                  c2_block_t *node_c2b,
                                                  void *key)
@@ -5279,27 +5193,54 @@ static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
     BUG_ON(merge->out_tree->btree_type != merge->da->btree_type);
 
     /* == update redirection partition key == */
-    if(merge->new_redirection_partition.key)
-        castle_key_ptr_destroy(&merge->new_redirection_partition);
 
+    write_lock(&merge->da->lock);
+    if(!test_bit(CASTLE_CT_PARTIAL_TREE_BIT, &merge->out_tree->flags))
+    {
+        /* Tree not yet queriable, and this is the first time setting a redirection partition */
+        BUG_ON(merge->redirection_partition.node_c2b);
+        BUG_ON(merge->redirection_partition.key);
+
+        /* Mark all input/outtrees as partial trees. */
+        BUG_ON(test_and_set_bit(CASTLE_CT_PARTIAL_TREE_BIT, &merge->out_tree->flags));
+        for (i=0; i<merge->nr_trees; i++)
+            BUG_ON(test_and_set_bit(CASTLE_CT_PARTIAL_TREE_BIT, &merge->in_trees[i]->flags));
+
+        castle_printk(LOG_DEBUG, "%s::[da %d level %d] making output tree %p queriable;",
+                                 __FUNCTION__, merge->da->id, merge->level,
+                                 merge->out_tree);
+    }
+    else
+    {
+        struct castle_btree_type *btree = merge->out_btree;
+        BUG_ON(!merge->redirection_partition.node_c2b);
+        BUG_ON(!merge->redirection_partition.key);
+        /* The new redirection partition key must be > than the existing
+           redirection partition key. */
+        BUG_ON(btree->key_compare(key, merge->redirection_partition.key) <= 0 );
+
+        /* Destroy current partition key */
+        castle_key_ptr_destroy(&merge->redirection_partition);
+    }
+    /* Make new partition key */
     expected_node_size =
         castle_da_merge_node_size_get(merge, PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL);
     BUG_ON(node->size != expected_node_size);
-    merge->new_redirection_partition.node_size = node->size;
-    merge->new_redirection_partition.node_c2b  = node_c2b;
-    merge->new_redirection_partition.key       = key;
-    get_c2b(merge->new_redirection_partition.node_c2b);
+    merge->redirection_partition.node_size = node->size;
+    merge->redirection_partition.node_c2b  = node_c2b;
+    merge->redirection_partition.key       = key;
+    get_c2b(merge->redirection_partition.node_c2b);
+    write_unlock(&merge->da->lock);
+
+    atomic64_inc(&merge->da->stats.partial_merges.partition_updates);
 
     /* == update extents shrink boundaries == */
     if(!MERGE_CHECKPOINTABLE(merge))
         return; /* cannot shrink extents for non-checkpointable merges */
 
-    BUG_ON(!merge->in_tree_shrink_activatable_cep);
+    BUG_ON(!merge->in_tree_shrinkable_cep);
     BUG_ON(!merge->merged_iter);
     BUG_ON(!merge->merged_iter->iterators);
-    atomic64_inc(&merge->da->stats.partial_merges.partition_updates);
-
-
 
     /* pack all shrinkable extent boundaries into a single list */
     /* first the tree extents... */
@@ -5309,7 +5250,7 @@ static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
         BUG_ON(!cep_source_arr);
         if ( !EXT_POS_INVAL(cep_source_arr[i]) )
         {
-            merge->in_tree_shrink_activatable_cep[cep_arr_index++] =
+            merge->in_tree_shrinkable_cep[cep_arr_index++] =
                 cep_source_arr[i];
             cep_source_arr[i] = INVAL_EXT_POS;
             BUG_ON(cep_arr_index > max_cep_arr_index);
@@ -5322,7 +5263,7 @@ static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
         BUG_ON(!cep_source_arr);
         if ( !EXT_POS_INVAL(cep_source_arr[i]) )
         {
-            merge->in_tree_shrink_activatable_cep[cep_arr_index++] =
+            merge->in_tree_shrinkable_cep[cep_arr_index++] =
                 cep_source_arr[i];
             cep_source_arr[i] = INVAL_EXT_POS;
             BUG_ON(cep_arr_index > max_cep_arr_index);
@@ -5331,9 +5272,7 @@ static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
     /* and explicitly set the remaining spots to INVAL, so we will not attempt to call
        extent_shrink on garbage. */
     for(i=cep_arr_index; i<max_cep_arr_index; i++)
-        merge->in_tree_shrink_activatable_cep[i] = INVAL_EXT_POS;
-
-    castle_da_merge_new_partition_activate(merge);
+        merge->in_tree_shrinkable_cep[i] = INVAL_EXT_POS;
 }
 
 static int castle_da_merge_space_reserve(struct castle_da_merge *merge, c_val_tup_t cvt)
@@ -5341,7 +5280,7 @@ static int castle_da_merge_space_reserve(struct castle_da_merge *merge, c_val_tu
     c_byte_off_t space_needed;
     int ret = 0;
 
-    /* If the tree can't be checkpointable, it can't be partially merged. TR? */
+    /* If the tree can't be checkpointable, it can't be partially merged. */
     if (!MERGE_CHECKPOINTABLE(merge))
         return 0;
 
@@ -5968,8 +5907,6 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
 
     merge->skipped_count                = 0;
 
-    merge->new_redirection_partition.node_c2b = NULL;
-    merge->new_redirection_partition.key      = NULL;
     merge->redirection_partition.node_c2b     = NULL;
     merge->redirection_partition.key          = NULL;
 
@@ -5978,7 +5915,6 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
     merge->shrinkable_extent_boundaries.data  = NULL;
     merge->in_tree_shrinkable_cep             = NULL;
     merge->serdes.shrinkable_cep              = NULL;
-    merge->in_tree_shrink_activatable_cep     = NULL;
 
     if(MERGE_CHECKPOINTABLE(merge))
     {
@@ -6025,14 +5961,8 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
         if(!merge->serdes.shrinkable_cep)
             goto error_out;
 
-        merge->in_tree_shrink_activatable_cep =
-            castle_alloc(sizeof(c_ext_pos_t) * (nr_drain_exts + nr_trees));
-        if(!merge->in_tree_shrink_activatable_cep)
-            goto error_out;
-
         for(i=0; i<(nr_drain_exts + nr_trees); i++)
-            merge->in_tree_shrinkable_cep[i] = merge->serdes.shrinkable_cep[i] =
-                                    merge->in_tree_shrink_activatable_cep[i] = INVAL_EXT_POS;
+            merge->in_tree_shrinkable_cep[i] = merge->serdes.shrinkable_cep[i] = INVAL_EXT_POS;
 
         /* merge serdes structs */
         size = sizeof(struct castle_dmserlist_entry);
@@ -6073,7 +6003,6 @@ error_out:
     castle_check_free(merge->shrinkable_extent_boundaries.tree);
     castle_check_free(merge->latest_mo_cep);
     castle_check_free(merge->shrinkable_extent_boundaries.data);
-    castle_check_free(merge->in_tree_shrink_activatable_cep);
     castle_check_free(merge->serdes.shrinkable_cep);
     castle_check_free(merge->in_tree_shrinkable_cep);
 
@@ -6323,9 +6252,8 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge)
             {
                 if(EXT_POS_INVAL(merge->serdes.shrinkable_cep[i]))
                     continue;
-                castle_printk(LOG_DEBUG, "%s::[da %d level %d] scheduling shrink of "cep_fmt_str"\n",
-                        __FUNCTION__, merge->da->id, merge->level,
-                        cep2str(merge->serdes.shrinkable_cep[i]));
+                castle_printk(LOG_DEBUG, "%s::[merge %p id %d] scheduling shrink of "cep_fmt_str"\n",
+                        __FUNCTION__, merge, merge->id, cep2str(merge->serdes.shrinkable_cep[i]));
             }
 
             /* mark serialisation as checkpointable, and no longer updatable */
@@ -7783,7 +7711,6 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id, c_da_opts_t opt
             CASTLE_TOMBSTONE_DISCARD_TD_DEFAULT);
 
     atomic64_set(&da->stats.partial_merges.partition_updates, 0);
-    atomic64_set(&da->stats.partial_merges.partition_activations, 0);
     atomic64_set(&da->stats.partial_merges.extent_shrinks, 0);
     atomic64_set(&da->stats.tombstone_discard.tombstone_inserts, 0);
     atomic64_set(&da->stats.tombstone_discard.tombstone_discards, 0);
