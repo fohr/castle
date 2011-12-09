@@ -10,7 +10,7 @@
 #include "castle_objects.h"
 #include "castle.h"
 
-static unsigned int castle_fast_panic = 0;
+static unsigned int castle_fast_panic = 1;
 module_param(castle_fast_panic, uint, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_fast_panic, "Dumps Castle dmesg if unset");
 
