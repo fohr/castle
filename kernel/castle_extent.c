@@ -5964,7 +5964,7 @@ void writeback_list_walk(struct list_head * lh)
  */
 int work_io_check(void)
 {
-    struct list_head    *io_error_entry, *tmp;
+    struct list_head    *io_error_entry, *tmp, *writeback_entry;
     process_work_item_t *wi;
     int err = 0;
 
@@ -5979,9 +5979,36 @@ int work_io_check(void)
             wi = list_entry(io_error_entry, process_work_item_t, error_list);
             list_del(io_error_entry);
             if (c2b_eio(wi->c2b))
+            {
                 err = -EAGAIN;
+                clear_c2b_eio(wi->c2b);
+            }
             else
                 BUG();
+
+            /*
+             * This process_work_item represents a disk chunk that has failed write I/O, but it will
+             * already have been added to the processed list as part of the range covered by one of
+             * its writeback info structures.
+             * For a chunk 'Y', scan through the processed list, looking for the for the extent
+             * where the range covered, X through Z is such that X <= Y <= Z. If it is found, reduce
+             * the range to X through (Y-1). This means that the map for Y will not get written out,
+             * but will allow all other maps to be written.
+             * If there are subsequent failed I/Os with a lower chunk number, these can curtail
+             * the range even further. If (as is more likely), there are subsequent I/Os with higher
+             * chunk numbers, then the wi range will already exclude them.
+             */
+            list_for_each(writeback_entry, &processed_list)
+            {
+                writeback_info_t *winfop;
+                winfop = list_entry(writeback_entry, writeback_info_t, list);
+                if ((wi->ext->ext_id == winfop->ext_id) &&
+                    (winfop->start_chunk <= wi->chunkno) && (wi->chunkno <= winfop->end_chunk))
+                {
+                    winfop->end_chunk = wi->chunkno - 1;
+                    break;
+                }
+            }
 
             write_unlock_c2b(wi->c2b);
             //BUG_ON(castle_cache_block_destroy(wi->c2b) && LOGICAL_EXTENT(wi->ext->ext_id));
@@ -6146,15 +6173,10 @@ finishing:
                     /*
                      * Checkpoint has indicated it is about to update freespace. Move all current
                      * entries on the processed list to the writeback list (at the tail, because
-                     * there may already be entries there, and their order is important.
+                     * there may already be entries there, and their order is important).
+                     * First drain any outstanding IO, to ensure that all data chunks are on disk
+                     * before their mappings are written. Check for any resultant errors.
                      */
-                    list_splice_init(&processed_list, writeback_list.prev);
-
-                    /* Current writeback_info should no longer be used. */
-                    writeback_info = NULL;
-
-                    /* Drain any outstanding IO, to ensure that all data chunks are on disk before
-                     their mappings are written. Check for any resultant errors*/
                     while (atomic_read(&wi_in_flight))
                     {
                         io_error = work_io_check();
@@ -6175,6 +6197,11 @@ finishing:
                         }
                         msleep(IO_SLEEP_TIME);
                     }
+
+                    list_splice_init(&processed_list, writeback_list.prev);
+
+                    /* Current writeback_info should no longer be used. */
+                    writeback_info = NULL;
 
                     /* Reset I/O ratelimiting so we don't get a burst when chunk I/O restarts */
                     if (list_empty(&extent_list))
