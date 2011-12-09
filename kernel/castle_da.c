@@ -12016,20 +12016,24 @@ static int castle_merge_run(void *_data)
     struct castle_merge_thread *merge_thread = (struct castle_merge_thread *)_data;
     struct castle_da_merge *merge;
     struct castle_double_array *da = merge_thread->da;
+    c_time_interval_t waiting_stats;
 
     atomic_inc(&castle_da_merge_thread_count);
 
     /* Get a reference for this thread. */
     castle_da_get(da);
 
+    castle_time_interval_init(&waiting_stats);
     do {
         int ret, ignore;
         uint64_t prev_nr_bytes;
 
         /* Wait for next merge work unit assignment or the exit condition. */
+        castle_time_interval_start(&waiting_stats);
         __wait_event_interruptible(da->merge_waitq,
                                    exit_cond || merge_thread->cur_work_size,
                                    ignore);
+        castle_time_interval_stop(&waiting_stats);
 
         merge = castle_merges_hash_get(merge_thread->merge_id);
 
@@ -12079,6 +12083,9 @@ static int castle_merge_run(void *_data)
 
     } while(1);
 
+    castle_time_interval_fini(&waiting_stats);
+    castle_printk(LOG_DEVEL, "Finished merge: %d. Timing stats:\n");
+    castle_time_intrval_print(LOG_DEVEL, &waiting_stats, "    ",  "Waiting for");
     castle_printk(LOG_DEVEL, "Thread destroy: %u\n", merge_thread->id);
 
     castle_merge_threads_hash_remove(merge_thread);

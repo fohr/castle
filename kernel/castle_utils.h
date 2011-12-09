@@ -405,6 +405,84 @@ void castle_printk(c_printk_level_t level, const char *fmt, ...);
 int castle_printk_init(void);
 void castle_printk_fini(void);
 
+/**
+ * Timer structure used to track how long an operation take.
+ */
+typedef struct castle_time_interval {
+    struct timeval start;
+    struct timeval end;
+    struct timeval last_start;
+    struct timeval total_active;
+} c_time_interval_t;
+
+static inline struct timeval ns_to_timeval_private(const s64 nsec)
+{
+    struct timeval tv;
+
+    tv.tv_sec  =  nsec / 1000000000LL;
+    tv.tv_usec = (nsec % 1000000000LL) / 1000LL;
+
+    return tv;
+}
+
+static inline void castle_time_interval_init(c_time_interval_t *interval)
+{
+    memset(interval, 0, sizeof(c_time_interval_t));
+    do_gettimeofday(&interval->start);
+}
+
+static inline void castle_time_interval_start(c_time_interval_t *interval)
+{
+    /* Last start must be set NULL if we starting again. */
+    BUG_ON((interval->last_start.tv_sec != 0) || (interval->last_start.tv_usec != 0));
+    do_gettimeofday(&interval->last_start);
+}
+
+static inline void castle_time_interval_stop(c_time_interval_t *interval)
+{
+    struct timeval current_time;
+    long total_active;
+
+    /* Last start must not be set NULL when stopping . */
+    BUG_ON((interval->last_start.tv_sec == 0) && (interval->last_start.tv_usec == 0));
+    /* Record current time. */
+    do_gettimeofday(&current_time);
+    /* Update total_active. */
+    total_active  = timeval_to_ns(&interval->total_active);
+    total_active += timeval_to_ns(&current_time);
+    total_active -= timeval_to_ns(&interval->last_start);
+    interval->total_active = ns_to_timeval_private(total_active);
+    /* Reset last_start. */
+    memset(&interval->last_start, 0, sizeof(struct timeval));
+}
+
+static inline void castle_time_interval_fini(c_time_interval_t *interval)
+{
+    do_gettimeofday(&interval->end);
+}
+
+static inline void castle_time_intrval_print(c_printk_level_t printk_level,
+                                             c_time_interval_t *interval,
+                                             char *prefix,
+                                             char *active_label)
+{
+    long duration_ns;
+
+    duration_ns  = timeval_to_ns(&interval->end);
+    duration_ns -= timeval_to_ns(&interval->start);
+    castle_printk(printk_level, "%sStarted at : %ld.%06ld000.\n"
+                                "%sDuration   : %ld.%09ld.\n"
+                                "%s%s: %ld.%06ld000.\n",
+                                prefix, interval->start.tv_sec,
+                                        interval->start.tv_usec,
+                                prefix, (duration_ns / 1000000000LL),
+                                        (duration_ns % 1000000000LL),
+                                prefix, active_label,
+                                        interval->total_active.tv_sec,
+                                        interval->total_active.tv_usec);
+}
+
+
 void        castle_counter_accumulating_reduce(c_val_tup_t *accumulator,
                                                c_val_tup_t delta_cvt,
                                                int delta_ancestoral);
