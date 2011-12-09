@@ -8483,18 +8483,22 @@ static void __castle_da_level0_modified_promote(struct work_struct *work)
          * CTs at level 1 will be written to disk by the checkpoint thread. */
         if (atomic64_read(&ct->item_count) != 0)
         {
+            int create_failed;
             castle_printk(LOG_INFO, "Promote for DA 0x%x level 0 RWCT seq %u (has %ld items)\n",
                     da->id, ct->seq, atomic64_read(&ct->item_count));
-            __castle_da_rwct_create(da,
-                                    cpu_index,
-                                    0 /*in_tran*/,
-                                    LFS_VCT_T_INVALID,
-                                    1 /*lfs_check*/);
+            create_failed = __castle_da_rwct_create(da,
+                                                    cpu_index,
+                                                    0 /*in_tran*/,
+                                                    LFS_VCT_T_INVALID,
+                                                    1 /*lfs_check*/);
+            if (create_failed)
+                goto out;
         }
 
         castle_ct_put(ct, 1 /*write*/, NULL);
     }
 
+out:
     castle_da_growing_rw_clear(da);
 
     /* Drop DA reference, adjust promoting DAs counter and signal caller. */
@@ -9990,7 +9994,8 @@ static int __castle_da_rwct_create(struct castle_double_array *da,
 
         /* If failed to allocate space, return error. lfs structure is already set.
          * Low freespace handler would allocate space, when more freespace is available. */
-        if (err)    goto no_space;
+        if (err)
+            goto no_space;
     }
 
     /* Successfully allocated space. Initialize the component tree with alloced extents.
