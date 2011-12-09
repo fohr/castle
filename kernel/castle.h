@@ -1093,6 +1093,7 @@ struct castle_component_tree {
     c_ext_free_t        data_ext_free;      /**< Medium-object data extent.                     */
     c_ext_id_t         *data_exts;          /**< Array of data extent IDs.                      */
     uint32_t            nr_data_exts;       /**< Number of data extents in in this CT.          */
+    uint64_t            nr_rwcts;           /**< How many RWCTs were merged to produce this CT. */
     /* FIXME: Just for debugging sake. get rid of data_exts_count later. */
     uint32_t            data_exts_count;
     atomic64_t          large_ext_chk_cnt;
@@ -1170,12 +1171,13 @@ struct castle_clist_entry {
     /*        273 */ uint16_t        node_sizes[MAX_BTREE_DEPTH];
     /*        293 */ tree_seq_t      data_age;
     /*        301 */ uint32_t        nr_data_exts;
-    /*        305 */ uint64_t        nr_bytes;
-    /*        313 */ uint64_t        nr_drained_bytes;
-    /*        321 */ uint64_t        max_user_timestamp;
-    /*        329 */ uint64_t        min_user_timestamp;
-    /*        337 */ int32_t         tree_depth;
-    /*        341 */ uint8_t         _unused[171];
+    /*        305 */ uint64_t        nr_rwcts;
+    /*        313 */ uint64_t        nr_bytes;
+    /*        321 */ uint64_t        nr_drained_bytes;
+    /*        329 */ uint64_t        max_user_timestamp;
+    /*        337 */ uint64_t        min_user_timestamp;
+    /*        345 */ int32_t         tree_depth;
+    /*        349 */ uint8_t         _unused[163];
     /*        512 */
 } PACKED;
 STATIC_BUG_ON(sizeof(struct castle_clist_entry) != 512);

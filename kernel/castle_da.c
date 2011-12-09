@@ -154,7 +154,8 @@ typedef enum {
 /* Prototypes */
 static struct castle_component_tree* castle_ct_alloc(struct castle_double_array *da,
                                                      int level, tree_seq_t seq,
-                                                     uint32_t nr_data_exts);
+                                                     uint32_t nr_data_exts,
+                                                     uint64_t nr_rwcts);
 static void castle_component_tree_add(struct castle_double_array *da,
                                       struct castle_component_tree *ct,
                                       struct list_head *head);
@@ -5618,6 +5619,7 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
     uint32_t nr_non_drain_exts;
     tree_seq_t out_tree_data_age;
     c_thread_id_t thread_id;
+    uint64_t nr_rwcts;
 
     BUG_ON(!CASTLE_IN_TRANSACTION);
 
@@ -5631,12 +5633,14 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
     BUG_ON(nr_trees < 1);
 
     /* Work out what type of trees are we going to be merging. Bug if in_trees don't match. */
+    nr_rwcts = 0;
     btree_type = in_trees[0]->btree_type;
     for (i=0; i<nr_trees; i++)
     {
         /* Btree types may, and often will be different during big merges. */
         BUG_ON(btree_type != in_trees[i]->btree_type);
         BUG_ON(in_trees[i]->level != level);
+        nr_rwcts += in_trees[i]->nr_rwcts;
     }
 
     /* Malloc everything ... */
@@ -5677,8 +5681,11 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
 
     /* Data extents in output tree - Number of data extents that are not being
      * merged and one more for the extents that are being merged.  */
-    merge->out_tree = castle_ct_alloc(da, (castle_golden_nugget)? 2: level+1, INVAL_TREE,
-                                      nr_non_drain_exts + 1);
+    merge->out_tree = castle_ct_alloc(da,
+                                      (castle_golden_nugget)? 2: level+1,
+                                      INVAL_TREE,
+                                      nr_non_drain_exts + 1,
+                                      nr_rwcts);
     if(!merge->out_tree)
         goto error_out;
 
@@ -8684,6 +8691,7 @@ void castle_da_ct_marshall(struct castle_clist_entry *ctm,
     ctm->root_node         = ct->root_node;
     ctm->large_ext_chk_cnt = atomic64_read(&ct->large_ext_chk_cnt);
     ctm->nr_data_exts      = ct->nr_data_exts;
+    ctm->nr_rwcts          = ct->nr_rwcts;
     for(i=0; i<MAX_BTREE_DEPTH; i++)
         ctm->node_sizes[i] = ct->node_sizes[i];
 
@@ -8730,6 +8738,7 @@ static struct castle_component_tree * castle_da_ct_unmarshall(struct castle_comp
     ct->dynamic             = ctm->dynamic;
     ct->da                  = da;           BUG_ON(!ct->da && !TREE_GLOBAL(ct->seq));
     ct->level               = ctm->level;
+    ct->nr_rwcts            = ctm->nr_rwcts;
     atomic_set(&ct->tree_depth, ctm->tree_depth);
     ct->root_node           = ctm->root_node;
     atomic64_set(&ct->large_ext_chk_cnt, ctm->large_ext_chk_cnt);
@@ -10003,7 +10012,8 @@ err_out:
 static struct castle_component_tree* castle_ct_alloc(struct castle_double_array *da,
                                                      int level,
                                                      tree_seq_t seq,
-                                                     uint32_t nr_data_exts)
+                                                     uint32_t nr_data_exts,
+                                                     uint64_t nr_rwcts)
 {
     struct castle_component_tree *ct;
 
@@ -10023,6 +10033,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
 
     ct->dynamic         = (level == 0);
     ct->level           = level;
+    ct->nr_rwcts        = nr_rwcts;
 
     castle_ct_hash_add(ct);
 
@@ -10072,7 +10083,7 @@ static int __castle_da_rwct_create(struct castle_double_array *da,
     /* Caller must have set the DA's growing bit. */
     BUG_ON(!castle_da_growing_rw_test(da));
 
-    ct = castle_ct_alloc(da, 0 /* level */, INVAL_TREE, 1);
+    ct = castle_ct_alloc(da, 0 /* level */, INVAL_TREE, 1, 1);
     if (!ct)
         return -ENOMEM;
 

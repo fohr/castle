@@ -1017,6 +1017,15 @@ static ssize_t ct_data_time_show(struct kobject *kobj,
     return sprintf(buf, "0x%llx\n", ct->data_age);
 }
 
+static ssize_t ct_nr_rwcts_show(struct kobject *kobj,
+                                struct attribute *attr,
+                                char *buf)
+{
+    struct castle_component_tree *ct = container_of(kobj, struct castle_component_tree, kobj);
+
+    return sprintf(buf, "0x%llx\n", ct->nr_rwcts);
+}
+
 static struct castle_sysfs_entry ct_size =
 __ATTR(size, S_IRUGO|S_IWUSR, ct_size_show, NULL);
 
@@ -1032,12 +1041,16 @@ __ATTR(data_extents_list, S_IRUGO|S_IWUSR, ct_data_extents_show, NULL);
 static struct castle_sysfs_entry ct_data_time =
 __ATTR(data_time, S_IRUGO|S_IWUSR, ct_data_time_show, NULL);
 
+static struct castle_sysfs_entry ct_nr_rwcts =
+__ATTR(nr_rw_arrays, S_IRUGO|S_IWUSR, ct_nr_rwcts_show, NULL);
+
 static struct attribute *castle_ct_attrs[] = {
     &ct_size.attr,
     &ct_daid.attr,
     &ct_merge_state.attr,
     &ct_data_extents.attr,
     &ct_data_time.attr,
+    &ct_nr_rwcts.attr,
     NULL,
 };
 
