@@ -541,14 +541,17 @@ int castle_freespace_print(struct castle_slave *cs, void *unused)
 {
     castle_freespace_t  *freespace;
 
-    freespace = freespace_sblk_get(cs);
-    castle_printk(LOG_INIT, "\tFreespace (0x%x) -> %u\n", cs->uuid, freespace->free_chk_cnt);
-    castle_printk(LOG_INIT, "\t\tprod: %d\n", freespace->prod);
-    castle_printk(LOG_INIT, "\t\tcons: %d\n", freespace->cons);
-    castle_printk(LOG_INIT, "\t\tprev_prod: %d\n", cs->prev_prod);
-    castle_printk(LOG_INIT, "\t\tnr_entries: %d\n", freespace->nr_entries);
-    castle_printk(LOG_INIT, "\t\tmax_entries: %d\n", freespace->max_entries);
-    freespace_sblk_put(cs, 0);
+    if (!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
+    {
+        freespace = freespace_sblk_get(cs);
+        castle_printk(LOG_INIT, "\tFreespace (0x%x) -> %u\n", cs->uuid, freespace->free_chk_cnt);
+        castle_printk(LOG_INIT, "\t\tprod: %d\n", freespace->prod);
+        castle_printk(LOG_INIT, "\t\tcons: %d\n", freespace->cons);
+        castle_printk(LOG_INIT, "\t\tprev_prod: %d\n", cs->prev_prod);
+        castle_printk(LOG_INIT, "\t\tnr_entries: %d\n", freespace->nr_entries);
+        castle_printk(LOG_INIT, "\t\tmax_entries: %d\n", freespace->max_entries);
+        freespace_sblk_put(cs, 0);
+    }
 
     return 0;
 }
