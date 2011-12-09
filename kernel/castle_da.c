@@ -12197,9 +12197,6 @@ static int castle_merge_run(void *_data)
                                               merge_thread->merge_id,
                                               merge_thread->work_id,
                                               0, 1);
-            merge_thread->merge_id = INVAL_MERGE_ID;
-
-            /* One thread per merge, for now. Exit thread. */
             break;
         }
         /* Merge not completed, but work completed successfully.
@@ -12217,9 +12214,11 @@ static int castle_merge_run(void *_data)
     } while(1);
 
     castle_time_interval_fini(&waiting_stats);
-    castle_printk(LOG_DEVEL, "Finished merge: %d. Timing stats:\n");
-    castle_time_intrval_print(LOG_DEVEL, &waiting_stats, "    ",  "Waiting for");
+    castle_printk(LOG_DEVEL, "Finished merge: %d. Timing stats:\n", merge_thread->merge_id);
+    castle_time_interval_print(LOG_DEVEL, &waiting_stats, "waiting for");
     castle_printk(LOG_DEVEL, "Thread destroy: %u\n", merge_thread->id);
+
+    merge_thread->merge_id = INVAL_MERGE_ID;
 
     castle_merge_threads_hash_remove(merge_thread);
 

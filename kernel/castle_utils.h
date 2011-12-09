@@ -407,6 +407,9 @@ void castle_printk_fini(void);
 
 /**
  * Timer structure used to track how long an operation take.
+ * It tracks when the interval is first initialised, how long it takes until it is
+ * finished. It also supports pause/unpause (stop/start). It maintains the
+ * total activity (sum of periods between start-stop).
  */
 typedef struct castle_time_interval {
     struct timeval start;
@@ -415,6 +418,10 @@ typedef struct castle_time_interval {
     struct timeval total_active;
 } c_time_interval_t;
 
+/**
+ * Reimplementation of a helper function for converting ns to timeval structure.
+ * Note that timeval is lower resolution than nsecs.
+ */
 static inline struct timeval ns_to_timeval_private(const s64 nsec)
 {
     struct timeval tv;
@@ -425,12 +432,19 @@ static inline struct timeval ns_to_timeval_private(const s64 nsec)
     return tv;
 }
 
+/**
+ * Initialise timeval structure. Record NOW() as the start of the interval existance.
+ */
 static inline void castle_time_interval_init(c_time_interval_t *interval)
 {
     memset(interval, 0, sizeof(c_time_interval_t));
     do_gettimeofday(&interval->start);
 }
 
+/**
+ * Start an activity period. After @see castle_time_interval_init() the interval is stopped.
+ * This needs to be started to start the activity.
+ */
 static inline void castle_time_interval_start(c_time_interval_t *interval)
 {
     /* Last start must be set NULL if we starting again. */
@@ -438,6 +452,10 @@ static inline void castle_time_interval_start(c_time_interval_t *interval)
     do_gettimeofday(&interval->last_start);
 }
 
+/**
+ * Finishes the activity period. Accouts the time delta (since start) into the total activity
+ * period.
+ */
 static inline void castle_time_interval_stop(c_time_interval_t *interval)
 {
     struct timeval current_time;
@@ -456,30 +474,39 @@ static inline void castle_time_interval_stop(c_time_interval_t *interval)
     memset(&interval->last_start, 0, sizeof(struct timeval));
 }
 
+/**
+ * Record the end of the interval existance. Note: no implicit @see castle_time_interval_stop().
+ */
 static inline void castle_time_interval_fini(c_time_interval_t *interval)
 {
     do_gettimeofday(&interval->end);
 }
 
-static inline void castle_time_intrval_print(c_printk_level_t printk_level,
-                                             c_time_interval_t *interval,
-                                             char *prefix,
-                                             char *active_label)
+/**
+ * Print activity interval stats (start time, duration, and total activity period).
+ *
+ * @param printk_level @see c_printk_level_t
+ * @param interval     interval to be printed
+ * @param active_label what label string to use for total active period
+ */
+static inline void castle_time_interval_print(c_printk_level_t printk_level,
+                                              c_time_interval_t *interval,
+                                              char *active_label)
 {
     long duration_ns;
 
     duration_ns  = timeval_to_ns(&interval->end);
     duration_ns -= timeval_to_ns(&interval->start);
-    castle_printk(printk_level, "%sStarted at : %ld.%06ld000.\n"
-                                "%sDuration   : %ld.%09ld.\n"
-                                "%s%s: %ld.%06ld000.\n",
-                                prefix, interval->start.tv_sec,
-                                        interval->start.tv_usec,
-                                prefix, (duration_ns / 1000000000LL),
-                                        (duration_ns % 1000000000LL),
-                                prefix, active_label,
-                                        interval->total_active.tv_sec,
-                                        interval->total_active.tv_usec);
+    castle_printk(printk_level, "Started at: %ld.%06ld000, "
+                                "duration: %ld.%09ld, "
+                                "%s: %ld.%06ld000.\n",
+                                interval->start.tv_sec,
+                                interval->start.tv_usec,
+                                (duration_ns / 1000000000LL),
+                                (duration_ns % 1000000000LL),
+                                active_label,
+                                interval->total_active.tv_sec,
+                                interval->total_active.tv_usec);
 }
 
 
