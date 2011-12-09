@@ -5564,7 +5564,7 @@ static void castle_cache_freelists_fini(void)
         return;
     }
 
-    list_splice(&castle_cache_page_reservelist, &castle_cache_page_freelist);
+    list_splice_init(&castle_cache_page_reservelist, &castle_cache_page_freelist);
     list_for_each_safe(l, t, &castle_cache_page_freelist)
     {
         list_del(l);
@@ -5574,7 +5574,7 @@ static void castle_cache_freelists_fini(void)
     }
 
 #ifdef CASTLE_DEBUG
-    list_splice(&castle_cache_block_reservelist, &castle_cache_block_freelist);
+    list_splice_init(&castle_cache_block_reservelist, &castle_cache_block_freelist);
     list_for_each_safe(l, t, &castle_cache_block_freelist)
     {
         list_del(l);
