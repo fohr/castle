@@ -176,7 +176,7 @@ static void castle_da_write_bvec_start(struct castle_double_array *da, c_bvec_t 
 static void castle_da_reserve(struct castle_double_array *da, c_bvec_t *c_bvec);
 static void castle_da_get(struct castle_double_array *da);
 static void castle_da_put(struct castle_double_array *da);
-static void castle_da_merge_serialise(struct castle_da_merge *merge);
+static void castle_da_merge_serialise(struct castle_da_merge *merge, int using_tvr, int tvr_new_key);
 static void castle_da_merge_marshall(struct castle_dmserlist_entry *merge_mstore,
                                      struct castle_in_tree_merge_state_entry *in_tree_merge_mstore,
                                      struct castle_da_merge *merge,
@@ -5391,8 +5391,10 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
         return EXIT_SUCCESS;
     }
 
-    if(MERGE_CHECKPOINTABLE(merge))
-        castle_da_merge_serialise(merge);
+    /* No tv_resolver; rely on merge->is_new_key for serialisation control; TODO@tr get rid of this
+       once the merge iterator provides is_new_key notification. */
+    if(MERGE_CHECKPOINTABLE(merge) && !merge->tv_resolver)
+        castle_da_merge_serialise(merge, 0 /* not using tvr */, 69 /* wutever... */);
 
     /* Make sure we got enough space for the entry_add() current cvt to be success. */
     while (castle_da_merge_space_reserve(merge, cvt))
@@ -5520,12 +5522,16 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
             if(castle_dfs_resolver_is_new_key_check(merge->tv_resolver, key))
             {
                 int ret;
+                if (MERGE_CHECKPOINTABLE(merge))
+                    castle_da_merge_serialise(merge, 1 /* using tvr */, 1 /* is a new key */);
                 ret = castle_da_merge_tv_resolver_flush(merge, max_nr_bytes);
                 if(ret == -ESHUTDOWN)
                     return -ESHUTDOWN;
                 if (ret != EXIT_SUCCESS)
                     goto err_out;
             }
+            if (MERGE_CHECKPOINTABLE(merge))
+                castle_da_merge_serialise(merge, 1 /* using tvr */, 0 /* not a new key */);
             castle_dfs_resolver_entry_add(merge->tv_resolver, key, cvt, version);
         }
         else
@@ -6156,7 +6162,7 @@ static void castle_da_merge_perf_stats_flush_reset(struct castle_double_array *d
  * @note positioning of the call is crucial: it MUST be after iter state is updated,
  *       and before the output tree is updated.
  */
-static void castle_da_merge_serialise(struct castle_da_merge *merge)
+static void castle_da_merge_serialise(struct castle_da_merge *merge, int using_tvr, int tvr_new_key)
 {
     int i;
     struct castle_double_array *da;
@@ -6217,10 +6223,16 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge)
 
     if( unlikely(current_state == INVALID_DAM_SERDES) )
     {
+        int is_new_key = 0;
         mutex_lock(&merge->serdes.mutex);
         BUG_ON(!merge->serdes.mstore_entry);
 
-        if( merge->is_new_key )
+        if( using_tvr )
+            is_new_key = tvr_new_key;
+        else
+            is_new_key = merge->is_new_key;
+
+        if( is_new_key )
         {
             /* update output tree state */
             castle_da_merge_marshall(merge->serdes.mstore_entry,
