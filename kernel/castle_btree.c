@@ -1351,8 +1351,8 @@ static void __castle_btree_submit(c_bvec_t *c_bvec,
     c2_block_t *c2b;
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
 
-    debug("%s::Asked for key: %p, in version 0x%x, on ct %d, reading ftree node" cep_fmt_str_nl,
-            __FUNCTION__, c_bvec->key, c_bvec->version, c_bvec->tree->seq, cep2str(node_cep));
+    debug("%s::[%p] Asked for key: %p, in version 0x%x, on ct %d, reading ftree node" cep_fmt_str_nl,
+            __FUNCTION__, c_bvec, c_bvec->key, c_bvec->version, c_bvec->tree->seq, cep2str(node_cep));
 
     ct = c_bvec->tree;
     btree = castle_btree_type_get(ct->btree_type);

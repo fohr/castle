@@ -4163,7 +4163,7 @@ static c_val_tup_t* _castle_da_entry_add(struct castle_da_merge *merge,
         }
     }
     else if (depth > 0)
-            write_lock_c2b(level->node_c2b);
+        write_lock_c2b(level->node_c2b);
 
     node = c2b_bnode(level->node_c2b);
     debug("Adding at idx=%d depth=%d into node %p for merge on da %d level %d\n",
@@ -4353,7 +4353,6 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
         dirty_c2b(node_c2b);
         write_unlock_c2b(node_c2b);
     }
-    BUG_ON(c2b_write_locked(node_c2b));
 
     /* Insert correct pointer in the parent, unless we've just completed the
        root node at the end of the merge. */
@@ -4376,6 +4375,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
             //btree->key_print(LOG_DEBUG, key);
 
             btree->entry_replace(parent_node, parent_node->used - 1, key, node->version, node_cvt);
+            dirty_c2b(parent_node_c2b);
             write_unlock_c2b(parent_node_c2b);
         }
         else
@@ -4397,15 +4397,17 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
        the corresponding buffer */
     node_idx = valid_end_idx + 1;
     BUG_ON(node_idx <= 0 || node_idx > node->used);
-    debug("%s::Entries to be copied to the buffer are in range [%d, %d)\n",
-            __FUNCTION__, node_idx, node->used);
+    debug("%s::[%p] Entries to be copied to the buffer are in range [%d, %d)\n",
+            __FUNCTION__, merge, node_idx, node->used);
     while(node_idx < node->used)
     {
         /* If merge is completing, there shouldn't be any splits any more. */
         BUG_ON(merge->completing);
+        /* We never expect to split non-leaf nodes */
+        BUG_ON(depth!=0);
         btree->entry_get(node, node_idx,  &key, &version, &cvt);
-        debug("%s::spliting node at depth %d for da %d level %d.\n",
-                __FUNCTION__, depth, merge->da->id, merge->level);
+        debug("%s::[%p] spliting node at depth %d, cep "cep_fmt_str_nl,
+                __FUNCTION__, merge, depth, cep2str(node_c2b->cep));
         castle_da_entry_add(merge, depth, key, version, cvt, 1);
         node_idx++;
         BUG_ON(level->node_c2b == NULL);
@@ -4413,14 +4415,16 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
         BUG_ON(level->next_idx < 0);
     }
 
-    write_lock_c2b(node_c2b);
     debug("Dropping entries [%d, %d] from the original node\n",
             valid_end_idx + 1, node->used - 1);
     /* Now that entries are safely in the new node, drop them from the node */
     if((valid_end_idx + 1) <= (node->used - 1))
+    {
+        write_lock_c2b(node_c2b);
         btree->entries_drop(node, valid_end_idx + 1, node->used - 1);
-    dirty_c2b(node_c2b);
-    write_unlock_c2b(node_c2b);
+        dirty_c2b(node_c2b);
+        write_unlock_c2b(node_c2b);
+    }
 
     BUG_ON(node->used != valid_end_idx + 1);
     if(merge->completing && (atomic_read(&merge->out_tree->tree_depth) == depth + 1))
@@ -4455,7 +4459,9 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     }
 
     /* Update partial merge partition redirection key */
-    if((depth == PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL) && (!merge->completing))
+    if( (MERGE_CHECKPOINTABLE(merge)) &&
+        (depth == PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL) &&
+        (!merge->completing))
         castle_da_merge_new_partition_update(merge, node_c2b, last_key);
 
     put_c2b(node_c2b);
@@ -5184,6 +5190,7 @@ static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
     unsigned int cep_arr_index = 0;
     unsigned int max_cep_arr_index = merge->nr_trees + merge->nr_drain_exts;
 
+    BUG_ON(!MERGE_CHECKPOINTABLE(merge));
     BUG_ON(!merge);
     BUG_ON(!node_c2b);
     BUG_ON(!key);
@@ -5235,9 +5242,6 @@ static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
     atomic64_inc(&merge->da->stats.partial_merges.partition_updates);
 
     /* == update extents shrink boundaries == */
-    if(!MERGE_CHECKPOINTABLE(merge))
-        return; /* cannot shrink extents for non-checkpointable merges */
-
     BUG_ON(!merge->in_tree_shrinkable_cep);
     BUG_ON(!merge->merged_iter);
     BUG_ON(!merge->merged_iter->iterators);
