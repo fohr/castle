@@ -4828,6 +4828,20 @@ static void castle_da_merge_trees_cleanup(struct castle_da_merge *merge, int err
         BUG_ON(atomic_read(&out_tree->write_ref_count) != 0);
     }
 
+    /* If the merge is aborting release extra reference on LO. This has no side effects, just
+     * for the sake of more sanity checks at extents_fini(). */
+    if (err == -ESHUTDOWN && out_tree)
+    {
+        struct list_head *lh;
+
+        list_for_each(lh, &out_tree->large_objs)
+        {
+            struct castle_large_obj_entry *lo = list_entry(lh, struct castle_large_obj_entry, list);
+
+            castle_extent_unlink(lo->ext_id);
+        }
+    }
+
     /* Delete the old trees from DA list.
        Note 1: Old trees may still be used by IOs and will only be destroyed on the last ct_put.
                But we want to remove it from the DA straight away. The out_tree now takes over
