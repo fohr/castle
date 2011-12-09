@@ -406,7 +406,7 @@ static USED char *castle_lfs_vct_type_str[] = {
     "LFS_VCT_T_INVALID"
 };
 
-typedef int       (*c_ext_event_callback_t)                (void *data);
+typedef void (*c_ext_event_callback_t) (void *data);
 
 typedef struct castle_extent_freespace {
     c_ext_id_t      ext_id;

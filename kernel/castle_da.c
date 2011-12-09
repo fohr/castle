@@ -3491,14 +3491,9 @@ no_space:
  *
  * @param   data    castle_da_lfs_ct_t pointer
  *
- * @return  0       We always return success regardless of whether
- *                  castle_da_all_rwcts_create() succeeds.  If an extent fails
- *                  to be correctly allocate a further LFS handler with this
- *                  callback will be registered
- *
  * @also castle_da_all_rwcts_create()
  */
-static int castle_da_lfs_all_rwcts_callback(void *data)
+static void castle_da_lfs_all_rwcts_callback(void *data)
 {
     struct castle_da_lfs_ct_t *lfs = data;
     struct castle_double_array *da = lfs->da;
@@ -3514,8 +3509,6 @@ static int castle_da_lfs_all_rwcts_callback(void *data)
      * this doubling-array.  Ensure we do it after all_rwcts_create() to
      * prevent races. */
     atomic_dec(&da->lfs_victim_count);
-
-    return 0;
 }
 
 /**
@@ -3526,14 +3519,14 @@ static int castle_da_lfs_all_rwcts_callback(void *data)
  *
  * @also castle_da_lfs_ct_space_alloc
  */
-static int castle_da_lfs_rwct_callback(void *data)
+static void castle_da_lfs_rwct_callback(void *data)
 {
-    return castle_da_lfs_ct_space_alloc(data,
-                                        1,    /* Reallocation. */
-                                        castle_da_lfs_rwct_callback,
-                                        data,
-                                        0,    /* T0. Dont use SSDs. */
-                                        0);   /* T0. Extents not growable. */
+    castle_da_lfs_ct_space_alloc(data,
+                                 1,     /* Reallocation. */
+                                 castle_da_lfs_rwct_callback,
+                                 data,
+                                 0,     /* T0. Dont use SSDs. */
+                                 0);    /* T0. Extents not growable. */
 }
 
 /**
@@ -3544,23 +3537,23 @@ static int castle_da_lfs_rwct_callback(void *data)
  *
  * @also castle_da_lfs_ct_space_alloc
  */
-static USED int castle_da_lfs_merge_ct_callback(void *data)
+static void castle_da_lfs_merge_ct_callback(void *data)
 {
-    return castle_da_lfs_ct_space_alloc(data,
-                                        1,    /* Reallocation. */
-                                        castle_da_lfs_merge_ct_callback,
-                                        data,
-                                        1,    /* Not a T0. Use SSD. */
-                                        0);   /* Extents not growable. */
+    castle_da_lfs_ct_space_alloc(data,
+                                 1,     /* Reallocation. */
+                                 castle_da_lfs_merge_ct_callback,
+                                 data,
+                                 1,     /* Not a T0. Use SSD. */
+                                 0);    /* Extents not growable. */
 }
-static USED int castle_da_lfs_merge_ct_growable_callback(void *data)
+static void castle_da_lfs_merge_ct_growable_callback(void *data)
 {
-    return castle_da_lfs_ct_space_alloc(data,
-                                        1,    /* Reallocation. */
-                                        castle_da_lfs_merge_ct_growable_callback,
-                                        data,
-                                        1,    /* Not a T0. Use SSD. */
-                                        1);   /* Extents growable. */
+    castle_da_lfs_ct_space_alloc(data,
+                                 1,     /* Reallocation. */
+                                 castle_da_lfs_merge_ct_growable_callback,
+                                 data,
+                                 1,     /* Not a T0. Use SSD. */
+                                 1);    /* Extents growable. */
 }
 
 static void castle_da_merge_res_pool_attach(struct castle_da_merge *merge)

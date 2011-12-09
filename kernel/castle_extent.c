@@ -3370,29 +3370,15 @@ void castle_extent_lfs_victims_wakeup(void)
     while (!list_empty(&head))
     {
         c_ext_event_t *hdl = list_first_entry(&head, c_ext_event_t, list);
-        int ret = 0;
 
         /* No need to call handlers in case module is exiting. No point of creating more extents
          * for components just before they die. */
         if (!castle_last_checkpoint_ongoing)
-            ret = hdl->callback(hdl->data);
+            hdl->callback(hdl->data);
 
          /* Handled low free space successfully. Get rid of event handler. */
          list_del(&hdl->list);
          castle_kfree(hdl);
-
-         /* Callback failed, add remaining callbacks back to the list and break. */
-         if (ret)
-         {
-             if (!list_empty(&head))
-             {
-                castle_extent_transaction_start();
-                list_append(&castle_lfs_victim_list, &head);
-                castle_extent_transaction_end();
-             }
-
-             break;
-         }
     }
 }
 
@@ -5916,11 +5902,10 @@ static void initialise_extent_state(c_ext_t * ext)
 static int  out_of_freespace = 0;
 static int  freespace_added = 0;
 
-int castle_extents_process_callback(void *data)
+void castle_extents_process_callback(void *data)
 {
     freespace_added = 1;
     wake_up(&process_io_waitq);
-    return 0;
 }
 
 static int freespace_available(void)
