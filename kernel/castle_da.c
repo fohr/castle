@@ -8602,6 +8602,7 @@ static void __castle_da_level0_modified_promote(struct work_struct *work)
     struct castle_double_array *da;
     struct castle_component_tree *ct;
     int cpu_index;
+    int create_failed;
 
     da = container_of(work, struct castle_double_array, work);
 
@@ -8609,6 +8610,7 @@ static void __castle_da_level0_modified_promote(struct work_struct *work)
     while (castle_da_growing_rw_test_and_set(da) != EXIT_SUCCESS)
         msleep_interruptible(1);
 
+    create_failed = 0;
     for (cpu_index = 0; cpu_index < castle_double_array_request_cpus(); cpu_index++)
     {
         ct = castle_da_rwct_get(da, cpu_index);
@@ -8617,7 +8619,6 @@ static void __castle_da_level0_modified_promote(struct work_struct *work)
          * CTs at level 1 will be written to disk by the checkpoint thread. */
         if (atomic64_read(&ct->item_count) != 0)
         {
-            int create_failed;
             castle_printk(LOG_INFO, "Promote for DA 0x%x level 0 RWCT seq %u (has %ld items)\n",
                     da->id, ct->seq, atomic64_read(&ct->item_count));
             create_failed = __castle_da_rwct_create(da,
@@ -8625,11 +8626,10 @@ static void __castle_da_level0_modified_promote(struct work_struct *work)
                                                     0 /*in_tran*/,
                                                     LFS_VCT_T_INVALID,
                                                     1 /*lfs_check*/);
-            if (create_failed)
-                goto out;
         }
-
         castle_ct_put(ct, 1 /*write*/, NULL);
+        if (create_failed)
+            goto out;
     }
 
 out:
