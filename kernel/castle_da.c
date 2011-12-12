@@ -5740,6 +5740,11 @@ deser_done:
         }
 
         BUG_ON(castle_merge_thread_attach(merge->id, thread_id));
+
+        /* Get a reference on DA, if this deserialisation of the merge from previous run.
+         * For other cases, we must have already gotten the reference. Reference would be
+         * released by merge thread. */
+        castle_da_get(da);
     }
 
     /* We need a DFS resolver if we are timestamping, of if this is the top-level merge and we need
