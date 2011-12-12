@@ -12153,8 +12153,8 @@ static int castle_merge_run(void *_data)
 
     atomic_inc(&castle_da_merge_thread_count);
 
-    /* Get a reference for this thread. */
-    castle_da_get(da);
+    /* Note: Already took a reference on da in castle_da_merge_fill_trees. Safe to access
+     * da pointer. */
 
     castle_time_interval_init(&waiting_stats);
     do {
@@ -12228,8 +12228,8 @@ static int castle_merge_run(void *_data)
 
     castle_da_put(da);
 
-    /* Note: Mereg thread code isnot very clean. Changes from user level merge handling to kernel are
-     * particularly. Clean it up before v2. */
+    /* Note: Merge thread code is not very clean. Changes from user level merge handling to kernel
+     * are particularly. Clean it up before v2. */
     BUG_ON(kthread_should_stop());
 
     do_exit(0);
@@ -12295,7 +12295,8 @@ static int castle_da_id_get_from_ct(tree_seq_t ct_seq, c_da_t *da_id)
 }
 
 static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_ids,
-                                      struct castle_component_tree **in_trees)
+                                      struct castle_component_tree **in_trees,
+                                      struct castle_double_array **da_p)
 {
     int i, found, ret;
     c_da_t da_id;
@@ -12339,7 +12340,7 @@ static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_id
                                         "array first. But, array 0x%llx is not following 0x%llx\n",
                                         array_ids[i], array_ids[i-1]);
             ret = C_ERR_MERGE_ARRAYS_OOO;
-            goto err_out;
+            goto out;
         }
 
         /* Check if the tree is already marked for merge. */
@@ -12347,7 +12348,7 @@ static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_id
         {
             castle_printk(LOG_USERINFO, "Array is already merging: 0x%llx\n", array_ids[i]);
             ret = C_ERR_MERGE_ARRAY_BUSY;
-            goto err_out;
+            goto out;
         }
 
         /* Work out what type of trees we are going to merge. Return, if in_trees don't match. */
@@ -12370,17 +12371,24 @@ static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_id
             break;
     }
 
-err_out:
+out:
     read_unlock(&da->lock);
 
     if (ret)
+    {
+        castle_da_put(da);
         return ret;
+    }
 
     if (i != nr_arrays)
     {
-        castle_printk(LOG_USERINFO, "Couldn't find the array 0x%llx in the array list\n", array_ids[i]);
+        castle_printk(LOG_USERINFO, "Couldn't find the array 0x%llx in the array list\n",
+                                     array_ids[i]);
+        castle_da_put(da);
         return C_ERR_MERGE_INVAL_ARRAY;
     }
+
+    *da_p = da;
 
     return 0;
 }
@@ -12388,7 +12396,7 @@ err_out:
 int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int level)
 {
     struct castle_component_tree **in_trees = NULL;
-    struct castle_double_array *da;
+    struct castle_double_array *da = NULL;
     struct castle_da_merge *merge = NULL;
     int ret = 0;
     int i, j;
@@ -12414,18 +12422,11 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
     }
 
     /* Get array objects from IDs. */
-    ret = castle_da_merge_fill_trees(merge_cfg->nr_arrays, merge_cfg->arrays, in_trees);
+    ret = castle_da_merge_fill_trees(merge_cfg->nr_arrays, merge_cfg->arrays, in_trees, &da);
     if (ret)
         goto err_out;
 
-    /* Get doubling array. */
-    da = in_trees[0]->da;
-    if (!da)
-    {
-        castle_printk(LOG_USERINFO, "Couldn't find corresposing version tree.\n");
-        ret = C_ERR_MERGE_INVAL_DA;
-        goto err_out;
-    }
+    BUG_ON(!da);
 
     if (merge_cfg->nr_data_exts == MERGE_ALL_DATA_EXTS)
     {
@@ -12531,7 +12532,10 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
 
 err_out:
 
-    /* All userspace errors are +ve. */
+    if (da)
+        castle_da_put(da);
+
+    /* All user-space errors are +ve. */
     BUG_ON(ret <= 0);
     if (merge)
         castle_da_merge_dealloc(merge, ret, 1 /* In transaction. */);
