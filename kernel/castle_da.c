@@ -4399,8 +4399,6 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     {
         /* If merge is completing, there shouldn't be any splits any more. */
         BUG_ON(merge->completing);
-        /* We never expect to split non-leaf nodes */
-        BUG_ON(depth!=0);
         btree->entry_get(node, node_idx,  &key, &version, &cvt);
         debug("%s::[%p] spliting node at depth %d, cep "cep_fmt_str_nl,
                 __FUNCTION__, merge, depth, cep2str(node_c2b->cep));
