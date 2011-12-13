@@ -5534,9 +5534,9 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
             if(castle_dfs_resolver_is_new_key_check(merge->tv_resolver, key))
             {
                 int ret;
+                ret = castle_da_merge_tv_resolver_flush(merge, max_nr_bytes);
                 if (MERGE_CHECKPOINTABLE(merge))
                     castle_da_merge_serialise(merge, 1 /* using tvr */, 1 /* is a new key */);
-                ret = castle_da_merge_tv_resolver_flush(merge, max_nr_bytes);
                 if(ret == -ESHUTDOWN)
                     return -ESHUTDOWN;
                 if (ret != EXIT_SUCCESS)
