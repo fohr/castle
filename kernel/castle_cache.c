@@ -5772,11 +5772,6 @@ int castle_slaves_superblock_invalidate(void)
 
         /* Get c2b for superblock. */
         c2b = castle_cache_block_get(cep, 2);
-        if (!c2b)
-        {
-            rcu_read_unlock();
-            return -ENOMEM;
-        }
 
         write_lock_c2b(c2b);
         if(!c2b_uptodate(c2b))
