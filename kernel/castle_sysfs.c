@@ -1243,8 +1243,13 @@ static ssize_t merge_in_trees_show(struct kobject *kobj,
 
     for (i=0; i<merge->nr_trees; i++)
     {
-        offset += sprintf(buf+offset, "0x%llx ", merge->in_trees[i]->seq);
-        BUG_ON(offset > PAGE_SIZE);
+        /* Buffer is of size one page. Make sure we don't cross the page boundary. */
+        offset += snprintf(buf+offset, PAGE_SIZE-offset, "0x%llx ", merge->in_trees[i]->seq);
+        if (offset > PAGE_SIZE)
+        {
+            sprintf(buf + PAGE_SIZE - 20, "Overloaded...\n");
+            return strlen(buf);
+        }
     }
 
     return offset;
