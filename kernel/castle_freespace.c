@@ -419,29 +419,27 @@ void castle_freespace_slave_superchunk_free(struct castle_slave *cs,
 sector_t get_bd_capacity(struct block_device *bd);
 static int castle_freespace_print(struct castle_slave *cs, void *unused);
 
-/* Load on-disk structures into memory */
+/*
+ * Initialise freespace for a slave. If it's fresh then calculate initial values. If it's an
+ * already existing slave, then copy it from the cs_superblock. If it's an OOS slave
+ * then default-initialise it for safety.
+ */
 int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
 {
     castle_freespace_t      *freespace;
-    uint64_t                 disk_sz = (get_bd_capacity(cs->bdev) << 9);
     c_chk_cnt_t              nr_chunks;
+    int                      slave_oos = test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags);
 
     BUG_ON(!POWOF2(sizeof(c_chk_t)));
-    BUG_ON(cs->sup_ext == INVAL_EXT_ID);
+    BUG_ON((cs->sup_ext == INVAL_EXT_ID) && (!slave_oos));
 
     freespace = &cs->freespace;
-    if (!fresh)
+    memset(freespace, 0, sizeof(castle_freespace_t));
+    if (fresh)
     {
-        struct castle_slave_superblock *sblk;
+        uint64_t disk_sz = (get_bd_capacity(cs->bdev) << 9);
 
-        sblk = castle_slave_superblock_get(cs);
-        memcpy(freespace, &sblk->freespace, sizeof(castle_freespace_t));
-        castle_slave_superblock_put(cs, 0);
-    }
-    else
-    {
         debug("Initialising new device\n");
-        memset(freespace, 0, sizeof(castle_freespace_t));
         freespace->disk_size   = disk_sz / C_CHK_SIZE - FREE_SPACE_START;
         if (castle_slaves_size && castle_slaves_size < freespace->disk_size)
             freespace->disk_size = castle_slaves_size;
@@ -452,6 +450,15 @@ int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
            ages. */
         freespace->max_entries *= 2;
     }
+    else if (!slave_oos)
+    {
+        struct castle_slave_superblock *sblk;
+
+        sblk = castle_slave_superblock_get(cs);
+        memcpy(freespace, &sblk->freespace, sizeof(castle_freespace_t));
+        castle_slave_superblock_put(cs, 0);
+    }
+
     mutex_init(&cs->freespace_lock);
 
     cs->reserved_schks = 0;
@@ -475,7 +482,8 @@ int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
 
     cs->frozen_prod = cs->prev_prod = freespace->prod;
 
-    castle_freespace_print(cs, NULL);
+    if (!slave_oos)
+        castle_freespace_print(cs, NULL);
 
     return 0;
 }

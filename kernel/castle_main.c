@@ -477,9 +477,10 @@ static struct castle_slave *castle_slave_ghost_add(uint32_t uuid)
     slave->id = slave_id++;
     slave->sup_ext = INVAL_EXT_ID;
     mutex_init(&slave->sblk_lock);
-    INIT_RCU_HEAD(&slave->rcu);
     set_bit(CASTLE_SLAVE_GHOST_BIT, &slave->flags);
     set_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags);
+    castle_freespace_slave_init(slave, 0);
+    INIT_RCU_HEAD(&slave->rcu);
     list_add_rcu(&slave->list, &castle_slaves.slaves);
 
     if (castle_sysfs_slave_add(slave) != 0)
@@ -684,7 +685,10 @@ int castle_fs_init(void)
     {
         cs = list_entry(lh, struct castle_slave, list);
         if (test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
+        {
+            castle_freespace_slave_init(cs, 0);
             continue;
+        }
         if ((cs->cs_superblock.fs_version != bcv) &&
                 (castle_slave_version_load(cs, bcv)))
         {
