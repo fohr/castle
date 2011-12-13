@@ -5780,7 +5780,20 @@ int castle_slaves_superblock_invalidate(void)
 
         write_lock_c2b(c2b);
         if(!c2b_uptodate(c2b))
-            BUG_ON(submit_c2b_sync(READ, c2b));
+        {
+            ret = (submit_c2b_sync(READ, c2b));
+            if (ret)
+            {
+                /*
+                 * If the read failed due to the slave now being OOS, then we don't care.
+                 * We can't handle any other reason for this to fail.
+                 */
+                BUG_ON(!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags));
+                write_unlock_c2b(c2b);
+                put_c2b(c2b);
+                continue;
+            }
+        }
 
         /* The buffer is the superblock. */
         superblock = (struct castle_slave_superblock *)c2b_buffer(c2b);
