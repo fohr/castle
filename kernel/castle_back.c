@@ -2974,6 +2974,9 @@ static void castle_back_big_put(void *data)
     if (err)
         goto err2;
 
+    /* To prevent #3144. */
+    might_resched();
+
     return;
 
 err2: castle_attachment_put(attachment);
@@ -2985,6 +2988,8 @@ err1: /* Safe as no-one could have queued up an op - we have not returned token 
       castle_back_put_stateful_op(conn, stateful_op);
 err0: castle_free(op->key);
       castle_back_reply(op, err, 0, 0, 0);
+      /* To prevent #3144. */
+      might_resched();
 }
 
 /**
@@ -3157,10 +3162,15 @@ static void castle_back_put_chunk(void *data)
 
     spin_unlock(&stateful_op->lock);
 
+    /* To prevent #3144. */
+    might_resched();
+
     return;
 
 err1: castle_back_buffer_put(conn, op->buf);
 err0: castle_back_reply(op, err, 0, 0, 0);
+    /* To prevent #3144. */
+    might_resched();
 }
 
 static void castle_back_put_chunk_continue(void *data)
@@ -3168,6 +3178,9 @@ static void castle_back_put_chunk_continue(void *data)
     struct castle_back_stateful_op *stateful_op = data;
 
     castle_object_replace_continue(&stateful_op->replace);
+
+    /* To prevent #3144. */
+    might_resched();
 }
 
 /*
