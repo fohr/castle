@@ -4051,7 +4051,7 @@ static inline void castle_da_merge_node_info_get(struct castle_da_merge *merge,
  * the key gets added.  Used when entry is being moved from one node to another
  * node.
  */
-static c_val_tup_t* _castle_da_entry_add(struct castle_da_merge *merge,
+static c_val_tup_t _castle_da_entry_add(struct castle_da_merge *merge,
                                          int depth,
                                          void *key,
                                          c_ver_t version,
@@ -4065,7 +4065,7 @@ static c_val_tup_t* _castle_da_entry_add(struct castle_da_merge *merge,
 #ifdef CASTLE_PERF_DEBUG
     struct timespec ts_start, ts_end;
 #endif
-    c_val_tup_t* preadoption_cvt = NULL;
+    c_val_tup_t  preadoption_cvt = INVAL_VAL_TUP;
     uint8_t      new_root_node   = 0;
     uint16_t     new_node_size   = 0;
     c_ext_pos_t  new_cep         = INVAL_EXT_POS;
@@ -4152,8 +4152,7 @@ static c_val_tup_t* _castle_da_entry_add(struct castle_da_merge *merge,
         if ( atomic_read(&merge->out_tree->tree_depth) > (depth+1) )
         {
             BUG_ON(new_root_node);
-            preadoption_cvt = castle_zalloc(sizeof(c_val_tup_t), GFP_KERNEL); /* free'd by caller */
-            CVT_NODE_INIT(*preadoption_cvt,
+            CVT_NODE_INIT(preadoption_cvt,
                           level->node_c2b->nr_pages * C_BLK_SIZE,
                           level->node_c2b->cep);
         }
@@ -4264,39 +4263,29 @@ static void castle_da_entry_add(struct castle_da_merge *merge,
                                 int depth,
                                 void *key,
                                 c_ver_t version,
-                                c_val_tup_t _cvt,
+                                c_val_tup_t cvt,
                                 int is_re_add)
 {
-    signed int initial_root_depth = atomic_read(&merge->out_tree->tree_depth);
-    c_val_tup_t* cvt = &_cvt;
-    int cvt_is_preadoption_cvt = 0;
-    c_val_tup_t* preadoption_cvt = NULL;
+    c_val_tup_t preadoption_cvt;
 
-    do{
-        if (depth==0)
-            BUG_ON(!CVT_LEAF_VAL(*cvt) && !CVT_LOCAL_COUNTER(*cvt));
+    if (depth==0)
+        BUG_ON(!CVT_LEAF_VAL(cvt) && !CVT_LOCAL_COUNTER(cvt));
 
-        preadoption_cvt = _castle_da_entry_add(merge, depth, key, version, *cvt, is_re_add);
+    do {
+        preadoption_cvt = _castle_da_entry_add(merge, depth, key, version, cvt, is_re_add);
 
-        if (cvt_is_preadoption_cvt)
-            castle_check_kfree(cvt); /* preadoption_cvt malloc'd by _castle_da_entry_add */
+        if(CVT_INVALID(preadoption_cvt))
+            return; /* no new node was created, nothing new to adopt, so return now. */
 
-        if (!preadoption_cvt) return; /* no new node created */
-
+        /* prepare for next loop iteration, to preadopt newly created node */
         cvt = preadoption_cvt;
-        preadoption_cvt = NULL;
-        cvt_is_preadoption_cvt = 1;
-
         key = merge->out_btree->max_key;
         is_re_add = 0;
         depth++;
 
-        /* at most this loop can add 1 level */
-        BUG_ON(depth > initial_root_depth+2);
-        BUG_ON(atomic_read(&merge->out_tree->tree_depth) > (initial_root_depth+1) );
         debug("%s::[%p] preadopting new orphan node for merge id %u level %d.\n",
                 __FUNCTION__, merge, merge->id, merge->level);
-    } while(true); /* rely on the return value from _castle_da_entry_add to break */
+    } while(true); /* we rely on the ret from _castle_da_entry_add to break out of the loop */
 }
 
 static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
