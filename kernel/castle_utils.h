@@ -219,44 +219,7 @@ static inline void SKB_STR_CPY(struct sk_buff *skb, void *dst, int str_len, int 
     BUG_ON(!pskb_pull(skb, str_len));
 }
 
-static inline c_bio_t* castle_utils_bio_alloc(int nr_bvecs)
-{
-    c_bio_t *c_bio;
-    c_bvec_t *c_bvecs;
-    int i;
-
-    /* Allocate bio & bvec structures in one memory block */
-    c_bio = castle_malloc(sizeof(c_bio_t) + nr_bvecs * sizeof(c_bvec_t), GFP_KERNEL);
-    if(!c_bio)
-        return NULL;
-    c_bvecs = (c_bvec_t *)(c_bio + 1);
-    for (i = 0; i < nr_bvecs; i++)
-    {
-        c_bvecs[i].cpu       = -1;
-        c_bvecs[i].c_bio     = c_bio;
-        c_bvecs[i].tree      = NULL;
-        c_bvecs[i].cts_proxy = NULL;
-        c_bvecs[i].cts_index = -1;
-        CVT_INVALID_INIT(c_bvecs[i].accum);
-        c_bvecs[i].flags     = 0;
-        /* The following 2 flags must be set for pulls and gets. They are not used for other
-           ops so it's safe to set them for all ops. */
-        set_bit(CBV_PG_RSLV_COUNTERS, &c_bvecs[i].flags);
-        set_bit(CBV_PG_RSLV_TIMESTAMPS, &c_bvecs[i].flags);
-#ifdef CASTLE_PERF_DEBUG
-        c_bvecs[i].timeline  = NULL;
-#endif
-#ifdef CASTLE_DEBUG
-        atomic_set(&c_bvecs[i].read_passes, 0);
-#endif
-    }
-    c_bio->c_bvecs = c_bvecs;
-    /* Single reference taken out, the user decides how many more to take */
-    c_bio->count   = ATOMIC(1);
-    c_bio->err     = 0;
-
-    return c_bio;
-}
+c_bio_t *castle_utils_bio_alloc(int nr_bvecs);
 
 static inline void castle_utils_bio_free(c_bio_t *bio)
 {
