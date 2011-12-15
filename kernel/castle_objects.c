@@ -1539,7 +1539,6 @@ int castle_object_get(struct castle_object_get *get,
     c_bvec->key             = key;
     c_bvec->cpu_index       = cpu_index;
     c_bvec->cpu             = castle_double_array_request_cpu(c_bvec->cpu_index);
-    c_bvec->accum           = INVAL_VAL_TUP;
     c_bvec->val_get         = castle_object_value_acquire;
     c_bvec->val_put         = castle_object_value_release;
     c_bvec->submit_complete = castle_object_get_complete;
