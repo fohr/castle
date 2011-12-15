@@ -10030,6 +10030,7 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     if(ct->seq >= (1ULL<<TREE_SEQ_SHIFT))
     {
         castle_printk(LOG_ERROR, "Could not allocate a CT because of sequence # overflow.\n");
+        castle_kfree(ct->data_exts);
         castle_kfree(ct);
         return NULL;
     }
