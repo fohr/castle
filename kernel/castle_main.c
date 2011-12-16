@@ -33,35 +33,7 @@ struct castle               castle;
 struct castle_slaves        castle_slaves;
 
 struct castle_attachments    castle_attachments;
-struct castle_component_tree castle_global_tree = {.seq             = GLOBAL_TREE,
-                                                   .data_age        = 0,
-                                                   .ref_count       = {1},
-                                                   .write_ref_count = {1},
-                                                   .item_count      = {0ULL},
-                                                   .btree_type      = MTREE_TYPE,
-                                                   .dynamic         = 1,
-                                                   .da              = NULL,
-                                                   .level           = -1,
-                                                   .node_sizes      = {[0 ... (MAX_BTREE_DEPTH-1)] =
-                                                                       MTREE_NODE_SIZE},
-                                                   .tree_depth      = ATOMIC(-1),
-                                                   .root_node       = INVAL_EXT_POS,
-                                                   .da_list         = {NULL, NULL},
-                                                   .hash_list       = {NULL, NULL},
-                                                   .large_objs      = {NULL, NULL},
-                                                   .internal_ext_free = {INVAL_EXT_ID,
-                                                                       (100 * C_CHK_SIZE),
-                                                                       {0ULL},
-                                                                       {0ULL}},
-                                                   .tree_ext_free   = {INVAL_EXT_ID,
-                                                                       (100 * C_CHK_SIZE),
-                                                                       {0ULL},
-                                                                       {0ULL}},
-                                                   .data_ext_free   = {INVAL_EXT_ID,
-                                                                       (512ULL * C_CHK_SIZE),
-                                                                       {0ULL},
-                                                                       {0ULL}},
-                                                  };
+struct castle_component_tree *castle_global_tree;
 
 static DEFINE_MUTEX(castle_sblk_lock);
 struct castle_fs_superblock global_fs_superblock;
@@ -493,61 +465,93 @@ extern atomic_t current_rebuild_seqno;
 
 int castle_global_tree_init(void)
 {
+    int ret = 0;
     c2_block_t *c2b;
-    int        ret;
+    struct castle_component_tree *ct = NULL;
+
+    /* Allocation shouldn't have been done already. */
+    BUG_ON(castle_global_tree != NULL);
 
     /* Init global tree. */
-    castle_ct_init(&castle_global_tree, NULL, 1);
+    ct = castle_ct_alloc(NULL,           /* DA              */
+                         -1,             /* Level           */
+                         GLOBAL_TREE,    /* CT seq          */
+                         1,              /* # Data extents  */
+                         0);             /* # RWCTs in tree */
+    if (!ct)
+    {
+        ret = -ENOMEM;
+        goto err_out;
+    }
 
-    castle_global_tree.seq          = GLOBAL_TREE;
-    castle_global_tree.dynamic      = 1;
-    castle_global_tree.internal_ext_free.ext_size   = 100 * C_CHK_SIZE;
-    castle_global_tree.tree_ext_free.ext_size       = 100 * C_CHK_SIZE;
-    castle_global_tree.data_ext_free.ext_size       = 512ULL * C_CHK_SIZE;
+    ct->dynamic                      = 1;
+    ct->internal_ext_free.ext_size   = 100 * C_CHK_SIZE;
+    ct->tree_ext_free.ext_size       = 100 * C_CHK_SIZE;
+    ct->data_ext_free.ext_size       = 512ULL * C_CHK_SIZE;
 
     castle_extent_transaction_start();
 
-    if ((ret = castle_new_ext_freespace_init(&castle_global_tree.tree_ext_free,
+    if ((ret = castle_new_ext_freespace_init(&ct->tree_ext_free,
                                               INVAL_DA,
                                               EXT_T_GLOBAL_BTREE,
-                                              castle_global_tree.tree_ext_free.ext_size, 1,
+                                              ct->tree_ext_free.ext_size, 1,
                                               NULL, NULL)) < 0)
     {
         castle_printk(LOG_ERROR, "Failed to allocate space for Global Tree.\n");
         castle_extent_transaction_end();
-        return ret;
+        goto err_out;
     }
 
-    if ((ret = castle_new_ext_freespace_init(&castle_global_tree.data_ext_free,
+    if ((ret = castle_new_ext_freespace_init(&ct->data_ext_free,
                                               INVAL_DA,
                                               EXT_T_BLOCK_DEV,
-                                              castle_global_tree.data_ext_free.ext_size, 1,
+                                              ct->data_ext_free.ext_size, 1,
                                               NULL, NULL)) < 0)
     {
         castle_printk(LOG_ERROR, "Failed to allocate space for Global Tree Medium Objects.\n");
         castle_extent_transaction_end();
-        return ret;
+        goto err_out;
     }
 
     castle_extent_transaction_end();
 
     /* Create data extent object. */
-    castle_data_ext_add(castle_global_tree.data_ext_free.ext_id, 0, 0, 0);
-    castle_ct_data_ext_link(castle_global_tree.data_ext_free.ext_id, &castle_global_tree);
+    castle_data_ext_add(ct->data_ext_free.ext_id, 0, 0, 0);
+    castle_ct_data_ext_link(ct->data_ext_free.ext_id, ct);
 
-    c2b = castle_btree_node_create(&castle_global_tree,
+    c2b = castle_btree_node_create(ct,
                                    0 /* version */,
                                    0 /* level */,
                                    0 /* wasn't preallocated */);
     /* Save the root node in the global tree */
-    castle_global_tree.root_node = c2b->cep;
+    ct->root_node = c2b->cep;
     /* We know that the tree is 1 level deep at the moment */
-    atomic_set(&castle_global_tree.tree_depth, 1);
+    atomic_set(&ct->tree_depth, 1);
     /* Release btree node c2b */
     write_unlock_c2b(c2b);
     put_c2b(c2b);
 
+    castle_global_tree = ct;
+
     return 0;
+
+err_out:
+    BUG_ON(ret == 0);
+
+    if (ct)
+    {
+        castle_ext_freespace_fini(&ct->tree_ext_free);
+        castle_ext_freespace_fini(&ct->data_ext_free);
+        castle_ct_dealloc(ct);
+    }
+
+    return ret;
+}
+
+void castle_global_tree_free(void)
+{
+    if (castle_global_tree)
+        castle_ct_dealloc(castle_global_tree);
 }
 
 #define MAX_VERSION -1
@@ -958,9 +962,6 @@ int castle_fs_init(void)
         castle_printk(LOG_ERROR, "Failed to init global tree.\n");
         return -EINVAL;
     }
-
-    if (first)
-        castle_double_array_create();
 
     if (castle_double_array_start() < 0)
     {
@@ -2014,7 +2015,7 @@ static void castle_device_c_bvec_make(c_bio_t *c_bio,
     c_bvec->key             = (void *)block;
     c_bvec->version         = INVAL_VERSION;
     c_bvec->flags           = 0;
-    c_bvec->tree            = &castle_global_tree;
+    c_bvec->tree            = castle_global_tree;
     /* cvt_get() only for writes. */
     if (c_bvec_data_dir(c_bvec)==WRITE)
         c_bvec->cvt_get     = castle_bio_data_cvt_get;
@@ -2605,6 +2606,8 @@ static void __exit castle_exit(void)
     castle_checkpoint_fini();
     /* Note: Changes from here are not persistent. */
     castle_attachments_free();
+    /* Free-up gloabl tree first. */
+    castle_global_tree_free();
     /* Cleanup/writeout all metadata */
     castle_double_array_fini();
     castle_btree_free();

@@ -60,8 +60,10 @@
 #define debug_dexts(_f, _a...)    (printk(_f, ##_a))
 #endif
 
+#if 0
 #undef debug_gn
 #define debug_gn(_f, _a...)       (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#endif
 
 #if 0
 #undef debug_res_pools
@@ -152,10 +154,8 @@ typedef enum {
 
 /**********************************************************************************************/
 /* Prototypes */
-static struct castle_component_tree* castle_ct_alloc(struct castle_double_array *da,
-                                                     int level, tree_seq_t seq,
-                                                     uint32_t nr_data_exts,
-                                                     uint64_t nr_rwcts);
+static struct castle_component_tree * castle_ct_init(struct castle_double_array *da,
+                                                     uint32_t nr_data_exts);
 static void castle_component_tree_add(struct castle_double_array *da,
                                       struct castle_component_tree *ct,
                                       struct list_head *head);
@@ -195,8 +195,7 @@ static void castle_da_merge_struct_deser(struct castle_da_merge *merge,
 static int castle_da_ct_bloom_build_param_deserialise(struct castle_component_tree *ct,
                                                       struct castle_bbp_entry *bbpm);
 void castle_da_ct_marshall(struct castle_clist_entry *ctm, struct castle_component_tree *ct);
-static struct castle_component_tree* castle_da_ct_unmarshall(struct castle_component_tree *ct,
-                                                             struct castle_clist_entry *ctm);
+static struct castle_component_tree* castle_da_ct_unmarshall(struct castle_clist_entry *ctm);
 /* partial merges: partition handling */
 static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
                                                  c2_block_t *node_c2b,
@@ -4750,9 +4749,12 @@ static void castle_da_merge_sysfs_cleanup(struct castle_da_merge *merge, int err
         castle_sysfs_ct_del(merge->out_tree);
 }
 
-static void castle_ct_dealloc(struct castle_component_tree *ct)
+void castle_ct_dealloc(struct castle_component_tree *ct)
 {
     struct list_head *lh, *t;
+
+    /* Ref count should be 1 by now. */
+    BUG_ON(atomic_read(&ct->ref_count) != 1);
 
     /* Free large object structures. */
     list_for_each_safe(lh, t, &ct->large_objs)
@@ -4956,9 +4958,12 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err, int 
 
     BUG_ON(!merge);
 
-    castle_printk(LOG_DEVEL, "Completing merge with err: %d\n", err);
-    for (i=0; i<merge->nr_trees; i++)
-        castle_printk(LOG_DEVEL, "\t0x%llx\n", merge->in_trees[i]->seq);
+    if (merge->level != 1)
+    {
+        castle_printk(LOG_DEVEL, "Completing merge with err: %d\n", err);
+        for (i=0; i<merge->nr_trees; i++)
+            castle_printk(LOG_DEVEL, "\t0x%llx\n", merge->in_trees[i]->seq);
+    }
 
     /* Remove entries from sysfs first. This has to happen before any another clean-up. */
     castle_da_merge_sysfs_cleanup(merge, err);
@@ -5821,9 +5826,12 @@ deser_done:
 
     merge->serdes.des=0;
 
-    castle_printk(LOG_DEVEL, "Doing merge on trees:\n");
-    for (i=0; i<nr_trees; i++)
-        castle_printk(LOG_DEVEL, "\t0x%llx\n", merge->in_trees[i]->seq);
+    if (merge->level != 1)
+    {
+        castle_printk(LOG_DEVEL, "Doing merge on trees:\n");
+        for (i=0; i<nr_trees; i++)
+            castle_printk(LOG_DEVEL, "\t0x%llx\n", merge->in_trees[i]->seq);
+    }
 
     return 0;
 
@@ -8707,15 +8715,15 @@ void castle_da_ct_marshall(struct castle_clist_entry *ctm,
  *
  * - Prefetches btree extent for T0s.
  */
-static struct castle_component_tree * castle_da_ct_unmarshall(struct castle_component_tree *ct,
-                                                              struct castle_clist_entry *ctm)
+static struct castle_component_tree * castle_da_ct_unmarshall(struct castle_clist_entry *ctm)
 {
     int i;
     struct castle_double_array *da = castle_da_hash_get(ctm->da_id);
+    struct castle_component_tree *ct;
 
     castle_printk(LOG_DEBUG, "%s::seq %d\n", __FUNCTION__, ctm->seq);
 
-    ct = castle_ct_init(ct, da, ctm->nr_data_exts);
+    ct = castle_ct_init(da, ctm->nr_data_exts);
     if (!ct)
         return NULL;
 
@@ -8807,46 +8815,6 @@ static USED void castle_da_foreach_tree(struct castle_double_array *da,
     write_unlock(&da->lock);
 }
 
-static int castle_ct_hash_destroy_check(struct castle_component_tree *ct, void *ct_hash)
-{
-    int err = 0;
-
-    /* Only the global component tree should remain when we destroy DA hash. */
-    if(((unsigned long)ct_hash > 0) && !TREE_GLOBAL(ct->seq))
-    {
-        castle_printk(LOG_WARN, "Error: Found CT=%d not on any DA's list, it claims DA=%d\n",
-            ct->seq, ct->da->id);
-        err = -1;
-    }
-
-    /* All CTs apart of global are expected to be on a DA list. */
-    if(!TREE_GLOBAL(ct->seq) && (ct->da_list.next == NULL))
-    {
-        castle_printk(LOG_WARN, "Error: CT=%d is not on DA list, for DA=%d\n",
-                ct->seq, ct->da->id);
-        err = -2;
-    }
-
-    if(TREE_GLOBAL(ct->seq) && (ct->da_list.next != NULL))
-    {
-        castle_printk(LOG_WARN, "Error: Global CT=%d is on DA list, for DA=INVAL_DA\n",
-                ct->seq);
-        err = -3;
-    }
-
-    /* Ref count should be 1 by now. */
-    if(atomic_read(&ct->ref_count) != 1)
-    {
-        castle_printk(LOG_WARN, "Error: Bogus ref count=%d for ct=%d, da=%d when exiting.\n",
-                atomic_read(&ct->ref_count), ct->seq, ct->da->id);
-        err = -4;
-    }
-
-    BUG_ON(err);
-
-    return 0;
-}
-
 static int castle_da_ct_dealloc(struct castle_double_array *da,
                                 struct castle_component_tree *ct,
                                 int level_cnt,
@@ -8905,7 +8873,9 @@ static void castle_da_hash_destroy(void)
 
 static void castle_ct_hash_destroy(void)
 {
-    castle_ct_hash_iterate(castle_ct_hash_destroy_check, (void *)1UL);
+    /* At this there shouldn't be any more CTs left in hash table. Check it by passing NULL
+     * as iterator. */
+    castle_ct_hash_iterate(NULL, NULL);
     castle_kfree(castle_ct_hash);
 }
 
@@ -9246,7 +9216,7 @@ void castle_double_arrays_writeback(void)
     /* Writeback all the merges. */
     __castle_merges_hash_iterate(castle_da_merge_writeback, &mstores);
 
-    castle_da_tree_writeback(NULL, &castle_global_tree, -1, &mstores);
+    castle_da_tree_writeback(NULL, castle_global_tree, -1, &mstores);
 
     /* Writeback all data extent structures. */
     __castle_data_exts_hash_iterate(castle_data_ext_writeback, mstores.data_exts_store);
@@ -9557,7 +9527,7 @@ static int castle_da_merge_deser_mstore_outtree_recover(void)
         atomic_set(&merge->serdes.valid, VALID_AND_STALE_DAM_SERDES);
 
         /* Recover partially complete output CT */
-        merge->out_tree = castle_da_ct_unmarshall(NULL, &merge->serdes.mstore_entry->out_tree);
+        merge->out_tree = castle_da_ct_unmarshall(&merge->serdes.mstore_entry->out_tree);
         BUG_ON(!merge->out_tree); //TODO@tr handle this better
         BUG_ON(da_id != merge->out_tree->da->id);
         castle_printk(LOG_DEBUG, "%s::deserialising merge on da %d level %d with partially-"
@@ -9746,14 +9716,14 @@ static int castle_da_ct_read(void)
         castle_mstore_iterator_next(iterator, &entry, &entry_size);
         BUG_ON(entry_size != sizeof(struct castle_clist_entry));
         /* Special case for castle_global_tree, it doesn't have a da associated with it. */
-        if(TREE_GLOBAL(entry.seq))
+        ct = castle_da_ct_unmarshall(&entry);
+        da = ct->da;
+        if(TREE_GLOBAL(ct->seq))
         {
-            castle_da_ct_unmarshall(&castle_global_tree, &entry);
-            BUG_ON(castle_global_tree.da != NULL);
+            BUG_ON(ct->da != NULL);
+            castle_global_tree = ct;
             continue;
         }
-        ct = castle_da_ct_unmarshall(NULL, &entry);
-        da = ct->da;
         BUG_ON(!da);
 
         debug("Read CT seq=%d\n", ct->seq);
@@ -9917,14 +9887,13 @@ tree_seq_t castle_da_next_ct_seq(void)
     return atomic64_inc_return(&castle_next_tree_seq);
 }
 
-struct castle_component_tree * castle_ct_init(struct castle_component_tree *ct,
-                                              struct castle_double_array *da,
-                                              uint32_t nr_data_exts)
+static struct castle_component_tree * castle_ct_init(struct castle_double_array *da,
+                                                     uint32_t nr_data_exts)
 {
     int i;
+    struct castle_component_tree *ct;
 
-    if (!ct)
-        ct = castle_zalloc(sizeof(struct castle_component_tree), GFP_KERNEL);
+    ct = castle_zalloc(sizeof(struct castle_component_tree), GFP_KERNEL);
 
     if (!ct)
         return NULL;
@@ -10001,15 +9970,15 @@ err_out:
  *
  * @return NULL (CT could not be allocated) or pointer to new CT
  */
-static struct castle_component_tree* castle_ct_alloc(struct castle_double_array *da,
-                                                     int level,
-                                                     tree_seq_t seq,
-                                                     uint32_t nr_data_exts,
-                                                     uint64_t nr_rwcts)
+struct castle_component_tree* castle_ct_alloc(struct castle_double_array *da,
+                                              int level,
+                                              tree_seq_t seq,
+                                              uint32_t nr_data_exts,
+                                              uint64_t nr_rwcts)
 {
     struct castle_component_tree *ct;
 
-    ct = castle_ct_init(NULL, da, nr_data_exts);
+    ct = castle_ct_init(da, nr_data_exts);
     if(!ct)
         return NULL;
 
@@ -11693,14 +11662,6 @@ void castle_double_array_queue(c_bvec_t *c_bvec)
 /**************************************/
 /* Double Array Management functions. */
 
-int castle_double_array_create(void)
-{
-    /* Make sure that the global tree is in the ct hash */
-    castle_ct_hash_add(&castle_global_tree);
-
-    return 0;
-}
-
 /**
  * Initialise global doubling array state.
  */
@@ -12209,7 +12170,6 @@ static int castle_merge_run(void *_data)
     castle_time_interval_fini(&waiting_stats);
     castle_printk(LOG_DEVEL, "Finished merge: %d. Timing stats:\n", merge_thread->merge_id);
     castle_time_interval_print(LOG_DEVEL, &waiting_stats, "waiting for");
-    castle_printk(LOG_DEVEL, "Thread destroy: %u\n", merge_thread->id);
 
     merge_thread->merge_id = INVAL_MERGE_ID;
 
@@ -12396,8 +12356,6 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
     c_thread_id_t thread_id = INVAL_THREAD_ID;
 
     *merge_id = INVAL_MERGE_ID;
-
-    debug_gn("Merge has been called on %u arrays\n", merge_cfg->nr_arrays);
 
     if (merge_cfg->nr_arrays == 0)
     {

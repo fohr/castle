@@ -1114,7 +1114,7 @@ struct castle_component_tree {
     u64                 get_c2b_ns;
 #endif
 };
-extern struct castle_component_tree castle_global_tree;
+extern struct castle_component_tree *castle_global_tree;
 
 struct castle_large_obj_entry {
     c_ext_id_t          ext_id;

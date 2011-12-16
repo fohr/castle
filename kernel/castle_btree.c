@@ -347,7 +347,7 @@ static int castle_btree_node_space_get(struct castle_component_tree *ct,
         c_ext_free_t *ext_free;
 
         ext_free = &ct->internal_ext_free;
-        if (ct == &castle_global_tree)
+        if (ct == castle_global_tree)
             ext_free = &ct->tree_ext_free;
         BUG_ON(EXT_ID_INVAL(ext_free->ext_id));
         /* We never preallocate space for internal nodes. */
@@ -364,7 +364,7 @@ static int castle_btree_node_space_get(struct castle_component_tree *ct,
        except when working with the global ct. */
     BUG_ON(rev_level != 0);
     BUG_ON((atomic_read(&ct->tree_depth) > 0) &&
-           (!was_preallocated ^ (ct == &castle_global_tree)));
+           (!was_preallocated ^ (ct == castle_global_tree)));
 
     ret = castle_ext_freespace_get(&ct->tree_ext_free,
                                    node_size * C_BLK_SIZE,
@@ -382,7 +382,7 @@ static int castle_btree_node_space_get(struct castle_component_tree *ct,
 static int castle_btree_node_was_preallocated(struct castle_component_tree *ct, uint16_t rev_level)
 {
     /* Block allocations are never preallocated. */
-    if(ct == &castle_global_tree)
+    if(ct == castle_global_tree)
         return 0;
 
     return (rev_level == 0 ? 1 : 0);

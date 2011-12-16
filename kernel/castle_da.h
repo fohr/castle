@@ -203,7 +203,6 @@ void castle_double_array_submit   (c_bvec_t *c_bvec);
 int  castle_double_array_make     (c_da_t da_id, c_ver_t root_version, c_da_opts_t opts);
 
 int  castle_double_array_read  (void);
-int  castle_double_array_create(void);
 int  castle_double_array_start (void);
 
 int  castle_double_array_init  (void);
@@ -245,9 +244,11 @@ int  castle_data_ext_add                (c_ext_id_t ext_id,
                                          uint64_t   nr_drain_bytes);
 void castle_ct_data_ext_link            (c_ext_id_t ext_id,
                                          struct castle_component_tree *ct);
-struct castle_component_tree * castle_ct_init(struct castle_component_tree *ct,
-                                              struct castle_double_array *da,
-                                              uint32_t nr_data_exts);
+struct castle_component_tree* castle_ct_alloc(struct castle_double_array *da,
+                                              int level, tree_seq_t seq,
+                                              uint32_t nr_data_exts,
+                                              uint64_t nr_rwcts);
+void castle_ct_dealloc(struct castle_component_tree *ct);
 void castle_data_extent_update          (c_ext_id_t     ext_id,
                                          uint64_t       length,
                                          int            to_add);
