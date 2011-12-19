@@ -5814,10 +5814,6 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
         goto deser_done;
     }
 
-    /* No point draining one single extent. Just link it directly to output tree. */
-    if (merge->nr_drain_exts == 1)
-        merge->nr_drain_exts = 0;
-
     /* Calculate number of extents that are not draining and should be added to output tree. */
     for (i=0, nr_non_drain_exts=0; i<merge->nr_trees; i++)
         for (j=0; j<merge->in_trees[i]->nr_data_exts; j++)
