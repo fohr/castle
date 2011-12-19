@@ -258,8 +258,8 @@ void castle_ext_freespace_init(c_ext_free_t *ext_free,
  * @param data          [in]    Data to be used in event handler.
  * @param callback      [in]    Extent Event handler. Current events are just low space events.
  *
- * @return 0:       On success.
- * @return -ENOSPC: If extent could not be allocated.
+ * @return  0       On success.
+ * @return -ENOSPC  If extent could not be allocated.
  */
 int castle_new_ext_freespace_init(c_ext_free_t           *ext_free,
                                   c_da_t                  da_id,
@@ -275,7 +275,13 @@ int castle_new_ext_freespace_init(c_ext_free_t           *ext_free,
     /* Calculate the number of chunks requried. */
     nr_chunks = ((size - 1) / C_CHK_SIZE) + 1;
     /* Try allocating the extent of the requested size. */
-    ext_id = castle_extent_alloc(castle_get_rda_lvl(), da_id, ext_type, nr_chunks, in_tran, data, callback);
+    ext_id = castle_extent_alloc(castle_get_rda_lvl(),
+                                 da_id,
+                                 ext_type,
+                                 nr_chunks,
+                                 in_tran,
+                                 data,
+                                 callback);
     if(EXT_ID_INVAL(ext_id))
         return -ENOSPC;
 
@@ -286,10 +292,16 @@ int castle_new_ext_freespace_init(c_ext_free_t           *ext_free,
     return 0;
 }
 
+/**
+ * Unlink and reset extent if valid.
+ */
 void castle_ext_freespace_fini(c_ext_free_t *ext_free)
 {
-    if(EXT_ID_INVAL(ext_free->ext_id))
+    if (EXT_ID_INVAL(ext_free->ext_id))
+        /* Invalid extent, return immediately. */
         return;
+
+    /* This is a valid extent, unlink and reset it. */
     castle_extent_unlink(ext_free->ext_id);
     ext_free->ext_id      = INVAL_EXT_ID;
     ext_free->ext_size    = 0;
