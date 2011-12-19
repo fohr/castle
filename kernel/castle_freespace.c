@@ -37,7 +37,7 @@ castle_freespace_t * freespace_sblk_get(struct castle_slave *cs)
     return &cs->freespace;
 }
 
-void freespace_sblk_put(struct castle_slave *cs, int dirty)
+void freespace_sblk_put(struct castle_slave *cs)
 {
     mutex_unlock(&cs->freespace_lock);
 }
@@ -103,7 +103,7 @@ int castle_freespace_slave_superchunks_reserve(struct castle_slave  *cs,
         ret = -ENOSPC;
 
     /* Release the lock. */
-    freespace_sblk_put(cs, 0);
+    freespace_sblk_put(cs);
 
     return ret;
 }
@@ -275,7 +275,7 @@ get_super_chunk:
         debug("Failed to read superblock from slave %x\n", cs->uuid);
         write_unlock_c2b(c2b);
         put_c2b(c2b);
-        freespace_sblk_put(cs, 0);
+        freespace_sblk_put(cs);
         /* If we reserved superchunks at the top of this function, we should return them.
            This is unlikely to matter, as the above error will only happen when the
            slave goes out of service, but still. */
@@ -322,7 +322,7 @@ get_super_chunk:
     put_c2b(c2b);
 
     BUG_ON((chk_seq.first_chk + chk_seq.count - 1) >= (freespace->disk_size + FREE_SPACE_START));
-    freespace_sblk_put(cs, 1);
+    freespace_sblk_put(cs);
 
     INJECT_FAULT;
 
@@ -413,7 +413,7 @@ void castle_freespace_slave_superchunk_free(struct castle_slave *cs,
 
     INJECT_FAULT;
 
-    freespace_sblk_put(cs, 1);
+    freespace_sblk_put(cs);
 }
 
 sector_t get_bd_capacity(struct block_device *bd);
@@ -558,7 +558,7 @@ int castle_freespace_print(struct castle_slave *cs, void *unused)
         castle_printk(LOG_INIT, "\t\tprev_prod: %d\n", cs->prev_prod);
         castle_printk(LOG_INIT, "\t\tnr_entries: %d\n", freespace->nr_entries);
         castle_printk(LOG_INIT, "\t\tmax_entries: %d\n", freespace->max_entries);
-        freespace_sblk_put(cs, 0);
+        freespace_sblk_put(cs);
     }
 
     return 0;
@@ -577,7 +577,7 @@ static int castle_freespace_get(struct castle_slave *cs, void *_space)
 
     freespace = freespace_sblk_get(cs);
     (*space) += freespace->free_chk_cnt;
-    freespace_sblk_put(cs,0);
+    freespace_sblk_put(cs);
 
     return 0;
 }

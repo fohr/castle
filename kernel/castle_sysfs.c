@@ -549,7 +549,7 @@ static ssize_t slave_free_available_show(struct kobject *kobj,
             free_available =
                 (uint64_t)((freespace->max_entries - freespace->cons + slave->prev_prod)
                     * CHKS_PER_SLOT * C_CHK_SIZE);
-        freespace_sblk_put(slave, 0);
+        freespace_sblk_put(slave);
         castle_extent_transaction_end();
     }
     else

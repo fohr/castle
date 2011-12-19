@@ -4845,7 +4845,7 @@ retry:
 }
 
 extern      castle_freespace_t * freespace_sblk_get(struct castle_slave *cs);
-extern void freespace_sblk_put(struct castle_slave *cs, int dirty);
+extern void freespace_sblk_put(struct castle_slave *cs);
 
 /*
  * Return the slave index to use for remapping a chunk. Scans the process_state.live_slaves
