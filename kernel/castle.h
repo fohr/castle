@@ -2331,10 +2331,9 @@ struct castle_double_array {
     } levels[MAX_DA_LEVEL];
     struct castle_da_cts_proxy *cts_proxy;          /**< Reference-taking snapshot of CTs in DA.
                                                          Protected by da->lock.                 */
-    atomic_t                    lfs_victim_count;   /**< Number of components of DA, that are
-                                                         blocked due to Low Free-Space.         */
-    struct castle_da_lfs_ct_t  *t0_lfs;             /**< Low Free-Space handler for T0s.        */
-    struct castle_da_lfs_ct_t   l1_merge_lfs;       /**< LFS Structure for L1 merge.            */
+    atomic_t                    lfs_victim_count;   /**< Number of queued LFS callbacks.
+                                                         Non-zero value implies DA is in LFS.   */
+    struct castle_da_lfs_ct_t   l1_merge_lfs;       /**< LFS structure for level 1 merge.       */
     struct list_head            hash_list;
     atomic_t                    ref_cnt;
     uint32_t                    attachment_cnt;
