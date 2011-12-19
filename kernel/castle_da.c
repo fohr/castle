@@ -3123,6 +3123,8 @@ static void castle_da_lfs_victim_count_inc(struct castle_double_array *da)
 {
     if (atomic_inc_return(&da->lfs_victim_count) == 1)
         castle_da_queues_kick(da);
+
+    castle_da_get(da);
 }
 
 /**
@@ -3278,8 +3280,19 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
     c_ext_id_t internal_ext_id, tree_ext_id, data_ext_id;
 
     /* If the DA is dead already, no need to handle the event anymore. */
-    if (da == NULL)
+    BUG_ON(da == NULL);
+
+    if (castle_da_deleted(da) && is_realloc)
+    {
+        castle_printk(LOG_DEBUG, "Skipping LFS for da: %u\n", da->id);
+
+        if (atomic_dec_and_test(&da->lfs_victim_count))
+            castle_da_merge_restart(da, NULL);
+
+        castle_da_put(da);
+
         return 0;
+    }
 
     /* Function shouldnt have been called, if space is already reserved. */
     BUG_ON(lfs->space_reserved);
@@ -3451,6 +3464,11 @@ skip_data_ext:
     /* End extent transaction. */
     castle_extent_transaction_end();
 
+    /* Note: After this point don't access da pointer. It is possible da_destroy_complete()
+     * is racing. */
+    if (is_realloc)
+        castle_da_put(da);
+
     return 0;
 
 no_space:
@@ -3497,6 +3515,18 @@ no_space:
  * Instead, check the freespace condition of DA after taking bit-lock.
  */
 
+static void castle_da_lfs_ct_cleanup(struct castle_da_lfs_ct_t *lfs)
+{
+    if (!lfs->space_reserved)
+        return;
+
+    castle_extent_free(lfs->internal_ext.ext_id);
+    castle_extent_free(lfs->tree_ext.ext_id);
+    castle_extent_free(lfs->data_ext.ext_id);
+
+    castle_da_lfs_ct_reset(lfs);
+}
+
 /**
  * Low freespace event handler for creation of all T0 RWCTs.
  *
@@ -3511,15 +3541,19 @@ static void castle_da_lfs_all_rwcts_callback(void *data)
     struct castle_double_array *da = data;
 
     /* Reset LFS structure now as it will be reused in all_rwcts_create(). */
-    castle_da_all_rwcts_create(da,
-                               0 /*in_tran*/,
-                               LFS_VCT_T_T0_GRP);
+    if (!castle_da_deleted(da))
+        castle_da_all_rwcts_create(da,
+                                   0 /*in_tran*/,
+                                   LFS_VCT_T_T0_GRP);
+
 
     /* Decrement lfs_victim_count - if all_rwcts_create() failed it will have
      * been incremented, if it succeeded, we may be re-enabling inserts on
      * this doubling-array.  Ensure we do it after all_rwcts_create() to
      * prevent races. */
     atomic_dec(&da->lfs_victim_count);
+
+    castle_da_put(da);
 }
 
 /**
@@ -3542,6 +3576,8 @@ static void castle_da_lfs_rwct_callback(void *data)
 
     if (atomic_dec_and_test(&da->lfs_victim_count))
         castle_da_merge_restart(da, NULL);
+
+    castle_da_put(da);
 }
 
 /**
@@ -11889,7 +11925,6 @@ static int castle_da_merge_check(struct castle_da_merge *merge, void *da)
 }
 
 /**
- *
  * NOTE: Called with transaction lock held.
  */
 void castle_da_destroy_complete(struct castle_double_array *da)
@@ -11902,6 +11937,12 @@ void castle_da_destroy_complete(struct castle_double_array *da)
     BUG_ON(!CASTLE_IN_TRANSACTION);
 
     castle_printk(LOG_USERINFO, "Cleaning VerTree: %u\n", da->id);
+
+    /* Shouldn't be any outstanding LFS victims. */
+    BUG_ON(atomic_read(&da->lfs_victim_count));
+
+    /* Clean-up any space reserved by LFS victims in past. */
+    castle_da_lfs_ct_cleanup(&da->l1_merge_lfs);
 
     /* Invalidate DA CTs proxy structure. */
     castle_da_cts_proxy_invalidate(da);
