@@ -172,6 +172,7 @@ static struct castle_component_tree* castle_da_rwct_get(struct castle_double_arr
                                                         int cpu_index);
 static struct castle_da_cts_proxy* castle_da_cts_proxy_get(struct castle_double_array *da);
 static void castle_da_queue_kick(struct work_struct *work);
+static void castle_da_queues_kick(struct castle_double_array *da);
 static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *c_bvec);
 static void castle_da_write_bvec_start(struct castle_double_array *da, c_bvec_t *c_bvec);
 static void castle_da_reserve(struct castle_double_array *da, c_bvec_t *c_bvec);
@@ -3120,7 +3121,8 @@ static int castle_da_no_disk_space(struct castle_double_array *da)
  */
 static void castle_da_lfs_victim_count_inc(struct castle_double_array *da)
 {
-    atomic_inc(&da->lfs_victim_count);
+    if (atomic_inc_return(&da->lfs_victim_count) == 1)
+        castle_da_queues_kick(da);
 }
 
 /**
@@ -7709,23 +7711,12 @@ static inline uint64_t castle_da_throttle_time_get(uint64_t data_bytes, uint64_t
 static void castle_da_inserts_enable(unsigned long data)
 {
     struct castle_double_array *da = (struct castle_double_array *)data;
-    int i;
 
     /* Enable inserts. */
     clear_bit(CASTLE_DA_INSERTS_DISABLED, &da->flags);
 
     /* Schedule drain of pending write IOs now inserts are enabled. */
-    for (i = 0; i < castle_double_array_request_cpus(); i++)
-    {
-        struct castle_da_io_wait_queue *wq;
-
-        wq = &da->ios_waiting[i];
-
-        /* This runs in interrupt context. Instead of making wq->lock spin_lock_irq, making
-         * the count atomic. */
-        if (atomic_read(&wq->cnt))
-            queue_work_on(request_cpus.cpus[i], castle_wqs[0], &wq->work);
-    }
+    castle_da_queues_kick(da);
 
     wake_up(&da->merge_waitq);
 }
@@ -10488,6 +10479,31 @@ static void castle_da_queue_kick(struct work_struct *work)
 }
 
 /**
+ * Flush all write IOs queued for this DA.
+ *
+ * - Each T0 has a castle_da_io_wait_queue, flush them all with
+ *   castle_da_queue_kick().
+ *
+ * NOTE: May run in interrupt context.
+ *
+ * @also castle_da_queue_kick()
+ */
+static void castle_da_queues_kick(struct castle_double_array *da)
+{
+    int i;
+
+    for (i = 0; i < castle_double_array_request_cpus(); i++)
+    {
+        struct castle_da_io_wait_queue *wq;
+
+        wq = &da->ios_waiting[i];
+
+        if (atomic_read(&wq->cnt))
+            queue_work_on(request_cpus.cpus[i], castle_wqs[0], &wq->work);
+    }
+}
+
+/**
  * Return number of Bytes required to duplicate all merge partition keys in DA.
  *
  * @param   da  Locked DA
@@ -11701,22 +11717,31 @@ void castle_double_array_queue(c_bvec_t *c_bvec)
     /* Write requests only accepted if inserts enabled and no queued writes. */
     wq = &da->ios_waiting[c_bvec->cpu_index];
     spin_lock(&wq->lock);
-    if (!test_bit(CASTLE_DA_INSERTS_DISABLED, &da->flags) && list_empty(&wq->list))
+
+    /* If the DA is in LFS, fail writes immediately.
+     * It is possible this could race with castle_da_queue_kick() but since both
+     * functions take wq->lock they are atomic wrt each other. */
+    if (castle_da_no_disk_space(da))
     {
-        /* Inserts enabled, no pending IOs.  Schedule write immediately. */
         spin_unlock(&wq->lock);
-        castle_da_reserve(da, c_bvec);
+        c_bvec->queue_complete(c_bvec, -ENOSPC);
+        return;
     }
-    else
+
+    /* Queue this request if inserts are disabled or other write IOs pending. */
+    if (test_bit(CASTLE_DA_INSERTS_DISABLED, &da->flags) || !list_empty(&wq->list))
     {
-        /* Inserts disabled or other pending write IOs - queue this request.
-         *
-         * Most likely inserts are disabled.  In the case that there are pending
+        /* Most likely inserts are disabled.  In the case that there are pending
          * write IOs and inserts enabled we're racing with an already initiated
          * queue kick so there's no need to manually do one now. */
         castle_da_bvec_queue(da, c_bvec);
         spin_unlock(&wq->lock);
+        return;
     }
+
+    /* Inserts enabled, no pending IOs, not in LFS.  Schedule write now. */
+    spin_unlock(&wq->lock);
+    castle_da_reserve(da, c_bvec);
 }
 
 /**************************************/
