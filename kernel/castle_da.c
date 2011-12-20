@@ -992,7 +992,7 @@ static void castle_ct_modlist_iter_free(c_modlist_iter_t *iter)
     if(iter->enumerator)
     {
         castle_ct_immut_iter.cancel(iter->enumerator);
-        castle_kfree(iter->enumerator);
+        castle_free(iter->enumerator);
     }
     if(iter->node_buffer)
         castle_free(iter->node_buffer);
@@ -1469,7 +1469,7 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
 
     /* Allocate immutable iterator.
      * For iterating over source entries during sort. */
-    iter->enumerator = castle_malloc(sizeof(c_immut_iter_t), GFP_KERNEL);
+    iter->enumerator = castle_alloc(sizeof(c_immut_iter_t));
     iter->enumerator->merge = NULL;
 
     /* Allocate btree-entry buffer, two indexes for the buffer (for sorting)
@@ -2090,7 +2090,7 @@ static void castle_ct_merged_iter_cancel(c_merged_iter_t *iter)
     BUG_ON(iter->iter_running);
 
     if (iter->iterators)
-        castle_kfree(iter->iterators);
+        castle_free(iter->iterators);
 }
 
 struct castle_iterator_type castle_ct_merged_iter = {
@@ -2326,7 +2326,7 @@ static void _castle_da_rq_iter_init(c_da_rq_iter_t *iter)
 
     /* Initialise iterator structure. */
     iter->nr_iters = nr_iters;
-    iter->ct_iters = castle_zalloc(nr_iters * sizeof(c_rq_iter_t), GFP_KERNEL);
+    iter->ct_iters = castle_zalloc(nr_iters * sizeof(c_rq_iter_t));
     iters          = castle_alloc(nr_iters * sizeof(void *));
     iters_types    = castle_alloc(nr_iters * sizeof(struct castle_iterator_type *));
     if (!iter->ct_iters || !iters || !iters_types)
@@ -2719,13 +2719,13 @@ static void castle_da_iterator_destroy(struct castle_component_tree *tree,
     {
         /* For dynamic trees we are using modlist iterator. */
         castle_ct_modlist_iter_free(iter);
-        castle_kfree(iter);
+        castle_free(iter);
     } else
     {
         /* For static trees, we are using immut iterator. */
         /* @TODO: do we need to do better resource release here? */
         castle_ct_immut_iter_cancel(iter);
-        castle_kfree(iter);
+        castle_free(iter);
     }
 }
 
@@ -2743,7 +2743,7 @@ static void castle_da_iterator_create(struct castle_da_merge *merge,
 {
     if (tree->dynamic)
     {
-        c_modlist_iter_t *iter = castle_malloc(sizeof(c_modlist_iter_t), GFP_KERNEL);
+        c_modlist_iter_t *iter = castle_alloc(sizeof(c_modlist_iter_t));
         BUG_ON(merge->serdes.des); /* we should only serialise merges
                                                                      with immut in_trees */
         if (!iter)
@@ -2759,7 +2759,7 @@ static void castle_da_iterator_create(struct castle_da_merge *merge,
                     merge->da->id, tree->level, 0, 0);
         if (iter->err)
         {
-            castle_kfree(iter);
+            castle_free(iter);
             return;
         }
         /* Success */
@@ -2767,7 +2767,7 @@ static void castle_da_iterator_create(struct castle_da_merge *merge,
     }
     else
     {
-        c_immut_iter_t *iter = castle_malloc(sizeof(c_immut_iter_t), GFP_KERNEL);
+        c_immut_iter_t *iter = castle_alloc(sizeof(c_immut_iter_t));
         if (!iter)
             return;
         iter->tree = tree;
@@ -2933,7 +2933,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
         goto err_out;
 
     /* Allocate space for iterators. */
-    merge->iters = castle_zalloc(sizeof(void *) * merge->nr_trees, GFP_KERNEL);
+    merge->iters = castle_zalloc(sizeof(void *) * merge->nr_trees);
     if (!merge->iters)
         goto err_out2;
 
@@ -2982,7 +2982,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
 
     /* Init the merged iterator */
     ret = -ENOMEM;
-    merge->merged_iter = castle_malloc(sizeof(c_merged_iter_t), GFP_KERNEL);
+    merge->merged_iter = castle_alloc(sizeof(c_merged_iter_t));
     if(!merge->merged_iter)
         goto err_out2;
     debug("Merged iterator allocated.\n");
@@ -4916,12 +4916,12 @@ void castle_ct_dealloc(struct castle_component_tree *ct)
         struct castle_large_obj_entry *lo = list_entry(lh, struct castle_large_obj_entry, list);
 
         list_del(lh);
-        castle_kfree(lo);
+        castle_free(lo);
     }
 
     list_del(&ct->hash_list);
-    castle_check_kfree(ct->data_exts);
-    castle_kfree(ct);
+    castle_check_free(ct->data_exts);
+    castle_free(ct);
 }
 
 static void castle_da_merge_cts_release(struct castle_da_merge *merge, int err)
@@ -5137,7 +5137,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err, int 
     {
         FOR_EACH_MERGE_TREE(i, merge)
             castle_da_iterator_destroy(merge->in_trees[i], merge->iters[i]);
-        castle_kfree(merge->iters);
+        castle_free(merge->iters);
     }
 
     if (merge->merged_iter)
@@ -5177,14 +5177,14 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err, int 
     }
 
     /* Free the merged iterator, if one was allocated. */
-    castle_check_kfree(merge->merged_iter);
+    castle_check_free(merge->merged_iter);
 
     /* Free all the buffers */
-    castle_check_kfree(merge->snapshot_delete.occupied);
-    castle_check_kfree(merge->snapshot_delete.need_parent);
-    castle_check_kfree(merge->drain_exts);
-    castle_check_kfree(merge->in_trees);
-    castle_kfree(merge);
+    castle_check_free(merge->snapshot_delete.occupied);
+    castle_check_free(merge->snapshot_delete.need_parent);
+    castle_check_free(merge->drain_exts);
+    castle_check_free(merge->in_trees);
+    castle_free(merge);
 
     if (!locked)
         CASTLE_TRANSACTION_END;
@@ -5895,7 +5895,7 @@ deser_done:
        to discard non-queriable tombstones, or both. */
     if( castle_da_user_timestamping_check(merge->da) || (merge->out_tree->data_age == 1) )
     {
-        merge->tv_resolver = castle_zalloc(sizeof(c_dfs_resolver), GFP_KERNEL);
+        merge->tv_resolver = castle_zalloc(sizeof(c_dfs_resolver));
         if(!merge->tv_resolver)
             goto error_out;
         if(castle_dfs_resolver_construct(merge->tv_resolver, merge))
@@ -6019,7 +6019,7 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
 
     /* Malloc everything. Use zalloc to make sure everything is set to 0. */
     ret = -ENOMEM;
-    merge = castle_zalloc(sizeof(struct castle_da_merge), GFP_KERNEL);
+    merge = castle_zalloc(sizeof(struct castle_da_merge));
     if (!merge)
         return NULL;
 
@@ -6030,9 +6030,9 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
     merge->out_btree            = castle_btree_type_get(da->btree_type);
     merge->level                = level;
     merge->nr_trees             = nr_trees;
-    if ((merge->in_trees = castle_zalloc(sizeof(void *) * nr_trees, GFP_KERNEL)) == NULL)
+    if ((merge->in_trees = castle_zalloc(sizeof(void *) * nr_trees)) == NULL)
     {
-        castle_kfree(merge);
+        castle_free(merge);
         return NULL;
     }
     if (in_trees)
@@ -6066,12 +6066,10 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
 
     /* Bit-arrays for snapshot delete algorithm. */
     merge->snapshot_delete.last_version = castle_version_max_get();
-    merge->snapshot_delete.occupied     = castle_malloc(merge->snapshot_delete.last_version / 8 + 1,
-                                                        GFP_KERNEL);
+    merge->snapshot_delete.occupied     = castle_alloc(merge->snapshot_delete.last_version / 8 + 1);
     if (!merge->snapshot_delete.occupied)
         goto error_out;
-    merge->snapshot_delete.need_parent  = castle_malloc(merge->snapshot_delete.last_version / 8 + 1,
-                                                        GFP_KERNEL);
+    merge->snapshot_delete.need_parent  = castle_alloc(merge->snapshot_delete.last_version / 8 + 1);
     if (!merge->snapshot_delete.need_parent)
         goto error_out;
     merge->snapshot_delete.next_deleted = NULL;
@@ -6194,7 +6192,7 @@ error_out:
     castle_check_free(merge->snapshot_delete.occupied);
     castle_version_states_free(&merge->version_states);
     castle_check_free(merge->in_trees);
-    castle_kfree(merge);
+    castle_free(merge);
 
     debug_merges("Failed a merge with ret=%d\n", ret);
 
@@ -7233,7 +7231,7 @@ static int castle_da_l1_merge_run(void *da_p)
             nr_data_exts += in_trees[i]->nr_data_exts;
         }
 
-        data_exts = castle_zalloc(nr_data_exts * sizeof(c_ext_id_t), GFP_KERNEL);
+        data_exts = castle_zalloc(nr_data_exts * sizeof(c_ext_id_t));
         BUG_ON(!data_exts);
 
         k = 0;
@@ -7380,7 +7378,7 @@ static int castle_da_merge_run(void *da_p)
         }
 
         nr_data_exts    = in_trees[0]->nr_data_exts + in_trees[1]->nr_data_exts;
-        data_exts       = castle_zalloc(nr_data_exts * sizeof(c_ext_id_t), GFP_KERNEL);
+        data_exts       = castle_zalloc(nr_data_exts * sizeof(c_ext_id_t));
         BUG_ON(!data_exts);
 
         k = 0;
@@ -7618,8 +7616,8 @@ static int castle_da_wait_queue_create(struct castle_double_array *da, void *unu
 {
     int i;
 
-    da->ios_waiting = castle_malloc(castle_double_array_request_cpus()
-            * sizeof(struct castle_da_io_wait_queue), GFP_KERNEL);
+    da->ios_waiting = castle_alloc(castle_double_array_request_cpus()
+                            * sizeof(struct castle_da_io_wait_queue));
     if (!da->ios_waiting)
         return 1;
 
@@ -7896,11 +7894,11 @@ static void castle_da_dealloc(struct castle_double_array *da)
     /* Delete rate control timer. */
     del_timer_sync(&da->write_throttle_timer);
 
-    castle_check_kfree(da->ios_waiting);
+    castle_check_free(da->ios_waiting);
 
     /* Poison and free (may be repoisoned on debug kernel builds). */
     memset(da, 0xa7, sizeof(struct castle_double_array));
-    castle_kfree(da);
+    castle_free(da);
 }
 
 static struct castle_double_array* castle_da_alloc(c_da_t da_id, c_da_opts_t opts)
@@ -7908,7 +7906,7 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id, c_da_opts_t opt
     struct castle_double_array *da;
     int i = 0;
 
-    da = castle_zalloc(sizeof(struct castle_double_array), GFP_KERNEL);
+    da = castle_zalloc(sizeof(struct castle_double_array));
     if(!da)
         return NULL;
 
@@ -8182,7 +8180,7 @@ static void __castle_ct_large_obj_remove(struct list_head *lh)
     castle_extent_unlink(lo->ext_id);
 
     /* Free memory. */
-    castle_kfree(lo);
+    castle_free(lo);
 }
 
 /* Remove a large object from list attached to the CT. This gets called only from T0 replaces.
@@ -8237,7 +8235,7 @@ int castle_ct_large_obj_add(c_ext_id_t              ext_id,
     if (EXT_ID_INVAL(ext_id))
         return -EINVAL;
 
-    lo = castle_malloc(sizeof(struct castle_large_obj_entry), GFP_KERNEL);
+    lo = castle_alloc(sizeof(struct castle_large_obj_entry));
     if (!lo)
         return -ENOMEM;
 
@@ -8330,7 +8328,7 @@ int castle_data_ext_add(c_ext_id_t                    ext_id,
                         uint64_t                      nr_drain_bytes)
 {
     struct castle_data_extent *data_ext =
-                    castle_malloc(sizeof(struct castle_data_extent), GFP_KERNEL);
+                    castle_alloc(sizeof(struct castle_data_extent));
 
     if (!data_ext)
         return -ENOMEM;
@@ -8370,7 +8368,7 @@ static int castle_data_ext_remove(struct castle_data_extent *data_ext, void *unu
     castle_sysfs_data_extent_del(data_ext);
     castle_data_exts_hash_remove(data_ext);
 
-    castle_kfree(data_ext);
+    castle_free(data_ext);
 
     return 0;
 }
@@ -8424,7 +8422,7 @@ static void castle_ct_data_exts_unlink(struct castle_component_tree *ct)
         castle_data_ext_unlink(ct->data_exts[i]);
     }
 
-    castle_check_kfree(ct->data_exts);
+    castle_check_free(ct->data_exts);
     ct->nr_data_exts = 0;
 }
 
@@ -8691,7 +8689,7 @@ void castle_ct_put(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *
 
     /* Poison ct (note this will be repoisoned by kfree on kernel debug build. */
     memset(ct, 0xde, sizeof(struct castle_component_tree));
-    castle_kfree(ct);
+    castle_free(ct);
 }
 
 /**
@@ -8976,8 +8974,8 @@ static int _castle_da_merge_dealloc(struct castle_da_merge *merge, void *unused)
 static void castle_merge_hash_destroy(void)
 {
     __castle_merges_hash_iterate(_castle_da_merge_dealloc, NULL);
-    castle_check_kfree(castle_merges_hash);
-    castle_check_kfree(castle_merge_threads_hash);
+    castle_check_free(castle_merges_hash);
+    castle_check_free(castle_merge_threads_hash);
 }
 
 static int castle_da_hash_dealloc(struct castle_double_array *da, void *unused)
@@ -8999,7 +8997,7 @@ static void castle_da_hash_destroy(void)
 {
     /* No need for the lock, end-of-day stuff. */
    __castle_da_hash_iterate(castle_da_hash_dealloc, NULL);
-   castle_kfree(castle_da_hash);
+   castle_free(castle_da_hash);
 }
 
 static void castle_ct_hash_destroy(void)
@@ -9007,13 +9005,13 @@ static void castle_ct_hash_destroy(void)
     /* At this there shouldn't be any more CTs left in hash table. Check it by passing NULL
      * as iterator. */
     castle_ct_hash_iterate(NULL, NULL);
-    castle_kfree(castle_ct_hash);
+    castle_free(castle_ct_hash);
 }
 
 static void castle_data_exts_hash_destroy(void)
 {
     __castle_data_exts_hash_iterate(castle_data_ext_remove, NULL);
-    castle_kfree(castle_data_exts_hash);
+    castle_free(castle_data_exts_hash);
 }
 
 struct castle_da_writeback_mstores {
@@ -9533,7 +9531,7 @@ static int castle_da_ct_bloom_build_param_deserialise(struct castle_component_tr
     }
 
     BUG_ON(ct->bloom.btree->magic != ct->btree_type);
-    ct->bloom.private = castle_zalloc(sizeof(struct castle_bloom_build_params), GFP_KERNEL);
+    ct->bloom.private = castle_zalloc(sizeof(struct castle_bloom_build_params));
     if(!ct->bloom.private)
     {
         castle_printk(LOG_ERROR, "%s::failed to deserialise bloom build parameters for CT %d; "
@@ -9608,10 +9606,10 @@ static int castle_da_merge_deser_mstore_outtree_recover(void)
 
         /* alloc temp storage for mstore entry; will be used until we have a struct alloc'd by
            castle_da_merge_alloc(). */
-        entry = castle_zalloc(sizeof(struct castle_dmserlist_entry), GFP_KERNEL);
+        entry = castle_zalloc(sizeof(struct castle_dmserlist_entry));
         if(!entry)
         {
-            castle_printk(LOG_ERROR, "%s:: castle_malloc fail\n", __FUNCTION__);
+            castle_printk(LOG_ERROR, "%s:: castle_alloc fail\n", __FUNCTION__);
             BUG();
         }
 
@@ -9634,8 +9632,7 @@ static int castle_da_merge_deser_mstore_outtree_recover(void)
 
         if (entry->nr_drain_exts > 0)
         {
-            drain_exts = castle_zalloc(sizeof(c_ext_id_t) * entry->nr_drain_exts,
-                                       GFP_KERNEL);
+            drain_exts = castle_zalloc(sizeof(c_ext_id_t) * entry->nr_drain_exts);
             BUG_ON(!drain_exts); //TODO@tr handle this better?
         }
 
@@ -9655,7 +9652,7 @@ static int castle_da_merge_deser_mstore_outtree_recover(void)
 
         /* Copy mstore entry into merge struct so the merge is immediately re-checkpointable */
         memcpy(merge->serdes.mstore_entry, entry, sizeof(struct castle_dmserlist_entry));
-        castle_kfree(entry);
+        castle_free(entry);
         entry = NULL;
         /* set merge state as immediately re-checkpointable */
         atomic_set(&merge->serdes.valid, VALID_AND_STALE_DAM_SERDES);
@@ -9758,10 +9755,10 @@ static int castle_da_merge_deser_intrees_attach(void)
         struct castle_component_tree *ct;
         struct castle_da_merge *merge = NULL;
 
-        entry = castle_zalloc(sizeof(struct castle_in_tree_merge_state_entry), GFP_KERNEL);
+        entry = castle_zalloc(sizeof(struct castle_in_tree_merge_state_entry));
         if(!entry)
         {
-            castle_printk(LOG_ERROR, "%s:: castle_malloc fail\n", __FUNCTION__);
+            castle_printk(LOG_ERROR, "%s:: castle_alloc fail\n", __FUNCTION__);
             BUG();
         }
 
@@ -9806,7 +9803,7 @@ static int castle_da_merge_deser_intrees_attach(void)
         merge->in_trees[pos] = ct;
         memcpy(&merge->serdes.in_tree_mstore_entry_arr[pos],
                 entry, sizeof(struct castle_in_tree_merge_state_entry));
-        castle_check_kfree(entry);
+        castle_check_free(entry);
 
         castle_printk(LOG_DEBUG, "%s::recovered input tree (seq=%d) merge state for da %d merge_id %u pos %d.\n",
                 __FUNCTION__,
@@ -10027,7 +10024,7 @@ static struct castle_component_tree * castle_ct_init(struct castle_double_array 
     int i;
     struct castle_component_tree *ct;
 
-    ct = castle_zalloc(sizeof(struct castle_component_tree), GFP_KERNEL);
+    ct = castle_zalloc(sizeof(struct castle_component_tree));
 
     if (!ct)
         return NULL;
@@ -10046,7 +10043,7 @@ static struct castle_component_tree * castle_ct_init(struct castle_double_array 
     ct->internal_ext_free.ext_id = INVAL_EXT_ID;
     ct->tree_ext_free.ext_id     = INVAL_EXT_ID;
     ct->data_ext_free.ext_id     = INVAL_EXT_ID;
-    ct->data_exts                = castle_zalloc(sizeof(c_ext_id_t) * nr_data_exts, GFP_KERNEL);
+    ct->data_exts                = castle_zalloc(sizeof(c_ext_id_t) * nr_data_exts);
     ct->data_exts_count          = nr_data_exts;
     ct->nr_data_exts             = 0;
     ct->bloom_exists             = 0;
@@ -10091,8 +10088,8 @@ static struct castle_component_tree * castle_ct_init(struct castle_double_array 
     return ct;
 
 err_out:
-    castle_check_kfree(ct->data_exts);
-    castle_check_kfree(ct);
+    castle_check_free(ct->data_exts);
+    castle_check_free(ct);
 
     return NULL;
 }
@@ -10122,8 +10119,8 @@ struct castle_component_tree* castle_ct_alloc(struct castle_double_array *da,
     if(ct->seq >= (1ULL<<TREE_SEQ_SHIFT))
     {
         castle_printk(LOG_ERROR, "Could not allocate a CT because of sequence # overflow.\n");
-        castle_kfree(ct->data_exts);
-        castle_kfree(ct);
+        castle_free(ct->data_exts);
+        castle_free(ct);
         return NULL;
     }
 
@@ -11812,7 +11809,7 @@ int castle_double_array_init(void)
     mutex_init(&castle_da_level1_merge_init);
 
     /* Populate request_cpus with CPU ids ready to handle requests. */
-    request_cpus.cpus = castle_malloc(sizeof(int) * num_online_cpus(), GFP_KERNEL);
+    request_cpus.cpus = castle_alloc(sizeof(int) * num_online_cpus());
     if (!request_cpus.cpus)
         goto err0;
     request_cpus.cnt = 0;
@@ -11852,15 +11849,15 @@ int castle_double_array_init(void)
     return 0;
 
 err5:
-    castle_kfree(castle_merges_hash);
+    castle_free(castle_merges_hash);
 err4:
-    castle_kfree(castle_merge_threads_hash);
+    castle_free(castle_merge_threads_hash);
 err3:
-    castle_kfree(castle_ct_hash);
+    castle_free(castle_ct_hash);
 err2:
-    castle_kfree(castle_da_hash);
+    castle_free(castle_da_hash);
 err1:
-    castle_kfree(request_cpus.cpus);
+    castle_free(request_cpus.cpus);
 err0:
     for (j = 0; j < i; j++)
         destroy_workqueue(castle_da_wqs[j]);
@@ -11903,7 +11900,7 @@ void castle_double_array_fini(void)
     castle_ct_hash_destroy();
     castle_data_exts_hash_destroy();
 
-    castle_kfree(request_cpus.cpus);
+    castle_free(request_cpus.cpus);
 
     for (i = 0; i < NR_CASTLE_DA_WQS; i++)
         destroy_workqueue(castle_da_wqs[i]);
@@ -12297,7 +12294,7 @@ static int castle_merge_run(void *_data)
 
     castle_merge_threads_hash_remove(merge_thread);
 
-    castle_kfree(merge_thread);
+    castle_free(merge_thread);
 
     atomic_dec(&castle_da_merge_thread_count);
 
@@ -12314,8 +12311,8 @@ static int castle_merge_run(void *_data)
 
 static int castle_merge_thread_create(c_thread_id_t *thread_id, struct castle_double_array *da)
 {
-    struct castle_merge_thread *merge_thread = castle_malloc(sizeof(struct castle_merge_thread),
-                                                             GFP_KERNEL);
+    struct castle_merge_thread *merge_thread = castle_alloc(sizeof(struct castle_merge_thread));
+
     BUG_ON(!CASTLE_IN_TRANSACTION);
 
     *thread_id = INVAL_THREAD_ID;
@@ -12331,7 +12328,7 @@ static int castle_merge_thread_create(c_thread_id_t *thread_id, struct castle_do
     if (IS_ERR(merge_thread->thread))
     {
         castle_printk(LOG_USERINFO, "Failed to create merge thread\n");
-        castle_kfree(merge_thread);
+        castle_free(merge_thread);
         return -ENOMEM;
     }
 
@@ -12487,7 +12484,7 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
     }
 
     /* Allocate memory for list of input arrays. */
-    in_trees = castle_malloc(sizeof(void *) * merge_cfg->nr_arrays, GFP_KERNEL);
+    in_trees = castle_alloc(sizeof(void *) * merge_cfg->nr_arrays);
     if (!in_trees)
     {
         ret = C_ERR_NOMEM;
@@ -12511,7 +12508,7 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
             merge_cfg->nr_data_exts += in_trees[i]->nr_data_exts;
 
         BUG_ON(merge_cfg->data_exts != NULL);
-        merge_cfg->data_exts = castle_malloc(sizeof(c_ext_id_t) * merge_cfg->nr_data_exts, GFP_KERNEL);
+        merge_cfg->data_exts = castle_alloc(sizeof(c_ext_id_t) * merge_cfg->nr_data_exts);
         if (!merge_cfg->data_exts)
         {
             castle_printk(LOG_USERINFO, "Failed to allocate memory\n");
@@ -12570,7 +12567,7 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
         ret = C_ERR_NOMEM;
         goto err_out;
     }
-    castle_check_kfree(in_trees);
+    castle_check_free(in_trees);
 
     ret = castle_da_merge_init(merge, NULL);
     if (ret < 0)
@@ -12613,7 +12610,7 @@ err_out:
     if (merge)
         castle_da_merge_dealloc(merge, ret, 1 /* In transaction. */);
 
-    castle_check_kfree(in_trees);
+    castle_check_free(in_trees);
 
     return ret;
 }

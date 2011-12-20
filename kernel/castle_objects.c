@@ -763,7 +763,7 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
         counter = (replace->counter_type != CASTLE_OBJECT_NOT_COUNTER);
         BUG_ON(counter && (value_len != 8));
         /* Allocate memory. 16 bytes for accumulating counter. */
-        value = castle_malloc(counter ? 16 : value_len, GFP_KERNEL);
+        value = castle_alloc(counter ? 16 : value_len);
         if(!value)
             return -ENOMEM;
 
@@ -1002,7 +1002,7 @@ void _castle_object_iter_init(castle_object_iterator_t *iterator)
     {
         iterator->btree->key_dealloc(iterator->end_key);
         iterator->btree->key_dealloc(iterator->start_key);
-        castle_kfree(iterator);
+        castle_free(iterator);
     }
     else
         castle_objects_rq_iter_register_cb(iterator,
@@ -1063,7 +1063,7 @@ int castle_object_iter_init(struct castle_attachment *attachment,
             !(castle_object_btree_key_dim_flags_get(end_key, i) & KEY_DIMENSION_PLUS_INFINITY_FLAG))
             return -EINVAL;
 
-    iterator = castle_malloc(sizeof(castle_object_iterator_t), GFP_KERNEL);
+    iterator = castle_alloc(sizeof(castle_object_iterator_t));
     if (!iterator)
         return -ENOMEM;
     *iter = iterator;
@@ -1092,7 +1092,7 @@ int castle_object_iter_init(struct castle_attachment *attachment,
     return 0;
 
 err1: iterator->btree->key_dealloc(iterator->start_key);
-err0: castle_kfree(iterator);
+err0: castle_free(iterator);
     return ret;
 }
 
@@ -1154,7 +1154,7 @@ int castle_object_iter_finish(castle_object_iterator_t *iterator)
     debug_rq("Freeing iterators & buffers.\n");
     iterator->btree->key_dealloc(iterator->end_key);
     iterator->btree->key_dealloc(iterator->start_key);
-    castle_kfree(iterator);
+    castle_free(iterator);
 
     return 0;
 }
@@ -1180,7 +1180,7 @@ static void castle_object_value_acquire(c_val_tup_t *cvt)
 {
     if (CVT_INLINE(*cvt) && !CVT_ANY_COUNTER(*cvt))
     {
-        char *buf = castle_malloc(cvt->length, GFP_KERNEL);
+        char *buf = castle_alloc(cvt->length);
         memcpy(buf, CVT_INLINE_VAL_PTR(*cvt), cvt->length);
         cvt->val_p = buf;
     }

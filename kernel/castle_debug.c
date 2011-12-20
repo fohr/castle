@@ -56,7 +56,7 @@ static void __castle_debug_dobj_add(struct castle_malloc_debug *dobj,
 }
 
 /**
- * Allocate bytes using castle_malloc(), falling back to castle_vmalloc() as appropriate.
+ * Allocate bytes using castle_debug_malloc(), falling back to castle_debug_vmalloc) as appropriate.
  */
 void* castle_debug_alloc_func(size_t size, char *file, int line)
 {
@@ -65,11 +65,27 @@ void* castle_debug_alloc_func(size_t size, char *file, int line)
     if (likely(size <= MAX_KMALLOC_SIZE))
     {
         buf = castle_debug_malloc(size, GFP_KERNEL, file, line);
-        if (likely(!buf))
-            buf = castle_debug_vmalloc(size, file, line);
+        if (buf)
+            return buf;
     }
-    else
-        buf = castle_debug_vmalloc(size, file, line);
+
+    return castle_debug_vmalloc(size, file, line);
+}
+
+void* castle_debug_zalloc_func(size_t size, char *file, int line)
+{
+    void *buf;
+
+    if (likely(size <= MAX_KMALLOC_SIZE))
+    {
+        buf = castle_debug_zalloc(size, GFP_KERNEL, file, line);
+        if (buf)
+            return buf;
+    }
+
+    buf = castle_debug_vmalloc(size, file, line);
+    if (buf)
+        memset(buf, 0, size);
 
     return buf;
 }
@@ -82,9 +98,9 @@ void castle_debug_free_func(void *ptr)
     unsigned long addr = (unsigned long) ptr;
 
     if (likely(addr >= VMALLOC_START && addr < VMALLOC_END))
-        castle_vfree(ptr);
+        castle_debug_vfree(ptr);
     else
-        castle_kfree(ptr);
+        castle_debug_free(ptr);
 }
 
 /**
@@ -183,6 +199,7 @@ void* castle_debug_vmalloc(unsigned long size, char *file, int line)
     if(!dobj)
         return NULL;
 
+    BUG_ON(((unsigned long)dobj < VMALLOC_START) || ((unsigned long)dobj >= VMALLOC_END));
     /* Init and add the object to the list. */
     __castle_debug_dobj_add(dobj, size, file, line, 1);
 
@@ -460,7 +477,7 @@ static void castle_debug_watches_free(void)
         for(i=0; i<nr_watches; i++)
             if(watched_data[i] != NULL)
                 __free_page(watched_data[i]);
-        castle_kfree(watched_data);
+        castle_free(watched_data);
     }
 }
 
@@ -473,7 +490,7 @@ int castle_debug_init(void)
         return -ENOMEM;
 
     /* Try to allocate buffers for watched pages */
-    watched_data = castle_zalloc(sizeof(struct page*) * nr_watches, GFP_KERNEL);
+    watched_data = castle_zalloc(sizeof(struct page*) * nr_watches);
     if(!watched_data) goto alloc_failed;
     for(i=0; i<nr_watches; i++)
     {

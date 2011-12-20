@@ -75,7 +75,7 @@ int castle_vmap_fast_map_init(void)
                 freelist = get_freelist_head (freelist_bucket_idx);
 
                 castle_vmap_freelist_delete(freelist);
-                castle_kfree(freelist);
+                castle_free(freelist);
             }
             return -ENOMEM;
         }
@@ -102,7 +102,7 @@ void castle_vmap_fast_map_fini(void)
         castle_vmap_freelist = get_freelist_head(freelist_bucket_idx);
         BUG_ON(!(list_is_singular(castle_vmap_fast_maps_ptr+freelist_bucket_idx)));
         castle_vmap_freelist_delete(castle_vmap_freelist);
-        castle_kfree(castle_vmap_freelist);
+        castle_free(castle_vmap_freelist);
     }
 }
 
@@ -116,7 +116,7 @@ static castle_vmap_freelist_t *castle_vmap_freelist_init(int slot_size, int slot
     castle_vmap_freelist_t  *castle_vmap_freelist;
     int i;
 
-    castle_vmap_freelist = castle_malloc(sizeof(castle_vmap_freelist_t), GFP_KERNEL);
+    castle_vmap_freelist = castle_alloc(sizeof(castle_vmap_freelist_t));
 
     if (!castle_vmap_freelist)
         goto errout_1;
@@ -124,7 +124,7 @@ static castle_vmap_freelist_t *castle_vmap_freelist_init(int slot_size, int slot
     /* Each array is sized to include 'slots' entries, plus a canary page between
        each entry. For n entries of size p this is (n * p) + n - 1 pages */
     nr_vmap_array_pages = (slots * slot_size + slots - 1);
-    pgs_array = castle_vmalloc(nr_vmap_array_pages * sizeof(struct page *));
+    pgs_array = castle_alloc(nr_vmap_array_pages * sizeof(struct page *));
     if(!pgs_array)
         goto errout_2;
 
@@ -132,13 +132,12 @@ static castle_vmap_freelist_t *castle_vmap_freelist_init(int slot_size, int slot
        a page can be used as backing for a vmap (dummy pages). We will use each dummy page a
        maximum of 1<<DUMMY_PAGE_SHIFT times to workaround this limit */
     nr_dummy_pages = (nr_vmap_array_pages>>DUMMY_PAGE_SHIFT) + 1;
-    dummy_pages = castle_vmalloc(nr_dummy_pages * sizeof(struct page *));
+    dummy_pages = castle_zalloc(nr_dummy_pages * sizeof(struct page *));
     if(!dummy_pages)
         goto errout_3;
-    memset(dummy_pages, 0, nr_dummy_pages * sizeof(struct page *));
 
     /* Freelist contains one slot per mapping, plus one extra as an end-of-freelist marker */
-    castle_vmap_freelist->freelist = castle_vmalloc((slots + 1) * sizeof(uint32_t));
+    castle_vmap_freelist->freelist = castle_alloc((slots + 1) * sizeof(uint32_t));
 
     if(!castle_vmap_freelist->freelist)
         goto errout_4;
@@ -184,9 +183,9 @@ static castle_vmap_freelist_t *castle_vmap_freelist_init(int slot_size, int slot
     for (i=0;i<nr_dummy_pages;i++)
         __free_page(dummy_pages[i]);
 
-    castle_vfree(dummy_pages);
+    castle_free(dummy_pages);
 
-    castle_vfree(pgs_array);
+    castle_free(pgs_array);
 
     return castle_vmap_freelist;
 
@@ -194,13 +193,13 @@ errout_5:
     for (i=0;i<nr_dummy_pages;i++)
         if (dummy_pages[i])
             __free_page(dummy_pages[i]);
-    castle_vfree(castle_vmap_freelist->freelist);
+    castle_free(castle_vmap_freelist->freelist);
 errout_4:
-    castle_vfree(dummy_pages);
+    castle_free(dummy_pages);
 errout_3:
-    castle_vfree(pgs_array);
+    castle_free(pgs_array);
 errout_2:
-    castle_kfree(castle_vmap_freelist);
+    castle_free(castle_vmap_freelist);
 errout_1:
     return NULL;
 }
@@ -220,7 +219,7 @@ static void castle_vmap_freelist_delete(castle_vmap_freelist_t *castle_vmap_free
     BUG_ON(i != castle_vmap_freelist->nr_slots);
 }
 #endif
-    castle_vfree(castle_vmap_freelist->freelist);
+    castle_free(castle_vmap_freelist->freelist);
     /* Let vmalloc.c destroy vm_area_struct by vmunmping it. */
     vunmap(castle_vmap_freelist->vstart);
 }
@@ -352,7 +351,7 @@ void castle_vmap_fast_unmap(void *vaddr, int nr_pages)
             if(need_release_list)
             {
                 castle_vmap_freelist_delete(castle_vmap_freelist);
-                castle_kfree(castle_vmap_freelist);
+                castle_free(castle_vmap_freelist);
             }
 
             return;
@@ -394,7 +393,7 @@ static void castle_vmap_freelist_grow(int freelist_bucket_idx, int slots)
     {
         debug("Dropping new list for freelist bucket index %d\n", freelist_bucket_idx);
         castle_vmap_freelist_delete(new);
-        castle_kfree(new);
+        castle_free(new);
         goto out;
     }
     list_add(&new->list, castle_vmap_fast_maps_ptr+freelist_bucket_idx);

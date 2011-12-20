@@ -2053,7 +2053,7 @@ static struct node_buf_t* node_buf_alloc(c_rq_iter_t *rq_iter)
 
     ct = rq_iter->tree;
     leaf_node_size = ct->node_sizes[0];
-    node_buf = castle_malloc(sizeof(struct node_buf_t), GFP_KERNEL);
+    node_buf = castle_alloc(sizeof(struct node_buf_t));
     BUG_ON(!node_buf);
     if (leaf_node_size * C_BLK_SIZE > MAX_KMALLOC_SIZE)
         leaf_node_size = MAX_KMALLOC_SIZE / C_BLK_SIZE;
@@ -2392,7 +2392,7 @@ static void castle_rq_iter_fini(c_rq_iter_t *rq_iter)
         next = list_entry(buf->list.next,
                           struct node_buf_t, list);
         castle_free(buf->node);
-        castle_kfree(buf);
+        castle_free(buf);
         buf = next;
         count++;
         BUG_ON(count > rq_iter->buf_count);

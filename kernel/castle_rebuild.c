@@ -1,4 +1,5 @@
 #include "castle.h"
+#include "castle_utils.h"
 #include "castle_debug.h"
 #include "castle_extent.h"
 #include "castle_cache.h"
@@ -36,7 +37,7 @@ void castle_resubmit_c2b(int rw, c2_block_t * c2b)
     struct resubmit_c2b *rc2b;
     unsigned long flags;
 
-    rc2b = castle_malloc(sizeof(struct resubmit_c2b), GFP_ATOMIC);
+    rc2b = castle_alloc_atomic(sizeof(struct resubmit_c2b));
     BUG_ON(!rc2b);
 
     spin_lock_irqsave(&resubmit_list_lock, flags);
@@ -103,7 +104,7 @@ static int castle_resubmit_run(void *unused)
             BUG_ON(atomic_read(&c2b->remaining));
             debug("Resubmitting c2b %p\n", rc2b->c2b);
             BUG_ON(submit_c2b(rc2b->rw, rc2b->c2b));
-            castle_kfree(rc2b);
+            castle_free(rc2b);
             spin_lock_irq(&resubmit_list_lock);
         }
         spin_unlock_irq(&resubmit_list_lock);

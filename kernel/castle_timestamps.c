@@ -59,7 +59,7 @@ int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da
     }
 
     /* Alloc DFS walker stack base structure */
-    dfs_resolver->stack = castle_zalloc(sizeof(c_uint32_stack), GFP_KERNEL);
+    dfs_resolver->stack = castle_zalloc(sizeof(c_uint32_stack));
     if( !dfs_resolver->stack )
     {
         ret = -ENOMEM;

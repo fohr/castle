@@ -1362,7 +1362,7 @@ static void c2b_multi_io_end(struct bio *bio, int err)
 #ifdef CASTLE_DEBUG
     local_irq_restore(flags);
 #endif
-    castle_kfree(bio_info);
+    castle_free(bio_info);
     bio_put(bio);
 
     /*
@@ -1476,7 +1476,7 @@ int submit_direct_io(int                    rw,
     /* Allocate BIO and bio_info struct */
     bio = bio_alloc(GFP_KERNEL, 1);
     BUG_ON(!bio);
-    bio_info = castle_malloc(sizeof(struct bio_info), GFP_KERNEL);
+    bio_info = castle_alloc(sizeof(struct bio_info));
     BUG_ON(!bio_info);
 
     /* Init BIO and bio_info. */
@@ -1506,7 +1506,7 @@ int submit_direct_io(int                    rw,
     {
         castle_printk(LOG_ERROR, "BIO flagged not supported.\n");
         bio_put(bio);
-        castle_kfree(bio_info);
+        castle_free(bio_info);
         return -EOPNOTSUPP;
     }
 
@@ -1515,7 +1515,7 @@ int submit_direct_io(int                    rw,
     wait_for_completion(&bio_info->completion);
     ret = bio_info->err;
 
-    castle_kfree(bio_info);
+    castle_free(bio_info);
 
     return ret;
 }
@@ -1612,7 +1612,7 @@ int submit_c2b_io(int           rw,
 
         /* Allocate BIO and bio_info struct */
         bio = bio_alloc(GFP_KERNEL, batch);
-        bio_info = castle_malloc(sizeof(struct bio_info), GFP_KERNEL);
+        bio_info = castle_alloc(sizeof(struct bio_info));
         BUG_ON(!bio_info);
 
         /* Init BIO and bio_info. */
@@ -2667,14 +2667,14 @@ static c2_page_t** castle_cache_page_freelist_get(int nr_pages)
 
     debug("%s::Asked for %d pages from the freelist.\n", __FUNCTION__, nr_pages);
     nr_c2ps = castle_cache_pages_to_c2ps(nr_pages);
-    c2ps = castle_zalloc(nr_c2ps * sizeof(c2_page_t *), GFP_KERNEL);
+    c2ps = castle_zalloc(nr_c2ps * sizeof(c2_page_t *));
     BUG_ON(!c2ps);
     spin_lock(&castle_cache_freelist_lock);
     /* Will only be able to satisfy the request if we have nr_pages on the list */
     if (castle_cache_page_freelist_size * PAGES_PER_C2P < nr_pages)
     {
         spin_unlock(&castle_cache_freelist_lock);
-        castle_kfree(c2ps);
+        castle_free(c2ps);
         debug("Freelist too small to allocate %d pages.\n", nr_pages);
         return NULL;
     }
@@ -2715,14 +2715,14 @@ static c2_page_t** castle_cache_page_reservelist_get(int nr_pages)
     int i, nr_c2ps;
 
     nr_c2ps = castle_cache_pages_to_c2ps(nr_pages);
-    c2ps = castle_zalloc(nr_c2ps * sizeof(c2_page_t *), GFP_KERNEL);
+    c2ps = castle_zalloc(nr_c2ps * sizeof(c2_page_t *));
     BUG_ON(!c2ps);
 
     spin_lock(&castle_cache_reservelist_lock);
     if (atomic_read(&castle_cache_page_reservelist_size) * PAGES_PER_C2P < nr_pages)
     {
         spin_unlock(&castle_cache_reservelist_lock);
-        castle_kfree(c2ps);
+        castle_free(c2ps);
         debug("Reservelist too small to allocate %d pages.\n", nr_pages);
         return NULL;
     }
@@ -3034,7 +3034,7 @@ static void castle_cache_block_free(c2_block_t *c2b)
     __castle_cache_block_freelist_add(c2b);
     spin_unlock(&castle_cache_freelist_lock);
     /* Free the c2ps array. By this point, we must not use c2b any more. */
-    castle_kfree(c2ps);
+    castle_free(c2ps);
 }
 
 static inline int c2b_busy(c2_block_t *c2b, int expected_count)
@@ -4090,7 +4090,7 @@ static c2_pref_window_t * c2_pref_window_alloc(c2_pref_window_t *window,
                                                c_ext_pos_t cep,
                                                c2_advise_t advise)
 {
-    window = castle_malloc(sizeof(c2_pref_window_t), GFP_KERNEL);
+    window = castle_alloc(sizeof(c2_pref_window_t));
     if(!window)
         return NULL;
 
@@ -4201,7 +4201,7 @@ static void c2_pref_window_drop(c2_pref_window_t *window)
     c2_pref_window_falloff(cep, pages, window, 0);
 
     /* Free up the window structure. */
-    castle_kfree(window);
+    castle_free(window);
 }
 
 /**
@@ -5684,7 +5684,7 @@ int castle_cache_extent_flush_schedule(c_ext_id_t ext_id, uint64_t start,
 {
     struct castle_cache_flush_entry *entry;
 
-    entry = castle_malloc(sizeof(struct castle_cache_flush_entry), GFP_KERNEL);
+    entry = castle_alloc(sizeof(struct castle_cache_flush_entry));
     BUG_ON(!entry);
 
     /* Take a hard reference on extent, to make sure extent wouldn't disappear during flush. */
@@ -5727,7 +5727,7 @@ void castle_cache_extents_flush(struct list_head *flush_list, unsigned int ratel
         castle_extent_unlink(entry->ext_id);
 
         list_del(lh);
-        castle_kfree(entry);
+        castle_free(entry);
     }
 
     BUG_ON(!list_empty(flush_list));

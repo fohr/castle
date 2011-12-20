@@ -223,7 +223,7 @@ void* castle_def_rda_extent_init(c_ext_t *ext,
     uint32_t nr_slaves;
 
     /* Allocate memory for the state structure. */
-    state = castle_zalloc(sizeof(c_def_rda_state_t), GFP_KERNEL);
+    state = castle_zalloc(sizeof(c_def_rda_state_t));
     if (!state)
     {
         castle_printk(LOG_ERROR, "Failed to allocate memory for RDA state.\n");
@@ -279,7 +279,7 @@ void* castle_def_rda_extent_init(c_ext_t *ext,
 
         BUG_ON(nr_slaves > state->nr_slaves);
 
-        slaves = castle_zalloc(sizeof(struct castle_slave *) * nr_slaves, GFP_KERNEL);
+        slaves = castle_zalloc(sizeof(struct castle_slave *) * nr_slaves);
         if (!slaves)
             goto err_out;
 
@@ -306,7 +306,7 @@ void* castle_def_rda_extent_init(c_ext_t *ext,
         memset(&state->permuted_slaves, 0, sizeof(struct castle_slave *) * MAX_NR_SLAVES);
         memcpy(&state->permuted_slaves, slaves, sizeof(struct castle_slave *) * nr_slaves);
 
-        castle_kfree(slaves);
+        castle_free(slaves);
     }
 #endif
 
@@ -317,7 +317,7 @@ void* castle_def_rda_extent_init(c_ext_t *ext,
 
 err_out:
     if (state)
-        castle_kfree(state);
+        castle_free(state);
 
     return NULL;
 }
@@ -326,7 +326,7 @@ void castle_def_rda_extent_fini(void *state_p)
 {
     c_def_rda_state_t *state = (c_def_rda_state_t *)state_p;
 
-    castle_kfree(state);
+    castle_free(state);
 }
 
 int castle_def_rda_next_slave_get(struct castle_slave **cs,
@@ -400,7 +400,7 @@ void* castle_ssd_rda_extent_init(c_ext_t *ext,
     BUG_ON((rda_type == SSD_RDA_3) && (rda_spec->k_factor != 1 + castle_rda_2.k_factor));
     BUG_ON((rda_type == SSD_ONLY_EXT) && (rda_spec->k_factor != 1));
     /* Allocate state structure, and corresponding default RDA spec state. */
-    state = castle_zalloc(sizeof(c_ssd_rda_state_t), GFP_KERNEL);
+    state = castle_zalloc(sizeof(c_ssd_rda_state_t));
     if(!state)
         goto err_out;
     state->rda_spec = rda_spec;
@@ -435,7 +435,7 @@ err_out:
     {
         if(state->def_state)
             castle_def_rda_extent_fini(state->def_state);
-        castle_kfree(state);
+        castle_free(state);
     }
     return NULL;
 }
@@ -446,7 +446,7 @@ void castle_ssd_rda_extent_fini(void *state_v)
 
     if(state->def_state)
         castle_def_rda_extent_fini(state->def_state);
-    castle_kfree(state);
+    castle_free(state);
 }
 
 int castle_ssd_rda_next_slave_get(struct castle_slave **cs,

@@ -314,7 +314,7 @@ c_req_time_t* _castle_request_timeline_create(char *desc, char *file, int line)
     /* Create the timeline when sequence # is divisible by period. */
     if(atomic_inc_return(&castle_checkpoint_create_seq) % REQUEST_PERIOD != 0)
         return NULL;
-    timeline = castle_zalloc(sizeof(c_req_time_t), GFP_KERNEL);
+    timeline = castle_zalloc(sizeof(c_req_time_t));
     if(!timeline)
         return NULL;
     timeline->active_checkpoint = -1;
@@ -517,7 +517,7 @@ static int castle_time_run(void *unused)
             castle_request_timeline_print(timeline);    /* Stats for timeline           */
             castle_checkpoint_stats_print();            /* Printing timing statistics   */
         }
-        castle_kfree(timeline);
+        castle_free(timeline);
         cnt++;
 
         /* Go to the next timeline */

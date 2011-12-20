@@ -331,7 +331,7 @@ int castle_attachments_read(void)
         struct castle_alist_entry mstore_entry;
         struct castle_attachment *ca;
         size_t mstore_entry_size;
-        char *name = castle_malloc(MAX_NAME_SIZE, GFP_KERNEL);
+        char *name = castle_alloc(MAX_NAME_SIZE);
 
         BUG_ON(!name);
         castle_mstore_iterator_next(iterator, &mstore_entry, &mstore_entry_size);
@@ -378,7 +378,7 @@ void castle_control_collection_attach(c_ver_t            version,
         if (strcmp(name, ca->col.name) == 0)
         {
             castle_printk(LOG_WARN, "Collection name %s already exists\n", ca->col.name);
-            castle_kfree(name);
+            castle_free(name);
             *ret = -EEXIST;
             return;
         }
@@ -387,7 +387,7 @@ void castle_control_collection_attach(c_ver_t            version,
     if (castle_version_deleted(version))
     {
         castle_printk(LOG_WARN, "Version is already marked for deletion. Can't be attached\n");
-        castle_kfree(name);
+        castle_free(name);
         *ret = -EINVAL;
         return;
     }
@@ -624,14 +624,14 @@ void castle_control_environment_set(c_env_var_t var_id, char *var_str, int *ret)
     /* Check that the id is in range. */
     if(var_id >= NR_ENV_VARS)
     {
-        castle_kfree(var_str);
+        castle_free(var_str);
         *ret = -EINVAL;
         return;
     }
 
     /* Save the environment var. */
     strncpy(castle_environment[var_id], var_str, MAX_ENV_LEN);
-    castle_kfree(var_str);
+    castle_free(var_str);
 
     *ret = 0;
 }
@@ -825,7 +825,7 @@ static void castle_thread_priority_set(struct work_struct *work)
     set_user_nice(current, castle_nice_value);
     /* It is safe to free work structure here. Kernel is not going to use it
      * anymore.*/
-    castle_kfree(work);
+    castle_free(work);
 }
 
 /**
@@ -845,7 +845,7 @@ void castle_wq_priority_set(struct workqueue_struct *wq)
     {
         struct work_struct *work;
 
-        work = castle_malloc(sizeof(struct work_struct), GFP_KERNEL);
+        work = castle_alloc(sizeof(struct work_struct));
         if (!work)
         {
             castle_printk(LOG_WARN, "Couldn't allocate memory for work structures, not able to"
@@ -1135,7 +1135,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             size_t size = sizeof(c_array_id_t) * merge_cfg->nr_arrays;
 
             merge_cfg->data_exts = NULL;
-            merge_cfg->arrays = castle_malloc(size, GFP_KERNEL);
+            merge_cfg->arrays = castle_alloc(size);
             if (!merge_cfg->arrays || copy_from_user(merge_cfg->arrays, arrays_list, size))
             {
                 castle_printk(LOG_WARN, "Failed to copy to user space\n");
@@ -1149,7 +1149,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             {
                 printk("Dataextents: %u, %llu, %llu\n", merge_cfg->nr_data_exts, data_exts[0], data_exts[1]);
                 size = sizeof(c_ext_id_t) * merge_cfg->nr_data_exts;
-                merge_cfg->data_exts = castle_malloc(size, GFP_KERNEL);
+                merge_cfg->data_exts = castle_alloc(size);
                 if (!merge_cfg->data_exts || copy_from_user(merge_cfg->data_exts, data_exts, size))
                 {
                     castle_printk(LOG_WARN, "Failed to copy to user space\n");
@@ -1163,8 +1163,8 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             /* Incase of SUCCESS don't free data_exts. */
             merge_cfg->data_exts = NULL;
 err_out:
-            castle_check_kfree(merge_cfg->data_exts);
-            castle_check_kfree(merge_cfg->arrays);
+            castle_check_free(merge_cfg->data_exts);
+            castle_check_free(merge_cfg->arrays);
             merge_cfg->arrays = arrays_list;
             merge_cfg->data_exts = data_exts;
             break;

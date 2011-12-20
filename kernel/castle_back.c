@@ -422,7 +422,7 @@ static void castle_back_buffer_put(struct castle_back_conn *conn,
 
     UnReservePages(buf->buffer, buf->size);
     castle_vfree(buf->buffer);
-    castle_kfree(buf);
+    castle_free(buf);
 }
 
 static inline struct castle_back_buffer
@@ -2331,8 +2331,7 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
            There is no need to memcpy local counters. */
         if (CVT_INLINE(*val) && !CVT_LOCAL_COUNTER(*val))
         {
-            stateful_op->iterator.saved_val.val_p =
-                castle_malloc(val->length, GFP_KERNEL);
+            stateful_op->iterator.saved_val.val_p = castle_alloc(val->length);
             memcpy(stateful_op->iterator.saved_val.val_p,
                    CVT_INLINE_VAL_PTR(*val),
                    val->length);
@@ -3788,7 +3787,7 @@ int castle_back_open(struct inode *inode, struct file *file)
 
     debug("castle_back_dev_open\n");
 
-    conn = castle_malloc(sizeof(struct castle_back_conn), GFP_KERNEL);
+    conn = castle_alloc(sizeof(struct castle_back_conn));
     if (conn == NULL)
     {
         error("castle_back: failed to malloc new connection\n");
@@ -3891,7 +3890,7 @@ err2:
     UnReservePages(conn->back_ring.sring, CASTLE_RING_SIZE);
     castle_vfree(conn->back_ring.sring);
 err1:
-    castle_kfree(conn);
+    castle_free(conn);
 err0:
     return err;
 }
@@ -3939,7 +3938,7 @@ static void castle_back_cleanup_conn(struct castle_back_conn *conn)
 
     /* _buffer_put() cleans up buffers and they should now all have been freed
      * as conn->ref_count has reached 0. */
-    castle_kfree(conn);
+    castle_free(conn);
 
     wake_up(&conn_close_wait);
 }
@@ -4042,7 +4041,7 @@ static int castle_buffer_map(struct castle_back_conn *conn, struct vm_area_struc
         goto err1;
     }
 
-    buffer = castle_zalloc(sizeof(struct castle_back_buffer), GFP_KERNEL);
+    buffer = castle_zalloc(sizeof(struct castle_back_buffer));
     if (!buffer)
     {
         error("castle_back: failed to alloc memory for rb entry\n");
@@ -4105,7 +4104,7 @@ err4:
 err3:
     castle_vfree(buffer->buffer);
 err2:
-    castle_kfree(buffer);
+    castle_free(buffer);
 err1:
     return err;
 }

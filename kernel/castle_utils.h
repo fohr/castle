@@ -137,7 +137,7 @@ static inline void _prefix##_hash_iterate_exclusive(int (*fn)(_struct*, void*), 
                                                                                                \
 static inline struct list_head* _prefix##_hash_alloc(void)                                     \
 {                                                                                              \
-    return castle_malloc(sizeof(struct list_head) * _tab_size, GFP_KERNEL);                    \
+    return castle_alloc(sizeof(struct list_head) * _tab_size);                                 \
 }                                                                                              \
                                                                                                \
 static inline void _prefix##_hash_init(void)                                                   \
@@ -159,6 +159,10 @@ static inline void _prefix##_hash_init(void)                                    
     for (pos = (from); prefetch(pos->next), pos != (head); pos = pos->next)
 
 void list_append(struct list_head *head1, struct list_head *head2);
+
+void * castle_alloc_func(size_t size);
+void * castle_zalloc_func(size_t size);
+void castle_free_func(void *ptr);
 
 static inline uint32_t BUF_L_GET(const char *buf)
 {
@@ -198,7 +202,7 @@ static inline char* SKB_STR_GET(struct sk_buff *skb, int max_len)
     if((str_len > max_len) || (str_len > skb->len))
         return NULL;
 
-    if(!(str = castle_zalloc(str_len+1, GFP_KERNEL)))
+    if(!(str = castle_zalloc(str_len+1)))
         return NULL;
 
     BUG_ON(skb_copy_bits(skb, 0, str, str_len) < 0);
@@ -223,7 +227,7 @@ c_bio_t *castle_utils_bio_alloc(int nr_bvecs);
 
 static inline void castle_utils_bio_free(c_bio_t *bio)
 {
-    castle_kfree(bio);
+    castle_free(bio);
 }
 
 static inline int list_length(struct list_head *head)
@@ -329,8 +333,6 @@ void     castle_uint32_stack_reset(c_uint32_stack *stack);
 
 void castle_key_ptr_destroy(struct castle_key_ptr_t *key_ptr);
 void castle_key_ptr_ref_cp(struct castle_key_ptr_t *dest, struct castle_key_ptr_t *src);
-void * castle_alloc_func(size_t size);
-void castle_free_func(void *ptr);
 
 void *castle_alloc_maybe_func(size_t len, void *dst, size_t *dst_len);
 void *castle_dup_or_copy_func(const void *src, size_t src_len, void *dst, size_t *dst_len);

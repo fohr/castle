@@ -455,7 +455,7 @@ static struct castle_slave *castle_slave_ghost_add(uint32_t uuid)
     struct castle_slave *slave;
 
     BUG_ON(!CASTLE_IN_TRANSACTION);
-    if (!(slave = castle_zalloc(sizeof(struct castle_slave), GFP_KERNEL)))
+    if (!(slave = castle_zalloc(sizeof(struct castle_slave))))
         BUG_ON(!slave);
     slave->uuid = uuid;
     slave->id = slave_id++;
@@ -1144,8 +1144,8 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
     BUG_ON(sizeof(struct castle_slave_superblock) > C_BLK_SIZE);
     BUG_ON(sizeof(struct castle_fs_superblock) > C_BLK_SIZE);
 
-    cs_sb = castle_malloc(sizeof(struct castle_slave_superblock) * 2, GFP_KERNEL);
-    fs_sb = castle_malloc(sizeof(struct castle_fs_superblock) * 2, GFP_KERNEL);
+    cs_sb = castle_alloc(sizeof(struct castle_slave_superblock) * 2);
+    fs_sb = castle_alloc(sizeof(struct castle_fs_superblock) * 2);
     if (!cs_sb || !fs_sb)
     {
         castle_printk(LOG_ERROR, "Failed to allocate memory for superblocks\n");
@@ -1252,8 +1252,8 @@ out:
     BUG_ON(err);
 
 error_out:
-    if (cs_sb) castle_kfree(cs_sb);
-    if (fs_sb) castle_kfree(fs_sb);
+    if (cs_sb) castle_free(cs_sb);
+    if (fs_sb) castle_free(fs_sb);
 
     return err;
 }
@@ -1509,7 +1509,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         goto err_out;
     }
 
-    if(!(cs = castle_zalloc(sizeof(struct castle_slave), GFP_KERNEL)))
+    if(!(cs = castle_zalloc(sizeof(struct castle_slave))))
         goto err_out;
     cs->id          = slave_id++;
     cs->last_access = jiffies;
@@ -1651,7 +1651,7 @@ err_out:
 #else
     if(bdev) blkdev_put(bdev, FMODE_READ|FMODE_WRITE);
 #endif
-    if(cs)   castle_kfree(cs);
+    if(cs)   castle_free(cs);
     slave_id--;
 
     return NULL;
@@ -1696,7 +1696,7 @@ void castle_release(struct castle_slave *cs)
 
     list_del_rcu(&cs->list);
     synchronize_rcu();
-    castle_kfree(cs);
+    castle_free(cs);
 }
 
 static int castle_open(struct castle_attachment *dev)
@@ -2222,8 +2222,8 @@ void castle_attachment_free_complete(struct castle_attachment *ca)
     BUG_ON(ca->ref_cnt != 0);
 
     /* Free collection. */
-    castle_kfree(ca->col.name);
-    castle_kfree(ca);
+    castle_free(ca->col.name);
+    castle_free(ca);
 }
 
 EXPORT_SYMBOL(castle_attachment_get);
@@ -2241,7 +2241,7 @@ struct castle_attachment* castle_attachment_init(int device, /* _or_object_colle
         return NULL;
     BUG_ON(castle_version_read(version, da_id, NULL, NULL, size, leaf));
 
-    attachment = castle_malloc(sizeof(struct castle_attachment), GFP_KERNEL);
+    attachment = castle_alloc(sizeof(struct castle_attachment));
     if(!attachment)
     {
         castle_version_detach(version);
@@ -2279,7 +2279,7 @@ void castle_device_free(struct castle_attachment *cd)
     del_gendisk(cd->dev.gd);
     put_disk(cd->dev.gd);
     list_del(&cd->list);
-    castle_kfree(cd);
+    castle_free(cd);
     castle_version_detach(version);
 }
 
@@ -2339,7 +2339,7 @@ struct castle_attachment* castle_device_init(c_ver_t version)
 error_out:
     if(gd)  put_disk(gd);
     if(rq)  blk_cleanup_queue(rq);
-    if(dev) castle_kfree(dev);
+    if(dev) castle_free(dev);
     castle_printk(LOG_ERROR, "Failed to init device.\n");
     return NULL;
 }
@@ -2395,11 +2395,11 @@ struct castle_attachment* castle_collection_init(c_ver_t version, uint32_t flags
     return collection;
 
 error_out:
-    castle_kfree(name);
+    castle_free(name);
     if(collection)
     {
         castle_version_detach(version);
-        castle_kfree(collection);
+        castle_free(collection);
     }
     if(da_get) castle_double_array_put(da_id);
     castle_printk(LOG_USERINFO, "Failed to init collection.\n");
@@ -2414,7 +2414,7 @@ static void castle_wqs_fini(void)
     for(i=0; i<=2*MAX_BTREE_DEPTH; i++)
     {
         if(wq_names[i])
-            castle_kfree(wq_names[i]);
+            castle_free(wq_names[i]);
         if(castle_wqs[i])
             destroy_workqueue(castle_wqs[i]);
     }
@@ -2431,7 +2431,7 @@ static int castle_wqs_init(void)
     {
         /* At most two characters for the number */
         BUG_ON(i > 99);
-        wq_names[i] = castle_malloc(strlen("castle_wq")+3, GFP_KERNEL);
+        wq_names[i] = castle_alloc(strlen("castle_wq")+3);
         if(!wq_names[i])
             goto err_out;
         sprintf(wq_names[i], "castle_wq%d", i);

@@ -26,16 +26,16 @@
 #define C_BVEC_BTREE_NODE_IO_END    (0x00400000)
 
 #define castle_alloc(_s)             castle_debug_alloc_func(_s, __FILE__, __LINE__)
+#define castle_alloc_atomic(_s)      castle_debug_malloc(_s, GFP_ATOMIC, __FILE__, __LINE__)
+#define castle_zalloc(_s)            castle_debug_zalloc_func(_s, __FILE__, __LINE__)
 #define castle_free(_p)              castle_debug_free_func(_p)
 #define castle_alloc_maybe(_l, _d, _dl) castle_debug_alloc_maybe_func(_l, _d, _dl, __FILE__, __LINE__)
 #define castle_dup_or_copy(_s, _sl, _d, _dl) castle_debug_dup_or_copy_func(_s, _sl, _d, _dl, __FILE__, __LINE__)
-#define castle_malloc(_s, _f)        castle_debug_malloc(_s, _f, __FILE__, __LINE__)
-#define castle_zalloc(_s, _f)        castle_debug_zalloc(_s, _f, __FILE__, __LINE__)
-#define castle_kfree(_p)             do {castle_debug_free(_p); (_p) = NULL;} while(0)
 #define castle_vmalloc(_s)           castle_debug_vmalloc(_s, __FILE__, __LINE__)
-#define castle_vfree(_p)             do {castle_debug_vfree(_p); (_p) = NULL;} while(0)
+#define castle_vfree(_p)             castle_debug_vfree(_p)
 
 void* castle_debug_alloc_func(size_t size, char *file, int line);
+void* castle_debug_zalloc_func(size_t size, char *file, int line);
 void  castle_debug_free_func(void *ptr);
 void *castle_debug_alloc_maybe_func(size_t len, void *dst, size_t *dst_len, char *file, int line);
 void *castle_debug_dup_or_copy_func(const void *src, size_t src_len, void *dst, size_t *dst_len,
@@ -61,17 +61,15 @@ void  castle_debug_fini(void);
 #define castle_debug_init()                   (0)
 #define castle_debug_fini()                   ((void)0)
 #define castle_alloc(_s)                      castle_alloc_func(_s)
+#define castle_alloc_atomic(_s)               kmalloc(_s, GFP_ATOMIC)
+#define castle_zalloc(_s)                     castle_zalloc_func(_s)
 #define castle_free(_p)                       castle_free_func(_p)
 #define castle_alloc_maybe(_l, _d, _dl)       castle_alloc_maybe_func(_l, _d, _dl)
 #define castle_dup_or_copy(_s, _sl, _d, _dl)  castle_dup_or_copy_func(_s, _sl, _d, _dl)
-#define castle_malloc(_s, _f)                 kmalloc(_s, _f)
-#define castle_zalloc(_s, _f)                 kzalloc(_s, _f)
-#define castle_kfree(_p)                      kfree(_p)
 #define castle_vmalloc(_s)                    vmalloc(_s)
 #define castle_vfree(_p)                      vfree(_p)
 
 #endif /* CASTLE_DEBUG */
 
-#define castle_check_kfree(_p)  {   if (_p) {   castle_kfree(_p); (_p) = NULL;  }   }
 #define castle_check_free(_p)   {   if (_p) {   castle_free(_p); (_p) = NULL;  }   }
 #endif /* __CASTLE_DEBUG_H__ */

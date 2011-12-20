@@ -784,7 +784,7 @@ STATIC_BUG_ON(sizeof(struct castle_value_tuple) != 32);
     if(CVT_INLINE(_cvt) && !CVT_LOCAL_COUNTER(_cvt))                          \
     {                                                                         \
         BUG_ON(!(_cvt).val_p);                                                \
-        castle_kfree((_cvt).val_p);                                            \
+        castle_free((_cvt).val_p);                                            \
         (_cvt).val_p = NULL;                                                  \
     }                                                                         \
 }

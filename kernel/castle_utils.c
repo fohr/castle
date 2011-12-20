@@ -163,7 +163,7 @@ void castle_key_ptr_ref_cp(struct castle_key_ptr_t *dest, struct castle_key_ptr_
 }
 
 /**
- * Allocate bytes using malloc(), falling back to vmalloc() as appropriate.
+ * Allocate bytes using kmalloc(), falling back to vmalloc() as appropriate.
  */
 void * castle_alloc_func(size_t size)
 {
@@ -172,11 +172,27 @@ void * castle_alloc_func(size_t size)
     if (likely(size <= MAX_KMALLOC_SIZE))
     {
         buf = kmalloc(size, GFP_KERNEL);
-        if (likely(!buf))
-            buf = vmalloc(size);
+        if (buf)
+            return buf;
     }
-    else
-        buf = vmalloc(size);
+
+    return vmalloc(size);
+}
+
+void * castle_zalloc_func(size_t size)
+{
+    void *buf;
+
+    if (likely(size <= MAX_KMALLOC_SIZE))
+    {
+        buf = kzalloc(size, GFP_KERNEL);
+        if (buf)
+            return buf;
+    }
+
+    buf = vmalloc(size);
+    if (buf)
+        memset(buf, 0, size);
 
     return buf;
 }
@@ -188,7 +204,7 @@ void castle_free_func(void *ptr)
 {
     unsigned long addr = (unsigned long) ptr;
 
-    if (likely(addr >= VMALLOC_START && addr < VMALLOC_END))
+    if (unlikely(addr >= VMALLOC_START && addr < VMALLOC_END))
         vfree(ptr);
     else
         kfree(ptr);
@@ -246,7 +262,7 @@ c_bio_t *castle_utils_bio_alloc(int nr_bvecs)
     int i;
 
     /* Allocate bio & bvec structures in one memory block */
-    c_bio = castle_malloc(sizeof(c_bio_t) + nr_bvecs * sizeof(c_bvec_t), GFP_KERNEL);
+    c_bio = castle_alloc(sizeof(c_bio_t) + nr_bvecs * sizeof(c_bvec_t));
     if (!c_bio)
         return NULL;
     c_bvecs = (c_bvec_t *) (c_bio + 1);
@@ -895,7 +911,7 @@ int castle_from_user_copy(const char __user *from, int len, int max_len, char **
         return -E2BIG;
 
     /* Allocate memory for the string. */
-    out_str = castle_malloc(len, GFP_KERNEL);
+    out_str = castle_alloc(len);
     if(!out_str)
         return -ENOMEM;
 
@@ -920,7 +936,7 @@ int castle_from_user_copy(const char __user *from, int len, int max_len, char **
 err_out:
     /* Non-zero return code should have been set. */
     BUG_ON(ret == 0);
-    castle_kfree(out_str);
+    castle_free(out_str);
     return ret;
 }
 

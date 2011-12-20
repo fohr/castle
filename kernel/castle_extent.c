@@ -510,7 +510,7 @@ c_res_pool_id_t castle_res_pool_create(c_rda_type_t rda_type, c_chk_cnt_t logica
     /* Should be part of a extent transaction, to avoid race with checkpoints. */
     castle_extent_transaction_start();
 
-    pool = castle_zalloc(sizeof(c_res_pool_t), GFP_KERNEL);
+    pool = castle_zalloc(sizeof(c_res_pool_t));
     if (!pool)
         goto out;
 
@@ -522,7 +522,7 @@ c_res_pool_id_t castle_res_pool_create(c_rda_type_t rda_type, c_chk_cnt_t logica
     {
         /* Failed to allocate space for pool. */
         castle_extent_transaction_end();
-        castle_kfree(pool);
+        castle_free(pool);
 
         return INVAL_RES_POOL;
     }
@@ -556,7 +556,7 @@ void __castle_res_pool_destroy(c_res_pool_t *pool)
 
     BUG_ON(castle_res_pool_hash_get(pool->id));
 
-    castle_kfree(pool);
+    castle_free(pool);
 }
 
 void castle_res_pool_destroy(c_res_pool_id_t pool_id)
@@ -818,7 +818,7 @@ int castle_res_pools_read(void)
         BUG_ON(entry_size != sizeof(struct castle_rlist_entry));
 
         /* Allocate space for new pool. */
-        pool = castle_malloc(sizeof(c_res_pool_t), GFP_KERNEL);
+        pool = castle_alloc(sizeof(c_res_pool_t));
         if (!pool)
         {
             ret = -ENOMEM;
@@ -1261,13 +1261,13 @@ c_ext_flush_prio_t castle_ext_flush_prio_get(c_ext_type_t type, c_chk_cnt_t size
  */
 static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
 {
-    c_ext_t *ext = castle_zalloc(sizeof(c_ext_t), GFP_KERNEL);
+    c_ext_t *ext = castle_zalloc(sizeof(c_ext_t));
     if (!ext)
         return NULL;
-    ext->dirtytree = castle_zalloc(sizeof(c_ext_dirtytree_t), GFP_KERNEL);
+    ext->dirtytree = castle_zalloc(sizeof(c_ext_dirtytree_t));
     if (!ext->dirtytree)
     {
-        castle_kfree(ext);
+        castle_free(ext);
         return NULL;
     }
 
@@ -1456,7 +1456,7 @@ static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
         struct castle_slave *cs =
                 castle_slave_find_by_id(sup_ext_to_slave_id(ext->ext_id));
 
-        castle_kfree(cs->sup_ext_maps);
+        castle_free(cs->sup_ext_maps);
     }
     __castle_extent_dirtytree_put(ext->dirtytree, 0 /*check_hash*/);
 
@@ -1468,8 +1468,8 @@ static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
         kmem_cache_free(castle_partial_schks_cache, schk);
     }
 
-    castle_kfree(mask);
-    castle_kfree(ext);
+    castle_free(mask);
+    castle_free(ext);
 
     return 0;
 }
@@ -1935,8 +1935,8 @@ static int load_extent_from_mentry(struct castle_elist_entry *mstore_entry)
     return 0;
 
 err2:
-    castle_kfree(ext->dirtytree);
-    castle_kfree(ext);
+    castle_free(ext->dirtytree);
+    castle_free(ext);
 err1:
     return ret;
 }
@@ -2181,7 +2181,7 @@ static void castle_extents_meta_compact(int *force_checkpoint)
     bitmap_size = nr_meta_pgs / 8 + 1;
     castle_printk(LOG_USERINFO, "Allocating %lld bitmap for %lld pages of meta ext.\n",
             bitmap_size, nr_meta_pgs);
-    used_meta_bitmap = castle_vmalloc(bitmap_size);
+    used_meta_bitmap = castle_alloc(bitmap_size);
     if(!used_meta_bitmap)
     {
         castle_printk(LOG_ERROR, "Couldn't allocate used bitmap.\n");
@@ -2214,7 +2214,7 @@ static void castle_extents_meta_compact(int *force_checkpoint)
            make sure that the meta extent freespace structure includes all those copies
            and force a checkpoint. */
         castle_printk(LOG_ERROR, "Failed compaction on meta copy.\n");
-        castle_vfree(used_meta_bitmap);
+        castle_free(used_meta_bitmap);
         *force_checkpoint = 1;
 
         new_used = castle_extent_max_meta_offset_get(&compactor);
@@ -2228,7 +2228,7 @@ static void castle_extents_meta_compact(int *force_checkpoint)
     }
 
     /* All maps have been copied. Return what cep is now end of the meta extent map. */
-    castle_vfree(used_meta_bitmap);
+    castle_free(used_meta_bitmap);
 
     *force_checkpoint = 1;
 #ifndef COMPACTION_DRY_RUN
@@ -2240,7 +2240,7 @@ static void castle_extents_meta_compact(int *force_checkpoint)
     return;
 
 err_out_dealloc:
-    castle_vfree(used_meta_bitmap);
+    castle_free(used_meta_bitmap);
 out:
     *force_checkpoint = 0;
 }
@@ -2410,7 +2410,7 @@ void castle_extents_meta_pool_init(void)
     }
     if (castle_meta_pool_entries > META_POOL_SIZE) castle_meta_pool_entries = META_POOL_SIZE;
 
-    meta_extent_pool = castle_vmalloc(castle_meta_pool_entries * sizeof(meta_pool_entry_t));
+    meta_extent_pool = castle_alloc(castle_meta_pool_entries * sizeof(meta_pool_entry_t));
     if (!meta_extent_pool)
     {
         castle_printk(LOG_ERROR, "Couldn't allocate bitmap.\n");
@@ -2422,11 +2422,11 @@ void castle_extents_meta_pool_init(void)
 
     bitmap_size = nr_meta_pgs / 8 + 1;
 
-    used_meta_bitmap = castle_vmalloc(bitmap_size);
+    used_meta_bitmap = castle_alloc(bitmap_size);
     if(!used_meta_bitmap)
     {
         castle_printk(LOG_ERROR, "Couldn't allocate used bitmap.\n");
-        castle_vfree(meta_extent_pool);
+        castle_free(meta_extent_pool);
         goto out;
     }
 
@@ -2443,7 +2443,7 @@ void castle_extents_meta_pool_init(void)
     if (meta_pool.err != 0)
     {
         castle_printk(LOG_ERROR, "Failed meta pool init on meta mark.\n");
-        castle_vfree(meta_extent_pool);
+        castle_free(meta_extent_pool);
         goto err_out_dealloc;
     }
 
@@ -2527,13 +2527,13 @@ err_out_nofreespace:
         meta_pool_available_count = castle_extent_meta_pool_size;
     } else
     {
-        castle_vfree(meta_extent_pool);
+        castle_free(meta_extent_pool);
         castle_printk(LOG_WARN,
                       "No free meta extent pages found. Meta extent pool not initialised..\n");
     }
 
 err_out_dealloc:
-    castle_vfree(used_meta_bitmap);
+    castle_free(used_meta_bitmap);
 out:
     return;
 }
@@ -2601,15 +2601,15 @@ void castle_extents_fini(void)
     if (castle_extents_hash)
         castle_extents_hash_iterate_exclusive(castle_extent_hash_remove, NULL);
 
-    castle_check_kfree(castle_extents_hash);
-    castle_check_kfree(castle_extent_mask_hash);
-    castle_check_kfree(castle_res_pool_hash);
+    castle_check_free(castle_extents_hash);
+    castle_check_free(castle_extent_mask_hash);
+    castle_check_free(castle_res_pool_hash);
 
     if (castle_partial_schks_cache)
         kmem_cache_destroy(castle_partial_schks_cache);
 
     if (meta_extent_pool)
-        castle_vfree(meta_extent_pool);
+        castle_free(meta_extent_pool);
 }
 
 #define MAX_K_FACTOR   4
@@ -2629,7 +2629,7 @@ static struct castle_extent_state *castle_extent_state_alloc(c_ext_t *ext)
     struct castle_extent_state *ext_state;
     int i, j;
 
-    ext_state = castle_malloc(sizeof(struct castle_extent_state), GFP_KERNEL);
+    ext_state = castle_alloc(sizeof(struct castle_extent_state));
     if(!ext_state)
         return NULL;
 
@@ -2659,7 +2659,7 @@ static void castle_extent_state_dealloc(c_ext_t *ext, struct castle_extent_state
                                                 (ext_state->chunks[i][j] % CHKS_PER_SLOT));
             }
 
-    castle_kfree(ext_state);
+    castle_free(ext_state);
 }
 
 /**
@@ -3032,7 +3032,7 @@ c_ext_id_t castle_extent_alloc_sparse(c_rda_type_t             rda_type,
     /* Allocate event handler structure and call low level extent alloc(). */
     if (callback)
     {
-        event_hdl = castle_zalloc(sizeof(c_ext_event_t), GFP_KERNEL);
+        event_hdl = castle_zalloc(sizeof(c_ext_event_t));
 
         if (!event_hdl)
             return INVAL_EXT_ID;
@@ -3176,7 +3176,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     /* Try to reserve space on disk. */
     if (alloc_size)
     {
-        pool = castle_zalloc(sizeof(c_res_pool_t), GFP_KERNEL);
+        pool = castle_zalloc(sizeof(c_res_pool_t));
         if (!pool)
             goto __hell;
 
@@ -3189,7 +3189,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
         {
             debug_res_pools("Failed to reserve space for extent allocation: %u, %s\n",
                              alloc_size, castle_rda_type_str[rda_type]);
-            castle_kfree(pool);
+            castle_free(pool);
             pool = NULL;
 
             goto __low_space;
@@ -3247,7 +3247,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     /* Pool is just local, destroy it before returning. */
     __castle_res_pool_extent_detach(ext);
     castle_res_pool_unreserve(pool);
-    castle_kfree(pool);
+    castle_free(pool);
     pool = NULL;
 
 alloc_done:
@@ -3268,7 +3268,7 @@ alloc_done:
     }
 
     /* Extent allocation is SUCCESS. No need of event handler. Free it. */
-    castle_check_kfree(event_hdl);
+    castle_check_free(event_hdl);
 
     return ext->ext_id;
 
@@ -3286,7 +3286,7 @@ __hell:
     {
         __castle_res_pool_extent_detach(ext);
         castle_res_pool_unreserve(pool);
-        castle_kfree(pool);
+        castle_free(pool);
     }
 
     /* If we allocated from the meta extent pool, put it back ... */
@@ -3295,8 +3295,8 @@ __hell:
 
     if (ext)
     {
-        castle_kfree(ext->dirtytree);
-        castle_kfree(ext);
+        castle_free(ext->dirtytree);
+        castle_free(ext);
     }
 
     return INVAL_EXT_ID;
@@ -3380,7 +3380,7 @@ void castle_extent_lfs_victims_wakeup(void)
 
          /* Handled low free space successfully. Get rid of event handler. */
          list_del(&hdl->list);
-         castle_kfree(hdl);
+         castle_free(hdl);
     }
 }
 
@@ -3463,7 +3463,7 @@ static void castle_extent_resource_release(void *data)
     castle_cache_dirtytree_demote(ext->dirtytree);
     castle_extent_dirtytree_put(ext->dirtytree);
 
-    castle_kfree(ext);
+    castle_free(ext);
 
     debug("Completed deleting ext: %lld\n", ext_id);
 
@@ -3744,8 +3744,7 @@ c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
     ext->dirtytree->ext_type    = ext->ext_type;
 #endif
 
-    cs->sup_ext_maps = castle_malloc(sizeof(c_disk_chk_t) * ext->size *
-                                                    rda_spec->k_factor, GFP_KERNEL);
+    cs->sup_ext_maps = castle_alloc(sizeof(c_disk_chk_t) * ext->size * rda_spec->k_factor);
     BUG_ON(rda_spec->k_factor != ext->k_factor);
     if (!cs->sup_ext_maps)
     {
@@ -3782,8 +3781,8 @@ c_ext_id_t castle_extent_sup_ext_init(struct castle_slave *cs)
     return ext->ext_id;
 
 err2:
-    castle_kfree(ext->dirtytree);
-    castle_kfree(ext);
+    castle_free(ext->dirtytree);
+    castle_free(ext);
 err1:
     return INVAL_EXT_ID;
 }
@@ -3801,9 +3800,9 @@ void castle_extent_sup_ext_close(struct castle_slave *cs)
 
         BUG_ON(atomic_read(&mask->ref_count) != 1);
         castle_extents_hash_remove(ext);
-        castle_kfree(ext);
+        castle_free(ext);
     }
-    castle_kfree(cs->sup_ext_maps);
+    castle_free(cs->sup_ext_maps);
 
     return;
 }
@@ -4430,7 +4429,7 @@ void __castle_extent_dirtytree_put(c_ext_dirtytree_t *dirtytree, int check_hash)
             /* cannot be in hash now */
             BUG_ON(!MASK_ID_INVAL(castle_extent_get(dirtytree->ext_id)));
         BUG_ON(!RB_EMPTY_ROOT(&dirtytree->rb_root));    /* must be empty */
-        castle_kfree(dirtytree);
+        castle_free(dirtytree);
     }
 }
 
@@ -4594,7 +4593,7 @@ static void castle_extents_process_state_init(void)
                      * Leave the slave as a 'hole' in process_state.live_slaves.
                      */
                     BUG_ON(!process_state.live_slaves[i]);
-                    castle_kfree(process_state.live_slaves[i]);
+                    castle_free(process_state.live_slaves[i]);
                     process_state.live_slaves[i] = NULL;
                 }
                 /* Still alive - leave it as it is. */
@@ -4622,7 +4621,7 @@ static void castle_extents_process_state_init(void)
                !test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags))
             {
                 process_state.live_slaves[process_state.nr_live_slaves] =
-                    castle_zalloc(sizeof(live_slave_t), GFP_KERNEL);
+                    castle_zalloc(sizeof(live_slave_t));
                 BUG_ON(!process_state.live_slaves[process_state.nr_live_slaves]);
                 process_state.live_slaves[process_state.nr_live_slaves]->uuid = cs->uuid;
                 if (cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD)
@@ -4643,7 +4642,7 @@ static void castle_extents_process_state_init(void)
                 (!test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags)))
             {
                 process_state.live_slaves[process_state.nr_live_slaves] =
-                    castle_zalloc(sizeof(live_slave_t), GFP_KERNEL);
+                    castle_zalloc(sizeof(live_slave_t));
                 BUG_ON(!process_state.live_slaves[process_state.nr_live_slaves]);
                 process_state.live_slaves[process_state.nr_live_slaves]->uuid = cs->uuid;
                 if (cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD)
@@ -5680,7 +5679,7 @@ void cleanup_extent(c_ext_t *ext, int update_seqno)
 
     if (ext->shadow_map)
     {
-        castle_vfree(ext->shadow_map);
+        castle_free(ext->shadow_map);
         ext->shadow_map = NULL;
     }
 
@@ -5877,7 +5876,7 @@ static void initialise_extent_state(c_ext_t * ext)
 
     map_size =
         (ext->shadow_map_range.end-ext->shadow_map_range.start)*k_factor*sizeof(c_disk_chk_t);
-    ext->shadow_map = castle_vmalloc(map_size);
+    ext->shadow_map = castle_alloc(map_size);
     if (!ext->shadow_map)
     {
         castle_printk(LOG_ERROR, "ERROR: could not allocate shadow map of size %lu\n", map_size);
@@ -5937,7 +5936,7 @@ static void init_lfs_handler(void)
 {
     c_ext_event_t *event_hdl = NULL;
 
-    event_hdl = castle_zalloc(sizeof(c_ext_event_t), GFP_KERNEL);
+    event_hdl = castle_zalloc(sizeof(c_ext_event_t));
     if (!event_hdl)
         BUG();
 
@@ -6654,7 +6653,7 @@ static int castle_extent_mask_create(c_ext_t            *ext,
                                      c_ext_mask_range_t  range,
                                      c_ext_mask_id_t     prev_mask_id)
 {
-    c_ext_mask_t *mask = castle_malloc(sizeof(c_ext_mask_t), GFP_KERNEL);
+    c_ext_mask_t *mask = castle_alloc(sizeof(c_ext_mask_t));
     c_ext_mask_t *prev_mask = NULL;
 
     /* Should be in of the extent transaction. */
@@ -6810,7 +6809,7 @@ static int castle_extent_mask_destroy(c_ext_mask_t *mask)
         /* Free the extent resources. */
         castle_extent_resource_release(mask->ext);
 
-    castle_kfree(mask);
+    castle_free(mask);
 
     return 0;
 }

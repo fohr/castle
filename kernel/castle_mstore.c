@@ -174,7 +174,7 @@ void castle_mstore_iterator_destroy(struct castle_mstore_iter *iter)
         put_c2b(iter->node_c2b);
     }
     debug("Freeing.\n");
-    castle_kfree(iter);
+    castle_free(iter);
     atomic_dec(&mstores_ref_cnt);
 }
 
@@ -202,7 +202,7 @@ struct castle_mstore_iter* castle_mstore_iterate(c_mstore_id_t store_id)
 
     /* Allocate the iterator structure. */
     debug("Creating the iterator.\n");
-    iter = castle_zalloc(sizeof(struct castle_mstore_iter), GFP_KERNEL);
+    iter = castle_zalloc(sizeof(struct castle_mstore_iter));
     if(!iter)
         return NULL;
 
@@ -381,7 +381,7 @@ struct castle_mstore* castle_mstore_init(c_mstore_id_t store_id)
 
     /* Allocate memory for the store structure. */
     debug("Allocating mstore id=%d.\n", store_id);
-    store = castle_zalloc(sizeof(struct castle_mstore), GFP_KERNEL);
+    store = castle_zalloc(sizeof(struct castle_mstore));
     if(!store)
         return NULL;
 
@@ -403,7 +403,7 @@ struct castle_mstore* castle_mstore_init(c_mstore_id_t store_id)
 void castle_mstore_fini(struct castle_mstore *store)
 {
     debug("Closing mstore id=%d.\n", store->store_id);
-    castle_kfree(store);
+    castle_free(store);
 
     atomic_dec(&mstores_ref_cnt);
 }

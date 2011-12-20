@@ -141,7 +141,7 @@ DEFINE_HASH_TBL(castle_versions_counts,
 static int castle_version_counts_hash_remove(struct castle_versions_count *vc, void *unused)
 {
     list_del(&vc->hash_list);
-    castle_kfree(vc);
+    castle_free(vc);
 
     return 0;
 }
@@ -152,7 +152,7 @@ static int castle_version_counts_hash_remove(struct castle_versions_count *vc, v
 static void castle_versions_counts_hash_destroy(void)
 {
     castle_versions_counts_hash_iterate(castle_version_counts_hash_remove, NULL);
-    castle_kfree(castle_versions_counts_hash);
+    castle_free(castle_versions_counts_hash);
 }
 
 /**
@@ -186,7 +186,7 @@ int _castle_versions_count_adjust(c_da_t da_id, cv_health_t health, int add, int
     {
         BUG_ON(!add);
 
-        vc = castle_zalloc(sizeof(struct castle_versions_count), GFP_KERNEL);
+        vc = castle_zalloc(sizeof(struct castle_versions_count));
         if (!vc)
             return -ENOMEM;
         vc->da_id = da_id;
@@ -254,7 +254,7 @@ int _castle_versions_count_adjust(c_da_t da_id, cv_health_t health, int add, int
             BUG_ON(vc->live + vc->deleted + vc->dead != 0);
 
             list_del(&vc->hash_list);
-            castle_kfree(vc);
+            castle_free(vc);
         }
     }
 
@@ -324,7 +324,7 @@ static int castle_version_hash_remove(struct castle_version *v, void *unused)
 static void castle_versions_hash_destroy(void)
 {
     castle_versions_hash_iterate(castle_version_hash_remove, NULL);
-    castle_kfree(castle_versions_hash);
+    castle_free(castle_versions_hash);
 }
 
 static void castle_versions_init_add(struct castle_version *v)
@@ -2028,9 +2028,9 @@ err_out:
     if (castle_versions_cache)
         kmem_cache_destroy(castle_versions_cache);
     if (castle_versions_hash)
-        castle_kfree(castle_versions_hash);
+        castle_free(castle_versions_hash);
     if (castle_versions_counts_hash)
-        castle_kfree(castle_versions_counts_hash);
+        castle_free(castle_versions_counts_hash);
     return ret;
 }
 

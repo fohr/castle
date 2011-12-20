@@ -166,8 +166,8 @@ static void castle_vlba_tree_node_compact(struct castle_btree_node *node)
 
     /* Buffers to keep the minimum heap of entries offsets and corresponsding
      * entry index */
-    a = castle_malloc(sizeof(uint32_t) * node->used, GFP_KERNEL);
-    idx = castle_malloc(sizeof(uint32_t) * node->used, GFP_KERNEL);
+    a = castle_alloc(sizeof(uint32_t) * node->used);
+    idx = castle_alloc(sizeof(uint32_t) * node->used);
     BUG_ON(!a || !idx);
 
     memcpy(a, &vlba_node->key_idx[0], (sizeof(uint32_t) * node->used));
@@ -220,8 +220,8 @@ static void castle_vlba_tree_node_compact(struct castle_btree_node *node)
            vlba_node->free_bytes);
 #endif
 
-    castle_kfree(a);
-    castle_kfree(idx);
+    castle_free(a);
+    castle_free(idx);
 }
 
 
@@ -779,8 +779,8 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
 
     if(0 == 0)
         return;
-    a = castle_malloc(sizeof(uint32_t) * node->used, GFP_KERNEL);
-    idx = castle_malloc(sizeof(uint32_t) * node->used, GFP_KERNEL);
+    a = castle_alloc(sizeof(uint32_t) * node->used);
+    idx = castle_alloc(sizeof(uint32_t) * node->used);
     BUG_ON(!a || !idx);
 
     memcpy(a, &vlba_node->key_idx[0], (sizeof(uint32_t) * node->used));
@@ -893,8 +893,8 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
         BUG_ON(VLBA_INLINE_VAL_LENGTH(entry) > MAX_INLINE_VAL_SIZE);
     }
 
-    castle_kfree(a);
-    castle_kfree(idx);
+    castle_free(a);
+    castle_free(idx);
 }
 #endif
 

@@ -298,7 +298,7 @@ int castle_trace_setup(char *dir_str)
 err2:
     debugfs_remove(dir);
 err1:
-    castle_kfree(dir_str);
+    castle_free(dir_str);
     module_put(THIS_MODULE);
 
     return ret;
@@ -346,7 +346,7 @@ int castle_trace_teardown(void)
     {
          debugfs_remove(castle_trace_dir);
          castle_trace_dir = NULL;
-         castle_kfree(castle_trace_dir_str);
+         castle_free(castle_trace_dir_str);
     }
 
     if(trace_files_nr == 0)
