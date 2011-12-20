@@ -316,8 +316,7 @@ void* castle_def_rda_extent_init(c_ext_t *ext,
     return state;
 
 err_out:
-    if (state)
-        castle_free(state);
+    castle_check_free(state);
 
     return NULL;
 }

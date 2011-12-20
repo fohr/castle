@@ -5373,12 +5373,9 @@ static void castle_cache_hashes_fini(void)
 
     if(!castle_cache_block_hash || !castle_cache_page_hash)
     {
-        if(castle_cache_block_hash)
-            castle_free(castle_cache_block_hash);
-        if(castle_cache_page_hash)
-            castle_free(castle_cache_page_hash);
-        if(castle_cache_page_hash_locks)
-            castle_free(castle_cache_page_hash_locks);
+        castle_check_free(castle_cache_block_hash);
+        castle_check_free(castle_cache_page_hash);
+        castle_check_free(castle_cache_page_hash_locks);
         return;
     }
 
@@ -5557,10 +5554,8 @@ static void castle_cache_freelists_fini(void)
 
     if (!castle_cache_blks || !castle_cache_pgs)
     {
-        if (castle_cache_blks)
-            castle_free(castle_cache_blks);
-        if (castle_cache_pgs)
-            castle_free(castle_cache_pgs);
+        castle_check_free(castle_cache_blks);
+        castle_check_free(castle_cache_pgs);
         return;
     }
 
@@ -6166,11 +6161,11 @@ void castle_cache_fini(void)
     if(castle_io_array_cache)   kmem_cache_destroy(castle_io_array_cache);
     if(castle_cache_stats_timer_interval) del_timer_sync(&castle_cache_stats_timer);
 
-    if(castle_cache_page_hash)       castle_free(castle_cache_page_hash);
-    if(castle_cache_block_hash)      castle_free(castle_cache_block_hash);
-    if(castle_cache_page_hash_locks) castle_free(castle_cache_page_hash_locks);
-    if(castle_cache_blks)            castle_free(castle_cache_blks);
-    if(castle_cache_pgs)             castle_free(castle_cache_pgs);
+    castle_check_free(castle_cache_page_hash);
+    castle_check_free(castle_cache_block_hash);
+    castle_check_free(castle_cache_page_hash_locks);
+    castle_check_free(castle_cache_blks);
+    castle_check_free(castle_cache_pgs);
 }
 
 /*

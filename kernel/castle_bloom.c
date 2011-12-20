@@ -397,8 +397,7 @@ void castle_bloom_complete(castle_bloom_t *bf)
     castle_bloom_complete_chunk(bf);
 
 #ifdef DEBUG
-    if (likely(bf_bp->elems_in_block))
-        castle_free(bf_bp->elems_in_block);
+    castle_check_free(bf_bp->elems_in_block);
 #endif
     castle_free(bf->private);
     bf->private = NULL;
@@ -433,8 +432,7 @@ void castle_bloom_abort(castle_bloom_t *bf)
     }
 
 #ifdef DEBUG
-    if (likely(bf_bp->elems_in_block))
-        castle_free(bf_bp->elems_in_block);
+    castle_check_free(bf_bp->elems_in_block);
 #endif
     castle_free(bf->private);
     bf->private = NULL;

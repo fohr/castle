@@ -994,14 +994,10 @@ static void castle_ct_modlist_iter_free(c_modlist_iter_t *iter)
         castle_ct_immut_iter.cancel(iter->enumerator);
         castle_free(iter->enumerator);
     }
-    if(iter->node_buffer)
-        castle_free(iter->node_buffer);
-    if (iter->src_entry_idx)
-        castle_free(iter->src_entry_idx);
-    if (iter->dst_entry_idx)
-        castle_free(iter->dst_entry_idx);
-    if (iter->ranges)
-        castle_free(iter->ranges);
+    castle_check_free(iter->node_buffer);
+    castle_check_free(iter->src_entry_idx);
+    castle_check_free(iter->dst_entry_idx);
+    castle_check_free(iter->ranges);
 
     /* Replenish the budget - no need to serialise. */
     buffer_size = iter->nr_nodes * iter->leaf_node_size * C_BLK_SIZE;
@@ -2089,8 +2085,7 @@ static void castle_ct_merged_iter_cancel(c_merged_iter_t *iter)
     /* Iterator shouldn't be running(waiting for prep_next to complete) now. */
     BUG_ON(iter->iter_running);
 
-    if (iter->iterators)
-        castle_free(iter->iterators);
+    castle_check_free(iter->iterators);
 }
 
 struct castle_iterator_type castle_ct_merged_iter = {
@@ -2397,10 +2392,8 @@ static void _castle_da_rq_iter_init(c_da_rq_iter_t *iter)
     castle_ct_merged_iter_register_cb(&iter->merged_iter, castle_da_rq_iter_end_io, iter);
 
     /* Free structures used to initialise merged iterator. */
-    if (iter->start_stripped)
-        castle_free(iter->start_stripped);
-    if (iter->end_stripped)
-        castle_free(iter->end_stripped);
+    castle_check_free(iter->start_stripped);
+    castle_check_free(iter->end_stripped);
     castle_free(iter->relevant_cts);
     castle_free(iters_types);
     castle_free(iters);
@@ -2418,29 +2411,15 @@ alloc_fail:
     }
     else
         BUG();
-    if (iter->relevant_cts)
-    {
-        castle_free(iter->relevant_cts);
-        iter->relevant_cts = NULL;
-    }
-    else
-        BUG();
-    if (iter->start_stripped)
-    {
-        castle_free(iter->start_stripped);
-        iter->start_stripped = NULL;
-    }
-    if (iter->end_stripped)
-    {
-        castle_free(iter->end_stripped);
-        iter->end_stripped = NULL;
-    }
-    if (iters_types)
-        castle_free(iters_types);
-    if (iters)
-        castle_free(iters);
-    if (iter->ct_iters)
-        castle_free(iter->ct_iters);
+
+    BUG_ON(iter->relevant_cts == NULL);
+    castle_check_free(iter->relevant_cts);
+
+    castle_check_free(iter->start_stripped);
+    castle_check_free(iter->end_stripped);
+    castle_check_free(iters_types);
+    castle_check_free(iters);
+    castle_check_free(iter->ct_iters);
 
     iter->err = -ENOMEM;
     iter->init_cb(iter->private);

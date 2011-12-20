@@ -324,7 +324,7 @@ static int castle_version_hash_remove(struct castle_version *v, void *unused)
 static void castle_versions_hash_destroy(void)
 {
     castle_versions_hash_iterate(castle_version_hash_remove, NULL);
-    castle_free(castle_versions_hash);
+    castle_check_free(castle_versions_hash);
 }
 
 static void castle_versions_init_add(struct castle_version *v)
@@ -704,8 +704,7 @@ int castle_version_delete(c_ver_t version)
         BUG_ON(castle_sysfs_version_del(version));
     for(event_vs_idx--; event_vs_idx >= 0; event_vs_idx--)
         castle_events_version_changed(event_vs[event_vs_idx]);
-    if(event_vs)
-        castle_free(event_vs);
+    castle_check_free(event_vs);
 
     castle_versions_count_adjust(da_id, CVH_LIVE, 0 /*add*/);
 
@@ -2027,10 +2026,8 @@ int castle_versions_init(void)
 err_out:
     if (castle_versions_cache)
         kmem_cache_destroy(castle_versions_cache);
-    if (castle_versions_hash)
-        castle_free(castle_versions_hash);
-    if (castle_versions_counts_hash)
-        castle_free(castle_versions_counts_hash);
+    castle_check_free(castle_versions_hash);
+    castle_check_free(castle_versions_counts_hash);
     return ret;
 }
 

@@ -2608,8 +2608,7 @@ void castle_extents_fini(void)
     if (castle_partial_schks_cache)
         kmem_cache_destroy(castle_partial_schks_cache);
 
-    if (meta_extent_pool)
-        castle_free(meta_extent_pool);
+    castle_check_free(meta_extent_pool);
 }
 
 #define MAX_K_FACTOR   4
@@ -4665,8 +4664,7 @@ static void castle_extents_process_state_fini(void)
 
     for (i=0; i<MAX_NR_SLAVES; i++)
     {
-        if (process_state.live_slaves[i])
-            castle_free(process_state.live_slaves[i]);
+        castle_check_free(process_state.live_slaves[i]);
         process_state.nr_live_slaves = 0;
     }
 }
@@ -5677,11 +5675,7 @@ void cleanup_extent(c_ext_t *ext, int update_seqno)
     ext->use_shadow_map = 0;
     spin_unlock(&ext->shadow_map_lock);
 
-    if (ext->shadow_map)
-    {
-        castle_free(ext->shadow_map);
-        ext->shadow_map = NULL;
-    }
+    castle_check_free(ext->shadow_map);
 
     /* It is now safe to update the (LIVE) extent with the rebuild sequence number. */
     if (LIVE_EXTENT(ext) && update_seqno)

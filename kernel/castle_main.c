@@ -1252,8 +1252,8 @@ out:
     BUG_ON(err);
 
 error_out:
-    if (cs_sb) castle_free(cs_sb);
-    if (fs_sb) castle_free(fs_sb);
+    castle_check_free(cs_sb);
+    castle_check_free(fs_sb);
 
     return err;
 }
@@ -1651,7 +1651,7 @@ err_out:
 #else
     if(bdev) blkdev_put(bdev, FMODE_READ|FMODE_WRITE);
 #endif
-    if(cs)   castle_free(cs);
+    castle_check_free(cs);
     slave_id--;
 
     return NULL;
@@ -2339,7 +2339,7 @@ struct castle_attachment* castle_device_init(c_ver_t version)
 error_out:
     if(gd)  put_disk(gd);
     if(rq)  blk_cleanup_queue(rq);
-    if(dev) castle_free(dev);
+    castle_check_free(dev);
     castle_printk(LOG_ERROR, "Failed to init device.\n");
     return NULL;
 }
@@ -2413,8 +2413,7 @@ static void castle_wqs_fini(void)
 
     for(i=0; i<=2*MAX_BTREE_DEPTH; i++)
     {
-        if(wq_names[i])
-            castle_free(wq_names[i]);
+        castle_check_free(wq_names[i]);
         if(castle_wqs[i])
             destroy_workqueue(castle_wqs[i]);
     }
