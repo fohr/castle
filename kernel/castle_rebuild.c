@@ -103,7 +103,21 @@ static int castle_resubmit_run(void *unused)
              */
             BUG_ON(atomic_read(&c2b->remaining));
             debug("Resubmitting c2b %p\n", rc2b->c2b);
-            BUG_ON(submit_c2b(rc2b->rw, rc2b->c2b));
+            if (submit_c2b(rc2b->rw, rc2b->c2b))
+            {
+                /*
+                 * If the submit failed for a READ from a slave superblock extent that has gone OOS,
+                 * then we can safely ignore it as we no longer care about IO to it.
+                 */
+                if (SUPER_EXTENT(rc2b->c2b->cep.ext_id) && rc2b->rw == READ)
+                {
+                    struct castle_slave *slave;
+                    slave = castle_slave_find_by_id(sup_ext_to_slave_id(rc2b->c2b->cep.ext_id));
+                    if (test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
+                        continue;
+                }
+                BUG();
+            }
             castle_free(rc2b);
             spin_lock_irq(&resubmit_list_lock);
         }

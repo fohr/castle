@@ -379,8 +379,22 @@ void castle_freespace_slave_superchunk_free(struct castle_slave *cs,
             }
             c2b = castle_cache_page_block_get(cep);
             write_lock_c2b(c2b);
-            if (!c2b_uptodate(c2b))
-                BUG_ON(submit_c2b_sync(READ, c2b));
+            if (!c2b_uptodate(c2b) && submit_c2b_sync(READ, c2b))
+            {
+                /*
+                 * If the submit failed for a slave superblock extent that has gone OOS,
+                 * then we can safely ignore it as we no longer care about it's freespace.
+                 * All other failures are fatal.
+                 */
+                if (SUPER_EXTENT(c2b->cep.ext_id) && test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
+                {
+                    write_unlock_c2b(c2b);
+                    put_c2b(c2b);
+                    freespace_sblk_put(cs);
+                    return;
+                }
+                BUG();
+            }
             chunks = (c_chk_t *)c2b->buffer;
         }
 
