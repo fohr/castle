@@ -6079,8 +6079,6 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
 
     if(MERGE_CHECKPOINTABLE(merge))
     {
-        unsigned int size;
-
         /* When an iterator moves to a leaf node new node boundary, a new s.e.b is set. */
         BUG_ON(nr_trees <= 0);
         merge->shrinkable_extent_boundaries.tree =
@@ -6126,15 +6124,14 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
             merge->in_tree_shrinkable_cep[i] = merge->serdes.shrinkable_cep[i] = INVAL_EXT_POS;
 
         /* merge serdes structs */
-        size = sizeof(struct castle_dmserlist_entry);
-        merge->serdes.mstore_entry = castle_alloc(size);
-        if(!merge->serdes.mstore_entry) goto error_out;
-        memset(merge->serdes.mstore_entry, 0, size);
+        merge->serdes.mstore_entry = castle_zalloc(sizeof(struct castle_dmserlist_entry));
+        if (!merge->serdes.mstore_entry)
+            goto error_out;
 
-        size = sizeof(struct castle_in_tree_merge_state_entry)*merge->nr_trees;
-        merge->serdes.in_tree_mstore_entry_arr = castle_alloc(size);
-        if(!merge->serdes.in_tree_mstore_entry_arr) goto error_out;
-        memset(merge->serdes.in_tree_mstore_entry_arr, 0, size);
+        merge->serdes.in_tree_mstore_entry_arr =
+            castle_zalloc(sizeof(struct castle_in_tree_merge_state_entry) * merge->nr_trees);
+        if (!merge->serdes.in_tree_mstore_entry_arr)
+            goto error_out;
     }
 
     merge->growth_control_tree.ext_used_bytes  = 0;

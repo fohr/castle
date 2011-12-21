@@ -101,7 +101,7 @@ int castle_bloom_create(castle_bloom_t *bf,
     BUG_ON(num_elements == 0);
 
     /* Allocate structures for bloom filter build params. */
-    bf->private = castle_alloc(sizeof(struct castle_bloom_build_params));
+    bf->private = castle_zalloc(sizeof(struct castle_bloom_build_params));
     if (!bf->private)
     {
         castle_printk(LOG_WARN, "%s: Failed to alloc bloom build params da=%d\n",
@@ -109,7 +109,6 @@ int castle_bloom_create(castle_bloom_t *bf,
         return -ENOMEM;
     }
     bf_bp = bf->private;
-    memset(bf_bp, 0, sizeof(struct castle_bloom_build_params));
 
     /* Calculate maximum num_chunks based on num_elements.  This is updated to
      * the actual number of used chunks in castle_bloom_complete(). */

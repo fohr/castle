@@ -108,10 +108,9 @@ static c_vl_bkey_t* castle_object_btree_key_construct(const c_vl_bkey_t *k1,
         return NULL;
 
     /* Allocate the single-dimensional key */
-    out_key = castle_alloc(key_len);
+    out_key = castle_zalloc(key_len);
     if (!out_key)
         return NULL;
-    memset(out_key, 0, key_len);
 
     /* Copy the part from k1. Both header and payload together. */
     if (nr_dims_from_k1 > 0)

@@ -510,7 +510,7 @@ c_res_pool_id_t castle_res_pool_create(c_rda_type_t rda_type, c_chk_cnt_t logica
     /* Should be part of a extent transaction, to avoid race with checkpoints. */
     castle_extent_transaction_start();
 
-    pool = castle_zalloc(sizeof(c_res_pool_t));
+    pool = castle_alloc(sizeof(c_res_pool_t));
     if (!pool)
         goto out;
 
@@ -3175,7 +3175,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     /* Try to reserve space on disk. */
     if (alloc_size)
     {
-        pool = castle_zalloc(sizeof(c_res_pool_t));
+        pool = castle_alloc(sizeof(c_res_pool_t));
         if (!pool)
             goto __hell;
 
