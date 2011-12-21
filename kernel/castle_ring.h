@@ -335,13 +335,3 @@ typedef struct __name##_back_ring __name##_back_ring_t
 } while (0)
 
 #endif /* __XEN_PUBLIC_IO_RING_H__ */
-
-/*
- * Local variables:
- * mode: C
- * c-set-style: "BSD"
- * c-basic-offset: 4
- * tab-width: 4
- * indent-tabs-mode: nil
- * End:
- */
