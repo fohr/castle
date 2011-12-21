@@ -1026,6 +1026,7 @@ void castle_norm_key_print(int level, const struct castle_norm_key *key)
                     sprintf(p, "%.2x", *data++);
                     p += 2;
                 }
+                data += stride - seg_bytes;
                 pos += stride;
                 STRIDE_CHECK_BOUND(pos);
 
