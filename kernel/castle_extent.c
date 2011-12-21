@@ -5870,12 +5870,16 @@ static void initialise_extent_state(c_ext_t * ext)
 
     map_size =
         (ext->shadow_map_range.end-ext->shadow_map_range.start)*k_factor*sizeof(c_disk_chk_t);
-    ext->shadow_map = castle_alloc(map_size);
+    ext->shadow_map = castle_vmalloc(map_size);
     if (!ext->shadow_map)
     {
         castle_printk(LOG_ERROR, "ERROR: could not allocate shadow map of size %lu\n", map_size);
         BUG();
     }
+
+    /* Shadow map must be page aligned. */
+    BUG_ON((unsigned long)ext->shadow_map % PAGE_SIZE);
+
     /* Populate the shadow map - a copy of the existing mapping. */
     for (chunkno = ext->shadow_map_range.start; chunkno<ext->shadow_map_range.end; chunkno++)
         __castle_extent_map_get(ext, chunkno, &ext->shadow_map[chunkno*k_factor]);
