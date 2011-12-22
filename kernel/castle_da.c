@@ -2269,6 +2269,10 @@ void castle_da_rq_iter_cancel(c_da_rq_iter_t *iter)
 {
     int i;
 
+    /* Only cancel the iterator if it was actually initialized properly. */
+    if (iter->err != 0)
+        return;
+
     /* Cancel merged iterator. */
     castle_ct_merged_iter_cancel(&iter->merged_iter);
 

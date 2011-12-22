@@ -157,9 +157,7 @@ static int castle_objects_rq_iter_has_next(castle_object_iterator_t *iter)
 
 static void castle_objects_rq_iter_cancel(castle_object_iterator_t *iter)
 {
-    /* Cancel da_rq_iter if it's error free */
-    if(!iter->da_rq_iter.err)
-        castle_da_rq_iter.cancel(&iter->da_rq_iter);
+    castle_da_rq_iter.cancel(&iter->da_rq_iter);
     castle_objects_rq_iter_next_key_free(iter);
 }
 
