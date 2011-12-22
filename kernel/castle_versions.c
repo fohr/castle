@@ -536,6 +536,34 @@ out:
 }
 
 /**
+ * Appends version to the @see castle_versions_deleted list in the reverse-DFS order.
+ *
+ * @param v     Deleted version to process.
+ */
+static void castle_version_deleted_list_add(struct castle_version *v)
+{
+    struct list_head *pos;
+
+    /* Should only be called for deleted versions. */
+    BUG_ON(!test_bit(CV_DELETED_BIT, &v->flags));
+
+    /* Go through the list, until the right position is found. */
+    list_for_each(pos, &castle_versions_deleted)
+    {
+        struct castle_version *d = list_entry(pos, struct castle_version, del_list);
+
+        if (d->o_order < v->o_order)
+            break;
+
+        BUG_ON(d->o_order == v->o_order);
+    }
+
+    /* Add the version before pos. */
+    list_add_tail(&v->del_list, pos);
+}
+
+
+/**
  * Mark version for deletion during merges.
  *
  * @param version [in]  Version to be deleted
@@ -547,7 +575,6 @@ out:
 int castle_version_delete(c_ver_t version)
 {
     struct castle_version *v, *p, *n, *d, *sybling;
-    struct list_head *pos;
     c_da_t da_id;
     int children_first, event_vs_idx;
     c_ver_t *event_vs;
@@ -607,16 +634,7 @@ int castle_version_delete(c_ver_t version)
     }
 
     /* Add to list of deleted versions in reverse-DFS order. */
-    list_for_each(pos, &castle_versions_deleted)
-    {
-        struct castle_version *d = list_entry(pos, struct castle_version, del_list);
-
-        if (d->o_order < v->o_order)
-            break;
-
-        BUG_ON(d->o_order == v->o_order);
-    }
-    list_add_tail(&v->del_list, pos);
+    castle_version_deleted_list_add(v);
 
     castle_printk(LOG_USERINFO, "Marked version %d for deletion: 0x%lx\n", version, v->flags);
 
@@ -1910,6 +1928,28 @@ int castle_versions_zero_init(void)
 }
 
 /**
+ * Tests whether the specified version is deleted, and adds it to the @see castle_versions_deleted.
+ * Can be used from unlocked hash iterators, the trailing void* argument is ignored.
+ * Explicit preemption point is included (since the iterator + this fn implement O(n^2) algorithm).
+ *
+ * @param v      Version to process
+ * @param unused Unused
+ * @return 0     Since it shouldn't ever stops the hash iterator
+ */
+static int castle_version_del_process(struct castle_version *v, void *unused)
+{
+    might_resched();
+    if(test_bit(CV_DELETED_BIT, &v->flags))
+    {
+        castle_version_deleted_list_add(v);
+        castle_printk(LOG_DEBUG,
+                "%s::Adding deleted version %d [flags: 0x%lx] to castle_versions_deleted list\n",
+                __FUNCTION__, v->version, v->flags);
+    }
+    return 0;
+}
+
+/**
  * Unmarshall all castle_versions structures from disk.
  */
 int castle_versions_read(void)
@@ -1972,6 +2012,8 @@ int castle_versions_read(void)
     }
     ret = castle_versions_process(0);
 
+    /* Restore castle_versions_deleted list */
+    __castle_versions_hash_iterate(castle_version_del_process, NULL);
 out:
     if (iterator)
         castle_mstore_iterator_destroy(iterator);
