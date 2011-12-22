@@ -4511,8 +4511,11 @@ typedef struct live_slave {
     c_chk_t         first_chk;
     c_chk_cnt_t     count;
     uint32_t        uuid;                   /* Uuid for slave. */
-    uint32_t        flags;                  /* State flags for slave. */
+    uint32_t        state;                  /* State flags for slave. */
 } live_slave_t;
+
+#define SSD_BIT         0
+#define SLAVE_TRIED_BIT 1
 
 static struct process_state {
     int             nr_live_slaves;              /* Number of slaves available for processing. */
@@ -4561,7 +4564,7 @@ wait_queue_head_t           process_io_waitq;
 atomic_t                    wi_in_flight = ATOMIC(0); /* Keeps track of work itesm in-flight */
 
 /*
- * (Re-)populate the list of 'live' slaves. This is the list that can currently be used as a
+ * Populate the list of 'live' slaves. This is the list that can currently be used as a
  * source of replacement slaves for remapping.
  */
 static void castle_extents_process_state_init(void)
@@ -4570,89 +4573,98 @@ static void castle_extents_process_state_init(void)
     struct castle_slave     *cs;
     int                     i;
 
-    if (process_state.nr_live_slaves)
+    rcu_read_lock();
+    list_for_each_rcu(lh, &castle_slaves.slaves)
     {
-        /*
-         * This is a re-population - check and revise the set of live slaves if any
-         * slave(s) have become unavailable or have been added.
-         * First, check for slave unavailability.
-         */
+        cs = list_entry(lh, struct castle_slave, list);
+        if ((!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) &&
+            (!test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags)))
+        {
+            process_state.live_slaves[process_state.nr_live_slaves] =
+                castle_zalloc(sizeof(live_slave_t));
+            BUG_ON(!process_state.live_slaves[process_state.nr_live_slaves]);
+            process_state.live_slaves[process_state.nr_live_slaves]->uuid = cs->uuid;
+            if (cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD)
+                set_bit(SSD_BIT, &process_state.live_slaves[process_state.nr_live_slaves]->state);
+            process_state.nr_live_slaves++;
+        }
+    }
+    rcu_read_unlock();
+    for (i=process_state.nr_live_slaves; i<MAX_NR_SLAVES; i++)
+        process_state.live_slaves[i++] = NULL;
+}
+
+/*
+ * Refresh the list of 'live' slaves. Check and revise the set of live slaves if any
+ * slave(s) have become unavailable or have been added. If the reset_tried_flag is non-zero
+ * then the SLAVE_TRIED bit will be cleared for all live slaves. If this function is called
+ * multiple times, the SLAVE_TRIED flags will only be cleared the first time as long as the
+ * caller does not make reset_tried_flag non-zero again.
+ *
+ * @param reset_tried_flag  If non-zero the SLAVE_TRIED flag should be cleared in all the live
+                            slave state flags.
+ */
+static void castle_extents_process_state_refresh(int reset_tried_flag)
+{
+    struct list_head        *lh;
+    struct castle_slave     *cs;
+    int                     i;
+    /* First, check for slave unavailability. */
+    for (i=0; i<process_state.nr_live_slaves; i++)
+    {
+        /* Previous refreshes may have left 'holes' in process_state.live_slaves. */
+        if (process_state.live_slaves[i])
+        {
+            cs = castle_slave_find_by_uuid(process_state.live_slaves[i]->uuid);
+            BUG_ON(!cs);
+            if ((test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) ||
+                (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags)))
+            {
+                /*
+                 * A previously-live slave is now no longer available for remapping.
+                 * Leave the slave as a 'hole' in process_state.live_slaves.
+                 */
+                BUG_ON(!process_state.live_slaves[i]);
+                castle_free(process_state.live_slaves[i]);
+                process_state.live_slaves[i] = NULL;
+            } else if (reset_tried_flag)
+            {
+                /* Still alive, and we want the SLAVE_TRIED flag reset. */
+                clear_bit(SLAVE_TRIED_BIT, &process_state.live_slaves[i]->state);
+            }
+        }
+    }
+    /* Now, check if any slaves have been added. */
+    rcu_read_lock();
+    list_for_each_rcu(lh, &castle_slaves.slaves)
+    {
+        int slave_exists = 0;
+        cs = list_entry(lh, struct castle_slave, list);
+
+        /* For each slave, check if it already exists. */
         for (i=0; i<process_state.nr_live_slaves; i++)
         {
-            /* Previous re-population may have left 'holes' in process_state.live_slaves. */
-            if (process_state.live_slaves[i])
+            if (process_state.live_slaves[i] && process_state.live_slaves[i]->uuid == cs->uuid)
             {
-                cs = castle_slave_find_by_uuid(process_state.live_slaves[i]->uuid);
-                BUG_ON(!cs);
-                if ((test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) ||
-                    (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags)))
-                {
-                    /*
-                     * A previously-live slave is now no longer available for remapping.
-                     * Leave the slave as a 'hole' in process_state.live_slaves.
-                     */
-                    BUG_ON(!process_state.live_slaves[i]);
-                    castle_free(process_state.live_slaves[i]);
-                    process_state.live_slaves[i] = NULL;
-                }
-                /* Still alive - leave it as it is. */
+                slave_exists = 1;
+                break;
             }
         }
-        /* Now, check if any have been added. */
-        rcu_read_lock();
-        list_for_each_rcu(lh, &castle_slaves.slaves)
+        /* This slave was not found. Add it if it is available for remapping. */
+        if (!slave_exists &&
+           !test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags) &&
+           !test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags))
         {
-            int slave_exists = 0;
-            cs = list_entry(lh, struct castle_slave, list);
-
-            /* For each slave, check if it already exists. */
-            for (i=0; i<process_state.nr_live_slaves; i++)
-            {
-                if (process_state.live_slaves[i] && process_state.live_slaves[i]->uuid == cs->uuid)
-                {
-                    slave_exists = 1;
-                    break;
-                }
-            }
-            /* This slave was not found. Add it if it is available for remapping. */
-            if (!slave_exists &&
-               !test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags) &&
-               !test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags))
-            {
-                process_state.live_slaves[process_state.nr_live_slaves] =
-                    castle_zalloc(sizeof(live_slave_t));
-                BUG_ON(!process_state.live_slaves[process_state.nr_live_slaves]);
-                process_state.live_slaves[process_state.nr_live_slaves]->uuid = cs->uuid;
-                if (cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD)
-                    process_state.live_slaves[process_state.nr_live_slaves]->flags
-                    |= CASTLE_SLAVE_SSD;
-                process_state.nr_live_slaves++;
-            }
+            process_state.live_slaves[process_state.nr_live_slaves] =
+                castle_zalloc(sizeof(live_slave_t));
+            BUG_ON(!process_state.live_slaves[process_state.nr_live_slaves]);
+            process_state.live_slaves[process_state.nr_live_slaves]->uuid = cs->uuid;
+            if (cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD)
+                set_bit(SSD_BIT, &process_state.live_slaves[process_state.nr_live_slaves]->state);
+            process_state.nr_live_slaves++;
         }
-        rcu_read_unlock();
-    } else
-    {
-        /* Initial population at startup. */
-        rcu_read_lock();
-        list_for_each_rcu(lh, &castle_slaves.slaves)
-        {
-            cs = list_entry(lh, struct castle_slave, list);
-            if ((!test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) &&
-                (!test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags)))
-            {
-                process_state.live_slaves[process_state.nr_live_slaves] =
-                    castle_zalloc(sizeof(live_slave_t));
-                BUG_ON(!process_state.live_slaves[process_state.nr_live_slaves]);
-                process_state.live_slaves[process_state.nr_live_slaves]->uuid = cs->uuid;
-                if (cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD)
-                    process_state.live_slaves[process_state.nr_live_slaves]->flags |= CASTLE_SLAVE_SSD;
-                process_state.nr_live_slaves++;
-            }
-        }
-        rcu_read_unlock();
-        for (i=process_state.nr_live_slaves; i<MAX_NR_SLAVES; i++)
-            process_state.live_slaves[i++] = NULL;
     }
+    rcu_read_unlock();
 }
 
 /*
@@ -4745,6 +4757,34 @@ fill_chks:
     return EXIT_SUCCESS;
 }
 
+static int slave_not_usable(c_ext_t *ext, int chunkno, int idx, int want_ssd)
+{
+    int chunk_idx;
+
+    if (process_state.live_slaves[idx] == NULL)
+        /* This slave is no longer available. */
+        return 1;
+
+    if ((test_bit(SSD_BIT, &process_state.live_slaves[idx]->state) && !want_ssd) ||
+       (!(test_bit(SSD_BIT, &process_state.live_slaves[idx]->state)) && want_ssd))
+        /*
+         * Slave is an SSD, but we want to allocate from non-SSD slaves, or slave is not an
+         * SSD, but we want to allocate from SSD slaves. Do not use this slave.
+         */
+        return 1;
+
+    if (test_bit(SLAVE_TRIED_BIT, &process_state.live_slaves[idx]->state))
+        /* Skip slaves that caller has already tried, but failed to allocate space from. */
+        return 1;
+
+    for (chunk_idx=0; chunk_idx<ext->k_factor; chunk_idx++)
+        if (ext->shadow_map[(chunkno*ext->k_factor)+chunk_idx].slave_id ==
+            process_state.live_slaves[idx]->uuid)
+            /* Don't use a slave already represented in this logical chunk. */
+            return 1;
+    return 0;
+}
+
 /*
  * Return the slave index to use for remapping a chunk. Scans the process_state.live_slaves
  * array for a slave which is not already used in the disk chunk.
@@ -4758,79 +4798,40 @@ fill_chks:
  */
 static int castle_extent_slave_get_random(c_ext_t *ext,
                                           int chunkno,
-                                          int *want_ssd,
-                                          int ssds_tried,
-                                          int hdds_tried)
+                                          int want_ssd)
 {
-    int         chunk_idx, slave_idx, nr_slaves_to_use, already_used;
+    int         idx, nr_slaves_to_use;
     int         slaves_to_use[MAX_NR_SLAVES];
     uint16_t    r;
-    int         is_ssd=0;
 
     /* For each slave in process_state.live_slaves (the list of potential remap slaves). */
 retry:
     nr_slaves_to_use = 0;
-    for (slave_idx=0; slave_idx<process_state.nr_live_slaves; slave_idx++)
+    for (idx=0; idx<process_state.nr_live_slaves; idx++)
     {
-        if ((process_state.live_slaves[slave_idx] == NULL) ||
-            (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &process_state.live_slaves[slave_idx]->flags)))
-            /* This slave is no longer available - skip it. */
+        if (slave_not_usable(ext, chunkno, idx, want_ssd))
             continue;
 
-        is_ssd = process_state.live_slaves[slave_idx]->flags & CASTLE_SLAVE_SSD;
-
-        if ((is_ssd && !*want_ssd) || (!is_ssd && *want_ssd))
-            /*
-             * Slave is an SSD, but we want to allocate from non-SSD slaves, or slave is not an
-             * SSD, but we want to allocate from SSD slaves. Do not use this slave.
-             */
-            continue;
-
-        if (is_ssd && ssds_tried)
-        {
-            /* Skip SSDs that caller has already tried, but failed to allocate space from. */
-            ssds_tried--;
-            continue;
-        }
-
-        if (!is_ssd && hdds_tried)
-        {
-            /* Skip HDDs that caller has already tried, but failed to allocate space from. */
-            hdds_tried--;
-            continue;
-        }
-
-        already_used = 0;
-        /* Scan through all the slaves in this logical chunk. */
-        for (chunk_idx=0; chunk_idx<ext->k_factor; chunk_idx++)
-        {
-            if (ext->shadow_map[(chunkno*ext->k_factor)+chunk_idx].slave_id ==
-                process_state.live_slaves[slave_idx]->uuid)
-            {
-                /* This slave is already used in this logical chunk - ignore it. */
-                already_used = 1;
-                break;
-            }
-        }
-        if (!already_used)
-            /*
-             * This slave is not already used in this logical chunk - add it to set of potential
-             * target slaves for remapping this chunk.
-             */
-            slaves_to_use[nr_slaves_to_use++] = slave_idx;
+        /*
+         * This slave is not already used in this logical chunk - add it to set of potential
+         * target slaves for remapping this chunk.
+         */
+        slaves_to_use[nr_slaves_to_use++] = idx;
     }
 
-    if (!nr_slaves_to_use && *want_ssd)
-    {
-        /* We want an SSD, but we could not find one - retry for a non-SSD. */
-        debug("Wanted to remap to SSD, but failed to find one. Retrying from non-SSD\n");
-        *want_ssd = 0;
-        goto retry;
-    }
-
-    /* We've run out of potential slaves to choose from (caller has exhausted them). */
     if (!nr_slaves_to_use)
-        return(-1);
+    {
+        if (want_ssd)
+        {
+            /* We want an SSD, but we could not find one - retry for a non-SSD. */
+            debug("Wanted to remap to SSD, but failed to find one. Retrying from non-SSD\n");
+            want_ssd = 0;
+            goto retry;
+        }
+        /* We've run out of potential slaves to choose from (caller has exhausted them). */
+        if (!nr_slaves_to_use)
+            return(-1);
+    }
 
     /*
      * Now slaves_to_use is an array of indexes into process_state.live_slaves that reflect
@@ -4838,6 +4839,9 @@ retry:
      */
     get_random_bytes(&r, 2);
     r = r % nr_slaves_to_use;
+
+    BUG_ON(test_and_set_bit(SLAVE_TRIED_BIT, &process_state.live_slaves[slaves_to_use[r]]->state));
+
     return slaves_to_use[r];
 }
 
@@ -4863,91 +4867,47 @@ int castle_rebuild_freespace_threshold = FREESPACE_THRESHOLD_DEFAULT;
 
 static int castle_extent_slave_get_by_freespace(c_ext_t *ext,
                                                 int chunkno,
-                                                int *want_ssd,
-                                                int ssds_tried,
+                                                int want_ssd,
                                                 int *slave_idx)
 {
-    int         chunk_idx, idx, chosen_slave=MAX_NR_SLAVES, potential_slaves;
-    int         avg_freespace, max_freespace, slave_freespace;
-    int         is_ssd=0, already_used;
+    int                 idx, chosen_slave=MAX_NR_SLAVES, potential_slaves;
+    int                 avg_freespace, max_freespace, slave_freespace;
     struct castle_slave *cs;
 
     /* For each slave in process_state.live_slaves (the list of potential remap slaves). */
-retry:
     potential_slaves = avg_freespace = max_freespace = 0;
     for (idx=0; idx<process_state.nr_live_slaves; idx++)
     {
-        if ((process_state.live_slaves[idx] == NULL) ||
-            (test_bit(CASTLE_SLAVE_EVACUATE_BIT, &process_state.live_slaves[idx]->flags)))
-            /* This slave is no longer available - skip it. */
+        if (slave_not_usable(ext, chunkno, idx, want_ssd))
             continue;
 
-        is_ssd = process_state.live_slaves[idx]->flags & CASTLE_SLAVE_SSD;
+        potential_slaves++;
 
-        if ((is_ssd && !*want_ssd) || (!is_ssd && *want_ssd))
-            /*
-             * Slave is an SSD, but we want to allocate from non-SSD slaves, or slave is not an
-             * SSD, but we want to allocate from SSD slaves. Do not use this slave.
-             */
-            continue;
+        cs = castle_slave_find_by_uuid(process_state.live_slaves[idx]->uuid);
+        BUG_ON(!cs);
 
-        if (is_ssd && ssds_tried)
+        castle_extent_transaction_start();
+        /* Work out how many free superchunks there are ATM. */
+        slave_freespace = castle_freespace_free_superchunks(cs);
+        castle_extent_transaction_end();
+
+        if (slave_freespace > max_freespace)
         {
-            /* Skip SSDs that caller has already tried, but failed to allocate space from. */
-            ssds_tried--;
-            continue;
+            /* This slave has more freespace. */
+            chosen_slave = idx;
+            max_freespace = slave_freespace;
         }
 
-        already_used = 0;
-        /* Don't use a slave already represented in this logical chunk. */
-        for (chunk_idx=0; chunk_idx<ext->k_factor; chunk_idx++)
-        {
-            if (ext->shadow_map[(chunkno*ext->k_factor)+chunk_idx].slave_id ==
-                process_state.live_slaves[idx]->uuid)
-            {
-                /* This slave is already used in this logical chunk. */
-                already_used = 1;
-                break;
-            }
-        }
-
-        if (!already_used)
-        {
-            potential_slaves++;
-
-            cs = castle_slave_find_by_uuid(process_state.live_slaves[idx]->uuid);
-            BUG_ON(!cs);
-
-            castle_extent_transaction_start();
-            /* Work out how many free superchunks there are ATM. */
-            slave_freespace = castle_freespace_free_superchunks(cs);
-            castle_extent_transaction_end();
-
-            if (slave_freespace > max_freespace)
-            {
-                /* This slave has more freespace. */
-                chosen_slave = idx;
-                max_freespace = slave_freespace;
-            }
-
-            /* Re-compute average. */
-            avg_freespace = ((avg_freespace * (potential_slaves - 1)) + slave_freespace)
-                            / potential_slaves;
-        }
+        /* Re-compute average. */
+        avg_freespace = ((avg_freespace * (potential_slaves - 1)) + slave_freespace)
+                        / potential_slaves;
     }
 
     if (max_freespace <=
         (avg_freespace + (avg_freespace * castle_rebuild_freespace_threshold) / 100))
-    {
-        if (*want_ssd)
-        {
-            /* We want an SSD, but we could not find one - retry for a non-SSD. */
-            debug("Wanted to remap to SSD, but failed to find one. Retrying from non-SSD\n");
-            *want_ssd = 0;
-            goto retry;
-        }
         return -ENOENT;
-    }
+
+    BUG_ON(test_and_set_bit(SLAVE_TRIED_BIT, &process_state.live_slaves[chosen_slave]->state));
 
     *slave_idx = chosen_slave;
     return EXIT_SUCCESS;
@@ -4968,31 +4928,29 @@ c_disk_chk_t castle_extent_remap_disk_chunk_alloc(c_ext_t *ext, struct castle_sl
     int                 slave_idx= -1;
     struct castle_slave *target_slave;
     int                 ret=0;
-    int                 ssds_tried=0, hdds_tried=0, want_ssd;
+    int                 want_ssd;
+    int                 reset_tried_flags = 1;
 
 retry:
-    /* Get the replacement slave */
-    castle_extents_process_state_init();
+    /* First time through, clear the slave TRIED flags. */
+    castle_extents_process_state_refresh(reset_tried_flags);
+    reset_tried_flags = 0;
+
     want_ssd = cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD;
 
     /*
      * Default is to choose a slave using freespace, defined by the module param
-     * castle_rebuild_freespace_threshold. If this is negative,(finding a slave
+     * castle_rebuild_freespace_threshold. If this is negative, finding a slave
      * by freespace is turned off.
      */
     if (castle_rebuild_freespace_threshold >= 0)
-        ret = castle_extent_slave_get_by_freespace(ext, chunkno, &want_ssd, ssds_tried, &slave_idx);
+        ret = castle_extent_slave_get_by_freespace(ext, chunkno, want_ssd, &slave_idx);
     if ((castle_rebuild_freespace_threshold < 0) || (ret == -ENOENT))
-    {
         /*
          * Choosing slave by freespace is turned off, or we could not find a slave with enough
          * excess freespace. Revert to random search.
-         * Note: we need to reset search args appropriately again.
          */
-        want_ssd = cs->cs_superblock.pub.flags & CASTLE_SLAVE_SSD;
-        ssds_tried = 0;
-        slave_idx = castle_extent_slave_get_random(ext, chunkno, &want_ssd, ssds_tried, hdds_tried);
-    }
+        slave_idx = castle_extent_slave_get_random(ext, chunkno, want_ssd);
 
     if (slave_idx == -1)
     {
@@ -5015,23 +4973,13 @@ retry:
     {
         /* We've run out of chunks on this slave, allocate another set. */
         ret = castle_extent_remap_superchunks_alloc(ext, slave_idx);
-        if (ret == -EAGAIN)
+        if ((ret == -EAGAIN) || (ret == -ENOSPC))
         {
             /*
-             * Tried to use a now-dead slave for superchunk allocation.
-             * Repopulate the process_state and retry.
+             * Tried to use a now-dead slave for superchunk allocation, or slave is out of
+             * freespace. Repopulate the process_state and retry.
              */
-            debug("Rebuild tried using a now-dead slave - retrying\n");
-            goto retry;
-        }
-        else if ((ret == -ENOSPC))
-        {
-            /*
-             * ssds_tried/hdds_tried keep count of the number of SSDs/HDDs we have tried, and
-             * failed, to allocate from. We'll keep retrying other SSDs/HDDs until
-             * castle_extent_replacement_slave_get determines that we have tried all SSDs/HDDs.
-             */
-            want_ssd ? ssds_tried++: hdds_tried++;
+            debug("Rebuild failed to allocate from a slave - retrying\n");
             goto retry;
         }
         BUG_ON(ret);
