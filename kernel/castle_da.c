@@ -6376,8 +6376,6 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge, int using_t
     if( unlikely(current_state == INVALID_DAM_SERDES) )
     {
         int is_new_key = 0;
-        mutex_lock(&merge->serdes.mutex);
-        BUG_ON(!merge->serdes.mstore_entry);
 
         if( using_tvr )
             is_new_key = tvr_new_key;
@@ -6386,6 +6384,13 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge, int using_t
 
         if( is_new_key )
         {
+            /* Here we need something stronger than serdes mutex because we want to guarantee
+               synchronization btwn merge serdes state, version stats, ct stats etc. */
+            CASTLE_TRANSACTION_BEGIN;
+            /* Take serdes lock for consistency too. */
+            mutex_lock(&merge->serdes.mutex);
+            BUG_ON(!merge->serdes.mstore_entry);
+
             /* update output tree state */
             castle_da_merge_marshall(merge->serdes.mstore_entry,
                     NULL, /* don't need it for this marshall mode */
@@ -6428,17 +6433,21 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge, int using_t
             new_state = VALID_AND_FRESH_DAM_SERDES;
             atomic_set(&merge->serdes.valid, (int)new_state);
             mutex_unlock(&merge->serdes.mutex);
+            CASTLE_TRANSACTION_END;
             return;
         }
+        else /* !is_new_key */
+        {
+            mutex_lock(&merge->serdes.mutex);
+            /* update iterator state */
+            castle_da_merge_marshall(merge->serdes.mstore_entry,
+                    merge->serdes.in_tree_mstore_entry_arr,
+                    merge,
+                    DAM_MARSHALL_ITERS);
 
-        /* update iterator state */
-        castle_da_merge_marshall(merge->serdes.mstore_entry,
-                merge->serdes.in_tree_mstore_entry_arr,
-                merge,
-                DAM_MARSHALL_ITERS);
-
-        mutex_unlock(&merge->serdes.mutex);
-        return;
+            mutex_unlock(&merge->serdes.mutex);
+            return;
+        }
     }
 
     if( unlikely(current_state == VALID_AND_STALE_DAM_SERDES) )
