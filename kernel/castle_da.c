@@ -10524,7 +10524,7 @@ static void castle_da_queues_kick(struct castle_double_array *da)
 /**
  * Return number of Bytes required to duplicate all merge partition keys in DA.
  *
- * @param   da  Locked DA
+ * @param   da  Locked DA (read/write)
  *
  * @return  Bytes required to duplicate all partition keys.
  */
@@ -10533,6 +10533,10 @@ static size_t castle_da_cts_proxy_keys_size(struct castle_double_array *da)
     struct castle_da_merge *last_merge;
     int i;
     size_t size;
+
+    /* DA must be locked.  If it's read-locked, we don't allow writers, if it's
+     * write-locked, we don't allow another writer. */
+    BUG_ON(write_can_lock(&da->lock));
 
     /* Evaluate all mergeable CTs in the DA (not level 0). */
     for (i = 1, size = 0, last_merge = NULL; i < MAX_DA_LEVEL; i++)
@@ -10599,6 +10603,7 @@ static inline int castle_da_cts_proxy_extents(struct castle_double_array *da)
 static struct castle_da_cts_proxy* castle_da_cts_proxy_create(struct castle_double_array *da)
 {
 #define VERIFY_PROXY_CT(_ct, _da) BUG_ON((_ct)->btree_type != (_da)->btree_type)
+#define OVERALLOCATE_FACTOR 2
 
     struct castle_da_cts_proxy *proxy;
     struct castle_da_merge *last_merge;
@@ -10613,13 +10618,14 @@ static struct castle_da_cts_proxy* castle_da_cts_proxy_create(struct castle_doub
 
 reallocate:
     read_lock(&da->lock);
-    /* Determine Bytes required to duplicate all partition keys.  We double the
-     * result to handle key_next()s and once again in case between switching
-     * from read to write lock the required size has increased. */
-    keys_rem = 4 * castle_da_cts_proxy_keys_size(da);
+    /* Determine Bytes required to duplicate all partition keys.  A normalized
+     * key's key_next() occupies the same amount of space so double the result
+     * to handle both key and key_next(key).  Overallocate in case between
+     * switching from read to write lock the required size has increased. */
+    keys_rem = OVERALLOCATE_FACTOR * 2 * castle_da_cts_proxy_keys_size(da);
     /* Determine total number of extents in DA.  Overestimate in case the
      * number of extents changes after we allocate buffers. */
-    nr_exts  = 2 * castle_da_cts_proxy_extents(da);
+    nr_exts  = OVERALLOCATE_FACTOR * castle_da_cts_proxy_extents(da);
     read_unlock(&da->lock);
 
     nr_cts      = da->nr_trees;
