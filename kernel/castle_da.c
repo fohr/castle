@@ -2114,16 +2114,15 @@ static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
     int i;
 
     debug("Initing merged iterator for %d component iterators.\n", iter->nr_iters);
-    BUG_ON(iter->nr_iters <= 0);
     BUG_ON(!iter->btree);
-    iter->err = 0;
-    iter->src_items_completed = 0;
-    iter->async_iter.end_io = NULL;
+    iter->err                  = 0;
+    iter->src_items_completed  = 0;
+    iter->async_iter.end_io    = NULL;
     iter->async_iter.iter_type = &castle_ct_merged_iter;
-    iter->iter_running = 0;
-    iter->rb_root = RB_ROOT;
-    iter->iterators = castle_alloc(iter->nr_iters * sizeof(struct component_iterator));
-    if(!iter->iterators)
+    iter->iter_running         = 0;
+    iter->rb_root              = RB_ROOT;
+    iter->iterators            = castle_alloc(iter->nr_iters * sizeof(struct component_iterator));
+    if (iter->nr_iters && !iter->iterators)
     {
         castle_printk(LOG_WARN, "Failed to allocate memory for merged iterator.\n");
         iter->err = -ENOMEM;
@@ -2314,14 +2313,12 @@ static void _castle_da_rq_iter_init(c_da_rq_iter_t *iter)
     /* Work out the btree type used by this DA. */
     btree = castle_btree_type_get(iter->da->btree_type);
 
-    /* Count how many relevant CTs there are. */
+    /* Count how many relevant CTs there are.  It's possible here that there
+     * are no relevant CTs - in that case, we will initialise an empty merged
+     * iterator and let that handle things for us. */
     for (i = 0, nr_iters = 0; i < iter->cts_proxy->nr_cts; i++)
         if (iter->relevant_cts[i].relevant)
             nr_iters++;
-
-    // @TODO LT: correctly handle the 'no relevant CTs case'
-    // to anybody that hits this: I'm working on it right now
-    BUG_ON(nr_iters == 0);
 
     /* Initialise iterator structure. */
     iter->nr_iters = nr_iters;

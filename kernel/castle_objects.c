@@ -1109,20 +1109,22 @@ int castle_object_iter_next(castle_object_iterator_t *iterator,
 
     while (continue_iterator)
     {
-        if (!castle_objects_rq_iter.prep_next(iterator))
+        if (castle_objects_rq_iter.prep_next(iterator) == 0)
         {
-            /* we're waiting for the iterator */
+            /* We're waiting for the iterator */
             debug_rq("Waiting for next available.\n");
             return 0;
         }
-        else if (!castle_objects_rq_iter.has_next(iterator))
+        else if (castle_objects_rq_iter.has_next(iterator) == 0)
         {
+            /* Iterator has no further values to return. */
             debug_rq("Iterator at end.\n");
             debug_rq("Calling next available callback with NULL key.\n");
             continue_iterator = callback(iterator, NULL, NULL, 0, iterator->next_available_data);
         }
         else
         {
+            /* Iterator ready to return another value. */
             debug_rq("Getting an entry for the range query.\n");
             castle_objects_rq_iter.next(iterator, &k, &v, &val);
             debug_rq("Got an entry for the range query.\n");
