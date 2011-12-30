@@ -2260,11 +2260,12 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
     uint32_t cur_len;
     uint32_t buf_len, buf_used;
 
-    BUG_ON(!data);
     stateful_op = (struct castle_back_stateful_op *)data;
+    BUG_ON(!stateful_op);
+    BUG_ON(!stateful_op->in_use);
+    BUG_ON(!stateful_op->curr_op);
     conn = stateful_op->conn;
-    op = stateful_op->curr_op;
-    BUG_ON(!op);
+    op   = stateful_op->curr_op;
 
     stateful_debug("op=%p "stateful_op_fmt_str" key=%p err=%d\n",
             op, stateful_op2str(stateful_op), key, err);
@@ -2373,6 +2374,7 @@ err0:
  */
 static void __castle_back_iter_next(void *data)
 {
+    struct castle_back_stateful_op *stateful_op;
     struct castle_back_conn        *conn;
     struct castle_back_op          *op;
     struct castle_key_value_list   *kv_list_head;
@@ -2380,13 +2382,13 @@ static void __castle_back_iter_next(void *data)
     uint32_t                        buf_used;
     uint32_t                        buf_len;
     int                             err;
-    struct castle_back_stateful_op *stateful_op = data;
 
+    stateful_op = (struct castle_back_stateful_op *)data;
+    BUG_ON(!stateful_op);
     BUG_ON(!stateful_op->in_use);
-
-    conn = stateful_op->conn;
-    op = stateful_op->curr_op;
-    BUG_ON(!op);
+    BUG_ON(!stateful_op->curr_op);
+    conn     = stateful_op->conn;
+    op       = stateful_op->curr_op;
     iterator = stateful_op->iterator.iterator;
 
     stateful_debug("op=%p "stateful_op_fmt_str" iterator=%p iterator.saved_key=%p\n",
@@ -2428,7 +2430,7 @@ static void __castle_back_iter_next(void *data)
         {
             error("iterator buffer too small\n");
             err = -EINVAL;
-            goto err0;
+            goto err;
         }
 
         castle_free(stateful_op->iterator.saved_key);
@@ -2449,7 +2451,7 @@ static void __castle_back_iter_next(void *data)
 
     return;
 
-err0:
+err:
     castle_back_buffer_put(conn, op->buf);
     castle_back_iter_reply(stateful_op, op, err);
 }
@@ -2515,7 +2517,12 @@ static void _castle_back_iter_next(struct castle_back_op *op,
     return;
 
 err:
-    castle_back_iter_reply(stateful_op, op, err);
+    /* Call the stateful reply if we're fastpath.  If we're not fastpath then
+     * we do not have a stateful_op so reply directly. */
+    if (fastpath)
+        castle_back_iter_reply(stateful_op, op, err);
+    else
+        castle_back_reply(op, err, 0, 0, 0);
 }
 
 /**
@@ -2655,15 +2662,20 @@ static void _castle_back_iter_finish(struct castle_back_op *op,
         spin_unlock(&stateful_op->lock);
         /* NOTE: No need to castle_back_buffer_put() as this has been done as
          * part of stateful_op expiry in castle_back_stateful_op_finish_all() */
-        goto err0;
+        goto err;
     }
 
     castle_back_iter_call_queued(stateful_op); // drops stateful_op->lock
 
     return;
 
-err0:
-    castle_back_iter_reply(stateful_op, op, err);
+err:
+    /* Call the stateful reply if we're fastpath.  If we're not fastpath then
+     * we do not have a stateful_op so reply directly. */
+    if (fastpath)
+        castle_back_iter_reply(stateful_op, op, err);
+    else
+        castle_back_reply(op, err, 0, 0, 0);
 }
 
 /**
