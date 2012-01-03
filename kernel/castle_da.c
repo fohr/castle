@@ -9280,6 +9280,12 @@ static int castle_da_merge_writeback(struct castle_da_merge *merge, void *mstore
     c_merge_serdes_state_t current_state;
 
     BUG_ON(!CASTLE_IN_TRANSACTION);
+
+    /* Don't serialise merges that belong to dead DA. This is running in a transaction, same
+     * as castle_double_array_destroy(), protected against races. */
+    if (castle_da_deleted(merge->da))
+        return 0;
+
     mstores = (struct castle_da_writeback_mstores *)mstores_p;
 
     mutex_lock(&merge->serdes.mutex);
