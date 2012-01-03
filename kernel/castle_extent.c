@@ -6307,9 +6307,16 @@ skip_extent:
                 /*
                  * Finished with this extent. Drain I/O and check for errors.
                  */
+
+                /* Clean up any chunks left over from this extent. */
+                castle_extent_remap_space_cleanup(ext);
+
                 if (!chunk_found)
                 {
-                    /* No chunks were found for this extent. Clean up and drop its ref now. */
+                    /*
+                     * No chunks were found for this extent. Clean up and drop its ref now.
+                     * DO NOT reference the extent after this point!.
+                     */
                     cleanup_extent(ext, 1);
                 }
                 else if (writeback_info)
@@ -6342,9 +6349,6 @@ skip_extent:
                 }
 
                 writeback_info = NULL;
-
-                /* Clean up any chunks left over from this extent. */
-                castle_extent_remap_space_cleanup(ext);
 
                 /*
                  * At this point we'll check to see if the extent processor needs to terminate
