@@ -29,6 +29,11 @@ static int               castle_ctrl_prog_state             = CTRL_PROG_NOT_PRES
 static pid_t             castle_ctrl_prog_pid;
 static long              castle_ctrl_prog_last_jiffies      = 0;
 
+static int castle_nugget_disabled = 0;
+
+module_param(castle_nugget_disabled, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_nugget_disabled, "Don't send events to start new nugget");
+
 
 static void castle_ctrl_prog_touch(void)
 {
@@ -75,6 +80,7 @@ int castle_ctrl_prog_ioctl(cctrl_ioctl_t *ioctl)
                 {
                     struct task_struct *p;
 
+                    castle_printk(LOG_USERINFO, "Deregistering nugget=%d\n", castle_ctrl_prog_pid);
                     ioctl->ctrl_prog_deregister.pid = castle_ctrl_prog_pid;
                     read_lock(&tasklist_lock);
                     p = find_task_by_pid(castle_ctrl_prog_pid);
@@ -155,7 +161,9 @@ static void castle_ctrl_prog_work_do(void *unused)
         case CTRL_PROG_NOT_PRESENT:
             castle_printk(LOG_USERINFO, "Startup ctrl prog.\n");
             castle_ctrl_prog_touch();
-            castle_uevent1(CASTLE_CTRL_PROG_REGISTER, 0);
+            /* If the nugget_disbaled parameter is set, don't send event to start nugget. */
+            if (!castle_nugget_disabled)
+                castle_uevent1(CASTLE_CTRL_PROG_REGISTER, 0);
             break;
         case CTRL_PROG_PRESENT:
             castle_printk(LOG_USERINFO, "No heartbeat from ctrl prog.\n");
