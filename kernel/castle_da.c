@@ -12134,7 +12134,7 @@ int castle_double_array_prefetch(c_da_t da_id)
     {
         castle_printk(LOG_USERINFO, "Couldn't get CTs proxy for DA id=0x%x\n",
                 da_id);
-        castle_da_put(da);
+        castle_double_array_put(da_id);
         return -EINVAL;
     }
 
@@ -12453,12 +12453,8 @@ static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_id
             goto out;
         }
 
-        /* Work out what type of trees we are going to merge. Return, if in_trees don't match. */
-        if (i && (in_trees[i-1]->btree_type != ct->btree_type))
-        {
-            castle_printk(LOG_USERINFO, "Arrays are not of same type\n");
-            ret = C_ERR_MERGE_ERROR;
-        }
+        /* Btree types must always be the same. */
+        BUG_ON(i && in_trees[i-1]->btree_type != ct->btree_type);
 
         /* Shouldn't be any outstanding write references. */
         BUG_ON(atomic_read(&ct->write_ref_count) != 0);
