@@ -8679,26 +8679,22 @@ void castle_ct_put(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *
 }
 
 /**
- * Promote level 0 RWCTs if they number differently to request-handling CPUS.
+ * Promote level 0 RWCTs without any checks, without (re-)creating new RWCTs.
  *
- * @param   da  Doubling array to verify promotions for
+ * @param   da  Doubling array to promote for
  */
-static int castle_da_level0_check_promote(struct castle_double_array *da, void *unused)
+static int castle_da_level0_force_promote(struct castle_double_array *da, void *unused)
 {
+    struct castle_component_tree *ct;
+    struct list_head *l, *tmp;
+
     write_lock(&da->lock);
-    if (da->levels[0].nr_trees != castle_double_array_request_cpus())
+    castle_printk(LOG_INFO, "Promoting RWCTs at level 0 to level 1 for DA=%d.\n", da->id);
+
+    list_for_each_safe(l, tmp, &da->levels[0].trees)
     {
-        struct castle_component_tree *ct;
-        struct list_head *l, *tmp;
-
-        castle_printk(LOG_INFO, "DA previously imported on system with different CPU "
-                "count.  Promoting RWCTs at level 0 to level 1.\n");
-
-        list_for_each_safe(l, tmp, &da->levels[0].trees)
-        {
-            ct = list_entry(l, struct castle_component_tree, da_list);
-            castle_component_tree_promote(da, ct);
-        }
+        ct = list_entry(l, struct castle_component_tree, da_list);
+        castle_component_tree_promote(da, ct);
     }
     write_unlock(&da->lock);
 
@@ -9989,8 +9985,10 @@ int castle_double_array_read(void)
     /* Add CTs to sysfs. */
     __castle_ct_hash_iterate(_castle_sysfs_ct_add, NULL);
 
-    /* Promote level 0 RWCTs if necessary. */
-    castle_da_hash_iterate(castle_da_level0_check_promote, NULL);
+    /* Promote level 0 RWCTs. This guarantees crash consistency of RWCTs (if an RWCT is
+       updated in place, and then FS crashes, it'd become corrupt). This also deals with
+       # of CPUs changing between FS runs (# of RWCTs must equal # of CPUs). */
+    castle_da_hash_iterate(castle_da_level0_force_promote, NULL);
 
     goto out;
 
