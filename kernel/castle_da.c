@@ -5628,7 +5628,21 @@ static int castle_da_merge_tv_resolver_flush(struct castle_da_merge *merge,
     return ret;
 }
 
-static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_nr_bytes)
+/**
+ * Performs specified amount of merge work, adding entries directly to the output tree.
+ * It assumes that the leaf btree node is locked (if one exists).
+ * This doesn't deal with merge serialisation directly. Instead it relies on
+ * @see castle_da_entry_do() subcall to do that (after version deletion has been handled).
+ *
+ * @param merge         Merge which needs to be performed
+ * @param max_nr_bytes  How much merge work needs to be done in bytes (approx)
+ * @return EAGAIN       If the unit got done successfully but the merge isn't finished yet.
+ * @return EXIT_SUCCESS If the unit got done successfully and the merge is finished.
+ * @return -ESHUTDOWN   If an exit condition was detected (FS shutdown/DA deletion)
+ * @return -errno       On merge errors.
+ */
+static int castle_da_merge_unit_without_resolver_do(struct castle_da_merge *merge,
+                                                    uint64_t max_nr_bytes)
 {
     void *key;
     c_ver_t version;
@@ -5643,51 +5657,22 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
 
     while (castle_iterator_has_next_sync(&castle_ct_merged_iter, merge->merged_iter))
     {
-
+        /* Let merge release the CPU if its been running too long. */
         might_resched();
 
-        /* @TODO: we never check iterator errors. We should! */
-
+        /* Get the next entry and account stats. */
         castle_perf_debug_getnstimeofday(&ts_start);
         castle_ct_merged_iter_next(merge->merged_iter, &key, &version, &cvt);
         castle_perf_debug_getnstimeofday(&ts_end);
         castle_perf_debug_bump_ctr(merge->merged_iter_next_ns, ts_end, ts_start);
-        debug("Merging entry id=%lld: k=%p, *k=%d, version=%d, cep="cep_fmt_str_nl,
-                i, key, *((uint32_t *)key), version, cep2str(cvt.cep));
+
+        /* We should always get a valid cvt. */
         BUG_ON(CVT_INVALID(cvt));
 
-        /* If we are using a timestamp-version resolver, we handle the buffering here. */
-        if(merge->tv_resolver)
-        {
-            if(castle_dfs_resolver_is_new_key_check(merge->tv_resolver, key))
-            {
-                int ret;
-                ret = castle_da_merge_tv_resolver_flush(merge, max_nr_bytes);
-                if (MERGE_CHECKPOINTABLE(merge))
-                    castle_da_merge_serialise(merge, 1 /* using tvr */, 1 /* is a new key */);
-                if(ret == -ESHUTDOWN)
-                    return -ESHUTDOWN;
-                if (ret != EXIT_SUCCESS)
-                    goto err_out;
-            }
-            if (MERGE_CHECKPOINTABLE(merge))
-                castle_da_merge_serialise(merge, 1 /* using tvr */, 0 /* not a new key */);
-            castle_dfs_resolver_entry_add(merge->tv_resolver, key, cvt, version);
-        }
-        else
-        {
-            /* not timestamping */
-            ret = castle_da_entry_do(merge, key, cvt, version, max_nr_bytes);
-            if(ret == -ESHUTDOWN)
-                return -ESHUTDOWN;
-            if(ret != EXIT_SUCCESS)
-                goto err_out;
-        }
-
-        /* entry done */
-
-        castle_perf_debug_getnstimeofday(&ts_start);
-        castle_perf_debug_getnstimeofday(&ts_end);
+        /* No resolver, add entries to the output directly. */
+        ret = castle_da_entry_do(merge, key, cvt, version, max_nr_bytes);
+        if(ret != EXIT_SUCCESS)
+            return ret;
 
         /* Abort if we completed the work asked to do. */
         if (merge->nr_bytes > max_nr_bytes)
@@ -5695,23 +5680,124 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge, uint64_t max_n
 
         FAULT(MERGE_FAULT);
     }
-    /* flush whatever is left in the tv resolver */
-    if(merge->tv_resolver)
-    {
-        int ret;
-        ret = castle_da_merge_tv_resolver_flush(merge, max_nr_bytes);
-        if(ret == -ESHUTDOWN)
-            return -ESHUTDOWN;
-        if (ret != EXIT_SUCCESS)
-            goto err_out;
-    }
 
     /* Return success, if we are finished with the merge. */
     return EXIT_SUCCESS;
+}
 
-err_out:
-    if (ret == -ESHUTDOWN) /* merge aborted */
-        return -ESHUTDOWN;
+/**
+ * Performs specified amount of merge work, going through the tombstone/timestamp resolution first.
+ * The resolver buffers up one key worth of entries before it can perform the resolution.
+ * Consequently serialisation needs to be handled here (extra buffering makes the process difficult
+ * to handle elsewhere).
+ * It assumes that the leaf btree node is locked (if one exists).
+ *
+ * @param merge         Merge which needs to be performed
+ * @param max_nr_bytes  How much merge work needs to be done in bytes (approx)
+ * @return EAGAIN       If the unit got done successfully but the merge isn't finished yet.
+ * @return EXIT_SUCCESS If the unit got done successfully and the merge is finished.
+ * @return -ESHUTDOWN   If an exit condition was detected (FS shutdown/DA deletion)
+ * @return -errno       On merge errors.
+ */
+static int castle_da_merge_unit_with_resolver_do(struct castle_da_merge *merge,
+                                                 uint64_t max_nr_bytes)
+{
+    void *key;
+    c_ver_t version;
+    c_val_tup_t cvt;
+    int ret = 0;
+#ifdef CASTLE_PERF_DEBUG
+    struct timespec ts_start, ts_end;
+#endif
+
+    /* max_nr_bytes should point to total number of bytes this merge could be done upto. */
+    max_nr_bytes += merge->nr_bytes;
+
+    while (castle_iterator_has_next_sync(&castle_ct_merged_iter, merge->merged_iter))
+    {
+        /* Let merge release the CPU if its been running too long. */
+        might_resched();
+
+        /* Get the next entry and account stats. */
+        castle_perf_debug_getnstimeofday(&ts_start);
+        castle_ct_merged_iter_next(merge->merged_iter, &key, &version, &cvt);
+        castle_perf_debug_getnstimeofday(&ts_end);
+        castle_perf_debug_bump_ctr(merge->merged_iter_next_ns, ts_end, ts_start);
+
+        /* We should always get a valid cvt. */
+        BUG_ON(CVT_INVALID(cvt));
+
+        /* Flush the resolver on new key boundry. Then serialise. */
+        if(castle_dfs_resolver_is_new_key_check(merge->tv_resolver, key))
+        {
+            int ret;
+            ret = castle_da_merge_tv_resolver_flush(merge, max_nr_bytes);
+            if (MERGE_CHECKPOINTABLE(merge))
+                castle_da_merge_serialise(merge, 1 /* using tvr */, 1 /* is a new key */);
+            if (ret != EXIT_SUCCESS)
+                return ret;
+        }
+
+        /* Record the iterator state if neccessary. */
+        if (MERGE_CHECKPOINTABLE(merge))
+            castle_da_merge_serialise(merge, 1 /* using tvr */, 0 /* not a new key */);
+
+        /* Add the entry to the resolver. */
+        castle_dfs_resolver_entry_add(merge->tv_resolver, key, cvt, version);
+
+        /* Abort if we completed the work asked to do. */
+        if (merge->nr_bytes > max_nr_bytes)
+            return EAGAIN;
+
+        FAULT(MERGE_FAULT);
+    }
+
+    /* If the merge is finished, the resolver has to be flushed the final time. */
+    ret = castle_da_merge_tv_resolver_flush(merge, max_nr_bytes);
+    if (ret != EXIT_SUCCESS)
+        return ret;
+
+    /* Return success, if we are finished with the merge. */
+    return EXIT_SUCCESS;
+}
+
+/**
+ * Performs specified amount of merge work.
+ * Pins T0s in memory if level 1 merge is being performed.
+ *
+ * @param merge         Merge which needs to be performed
+ * @param max_nr_bytes  How much merge work needs to be done in bytes (approx)
+ * @param hardpin       Whether to prefetch and hardpin data in memory first
+ * @return EAGAIN       If the unit got done successfully but the merge isn't finished yet.
+ * @return EXIT_SUCCESS If the unit got done successfully and the merge is finished.
+ * @return -ESHUTDOWN   If an exit condition was detected (FS shutdown/DA deletion)
+ * @return -errno       On merge errors.
+ */
+static int castle_da_merge_unit_do(struct castle_da_merge *merge,
+                                   uint64_t max_nr_bytes,
+                                   int hardpin)
+{
+    int i, ret;
+
+    if(hardpin)
+    {
+           /* Hard-pin T1s in the cache. */
+        for (i=0; i<merge->nr_trees; i++)
+            castle_cache_advise((c_ext_pos_t){merge->in_trees[i]->data_ext_free.ext_id, 0},
+                    C2_ADV_EXTENT|C2_ADV_HARDPIN, -1, -1, 0);
+    }
+
+    ret = merge->tv_resolver ?
+           castle_da_merge_unit_with_resolver_do(merge, max_nr_bytes) :
+           castle_da_merge_unit_without_resolver_do(merge, max_nr_bytes);
+
+    if(hardpin)
+    {
+        /* Unhard-pin T1s in the cache. Do this before we deallocate the merge and extents. */
+        for (i=0; i<merge->nr_trees; i++)
+            castle_cache_advise_clear((c_ext_pos_t){merge->in_trees[i]->data_ext_free.ext_id, 0},
+                    C2_ADV_EXTENT|C2_ADV_HARDPIN, -1, -1, 0);
+    }
 
     return ret;
 }
@@ -6996,140 +7082,88 @@ static void castle_da_merge_deser_check(struct castle_da_merge *merge,
 }
 
 /**
- * Merge multiple trees into one. The same function gets used by both compaction
- * (total merges) and standard 2 tree merges.
+ * Performs specified amount of merge work on a merge that's already initialised.
+ * Wraps @see castle_da_merge_unit_do(), and also deals with:
+ * a) detecting exit conditions (due to FS shutdown or DA deletion)
+ * b) retaking/releasing locks, in order to put the merge in the expected state/release
+ *    locks for the period of (possibly extended) inactivity
+ * c) finishing merge off when terminating successfully or on errors
  *
  * @param merge     [in]    Do some work on this merge.
- * @param work_size [in]    Number of entries to be merged.
+ * @param nr_bytes  [in]    Approx amount of merge work in bytes, 0 for everything
  *
- * @return non-zero if failure
+ * @return EXIT_SUCCESS if the unit of work god done successfully and the merge terminated.
+ * @return EAGAIN       if the unit of work got done successfully and the merge continues
+ * @return -ESHUTDOWN   if a termination condition was detected
+ *                      (the merge won't be cleaned up here in such case)
+ * @return -errno       if the merge terminated with a failure. Merge is cleaned up here.
  */
 static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_bytes)
 {
     struct castle_double_array *da = merge->da;
     int level = merge->level;
-    struct castle_component_tree **in_trees = merge->in_trees;
-    int ret = 0;
-    int i;
+    int ret;
 
-    debug("%s::MERGE START - DA %d L %d, with input cts: ",
-            __FUNCTION__, da->id, level);
-    FOR_EACH_MERGE_TREE(i, merge)
-        debug(" [%d]", in_trees[i]->seq);
-    debug(" -> output ct %d.\n", merge->out_tree->seq);
-
-    /* Merge no fail zone starts here. Can't fail from here. Expected to complete, unless
-     * someone aborts merge in between. */
-
-    /* Hard-pin T1s in the cache. */
-    if (level == 1)
+    /* Check for FS stop and merge abort due to DA deletion. */
+    if (castle_merges_abortable && exit_cond)
     {
-        for (i=0; i<merge->nr_trees; i++)
-            castle_cache_advise((c_ext_pos_t){in_trees[i]->data_ext_free.ext_id, 0},
-                    C2_ADV_EXTENT|C2_ADV_HARDPIN, -1, -1, 0);
+        /* If FS exiting, delay merge_dealloc until DA finish for the sake of last checkpoint.
+           In case of DA destroy, merge thread itself will dealloc the merge. */
+        castle_printk(LOG_DEVEL, "Merge for DA=%d, level=%d, aborted.\n", da->id, level);
+
+        return -ESHUTDOWN;
     }
 
-    /* If the work size is 0, complete everything in one shot. */
+    /* If the work size is 0, complete everything in one shot. RWCT merges are expected
+       to happen in one shot (we pin/unpin all the data, would be waste to have to be
+       doing it multiple times). */
+    BUG_ON((merge->level == 1) && (nr_bytes != 0));
     if (nr_bytes == 0)
         nr_bytes = merge->total_nr_bytes;
 
-    /* Do the merge. */
-
-    /* returning from "sleep", retake locks, so merge finds things as it expects to */
+    /* Retake locks, so the rest of merge code finds things as it expects to. */
     castle_merge_sleep_return(merge);
 
-    /* Check for castle stop and merge abort */
-    if (castle_merges_abortable && exit_cond)
-    {
-        castle_printk(LOG_INIT, "Merge for DA=%d, level=%d, aborted.\n", da->id, level);
-        ret = -ESHUTDOWN;
-        goto merge_aborted;
-    }
-
-    /* Perform the merge work. */
-    ret = castle_da_merge_unit_do(merge, nr_bytes);
+    /* Perform the merge work. Specify hardpin if merging RWCTs. */
+    ret = castle_da_merge_unit_do(merge, nr_bytes, (merge->level == 1));
 
 #ifdef CASTLE_PERF_DEBUG
     /* Output & reset cache efficiency stats. */
-    castle_da_merge_cache_efficiency_stats_flush_reset(da, merge, 0, in_trees);
-#endif
-
-#ifdef CASTLE_PERF_DEBUG
+    castle_da_merge_cache_efficiency_stats_flush_reset(da, merge, 0, merge->in_trees);
     /* Output & reset performance stats. */
-    castle_da_merge_perf_stats_flush_reset(da, merge, 0, in_trees);
+    castle_da_merge_perf_stats_flush_reset(da, merge, 0, merge->in_trees);
 #endif
-    /* Exit on errors. */
-    if (ret < 0)
+
+    /* Release the locks and return straight away if the unit of work completed
+       successfully (common path), or got failed due to an exit condition. */
+    if ((ret == EAGAIN) || (ret == -ESHUTDOWN))
     {
-        /* Merges should never fail.
-         *
-         * Per-version statistics will now be out of sync. */
-        castle_printk(LOG_WARN, "%s::MERGE FAILED - DA %d L %d, with input cts %d and %d \n",
-                __FUNCTION__, da->id, level, in_trees[0]->seq, in_trees[0]->seq);
-        goto merge_failed;
+        castle_merge_sleep_prepare(merge);
+        return ret;
     }
 
-    if (ret == EAGAIN)
-        goto merge_aborted;
-
-    BUG_ON(ret);
-
-    CASTLE_TRANSACTION_BEGIN;
-    debug("%s::MERGE COMPLETING - DA %d L %d, with input cts %d and %d, "
-        "and output ct %d.\n", __FUNCTION__, da->id, level, in_trees[0]->seq, in_trees[0]->seq,
-        merge->out_tree->seq);
-
-    /* Finish packaging the output tree. */
-    castle_da_merge_complete(merge);
-
-    /* Commit and zero private stats to global crash-consistent tree. */
-    castle_version_states_commit(&merge->version_states);
-
-    goto complete_merge_do;
-
-merge_aborted:
-merge_failed:
+    /* If merge is terminating due to successfull completion, or an error
+       do the remaining work under transaction lock in order not to race with checkpoint. */
     CASTLE_TRANSACTION_BEGIN;
 
-complete_merge_do:
-    /* Unhard-pin T1s in the cache. Do this before we deallocate the merge and extents. */
-    if (level == 1)
+    /* On errors don't perform finalisation work. Don't commit the stats either.
+       This isn't really expected to happen (only a corner case when the out tree
+       grew to beyond 10 levels). */
+    if(ret == EXIT_SUCCESS)
     {
-        for (i=0; i<merge->nr_trees; i++)
-            castle_cache_advise_clear((c_ext_pos_t){in_trees[i]->data_ext_free.ext_id, 0},
-                    C2_ADV_EXTENT|C2_ADV_HARDPIN, -1, -1, 0);
+        /* Finish packaging the output tree. */
+        castle_da_merge_complete(merge);
+        /* Commit and zero private stats to global crash-consistent tree. */
+        castle_version_states_commit(&merge->version_states);
     }
-
-    debug_merges("%s::MERGE END with ret %d - DA %d L %d, produced out ct seq ??\n",
-        __FUNCTION__, ret, da->id, level);
-
+    /* Release the locks. */
     castle_merge_sleep_prepare(merge);
-
-    /* Successfully completed current unit of work. */
-    if (ret == EAGAIN)
-        goto out;
-
-    /* Merge could be aborted either due to DA destroy or due to FS exit. */
-    if (ret == -ESHUTDOWN)
-    {
-        /* If FS exiting, delay merge_dealloc until DA finish for the sake of last checkpoint. */
-        /* In case of DA destroy, merge thread itself will dealloc the merge. */
-        castle_printk(LOG_DEVEL, "Stopping merge due to thread shutdown\n");
-        goto out;
-    }
-
-    /* Merge failed due to other issues. */
-    if (ret)
-        castle_printk(LOG_WARN, "Merge for DA=%d, level=%d, failed to merge err=%d.\n",
-                                 da->id, level, ret);
-
+    /* Get rid of the merge structure. */
     castle_da_merge_dealloc(merge, ret, 1/* In transaction. */);
 
-out:
-    /* safe for checkpoint to run now because we've completed and cleaned up all merge state */
     CASTLE_TRANSACTION_END;
+    return 0;
 
-    return ret;
 }
 
 /**
