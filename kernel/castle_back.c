@@ -800,9 +800,9 @@ static void castle_back_stateful_op_finish_all(struct castle_back_stateful_op *s
 {
     struct list_head *pos, *tmp;
     struct castle_back_op *op;
-//#ifdef DEBUG
+#ifdef DEBUG
     int cancelled = 0;
-//#endif
+#endif
 
     BUG_ON(!spin_is_locked(&stateful_op->lock));
 
@@ -817,13 +817,12 @@ static void castle_back_stateful_op_finish_all(struct castle_back_stateful_op *s
         /* even though we have the lock, this is safe since conn reference count cannot be
          * decremented to 0 since the stateful_op has a count */
         castle_back_reply(op, err, 0, 0);
-//#ifdef DEBUG
+#ifdef DEBUG
         cancelled++;
-//#endif
+#endif
     }
 
-    castle_printk(LOG_DEBUG, "%s: stateful_op=%p cancelled %i ops.\n",
-            __FUNCTION__, stateful_op, cancelled);
+    debug("castle_back_stateful_op_finish_all for stateful_op %p cancelled %i ops.\n", stateful_op, cancelled);
 }
 
 /******************************************************************
@@ -1738,9 +1737,6 @@ static void castle_back_iter_call_queued(struct castle_back_stateful_op *statefu
             case CASTLE_RING_ITER_FINISH:
                 /* ITER_FINISH can only ever occur once for a stateful op, so
                  * don't requeue allowing a no-requeue fastpath iterator. */
-                castle_printk(LOG_DEBUG, "%s: conn=%p stateful_op=%p in_use=%d cancel_on_op_complete=%d curr_op=%p\n",
-                        __FUNCTION__, stateful_op->conn, stateful_op, stateful_op->in_use,
-                        stateful_op->cancel_on_op_complete, stateful_op->curr_op);
                 spin_unlock(&stateful_op->lock);
                 __castle_back_iter_finish((void *)stateful_op);
                 break;
@@ -2351,10 +2347,6 @@ static void _castle_back_iter_finish(struct castle_back_op *op,
      * Put this op on the queue for the iterator
      */
     spin_lock(&stateful_op->lock);
-
-    castle_printk(LOG_DEBUG, "%s: conn=%p stateful_op=%p op=%p in_use=%d cancel_on_op_complete=%d curr_op=%p\n",
-            __FUNCTION__, stateful_op->conn, stateful_op, op, stateful_op->in_use,
-            stateful_op->cancel_on_op_complete, stateful_op->curr_op);
 
     err = castle_back_stateful_op_queue_op(stateful_op, op->req.iter_finish.token, op);
     if (err)
@@ -3563,8 +3555,6 @@ int castle_back_release(struct inode *inode, struct file *file)
         return -EINVAL;
     }
 
-    castle_printk(LOG_DEBUG, "%s: conn=%p\n", __FUNCTION__, conn);
-
     set_bit(CASTLE_BACK_CONN_DEAD_BIT, &conn->flags);
     file->private_data = NULL;
     kthread_stop(conn->work_thread);
@@ -3577,10 +3567,6 @@ int castle_back_release(struct inode *inode, struct file *file)
         struct castle_back_stateful_op *stateful_op = &stateful_ops[i];
 
         spin_lock(&stateful_op->lock);
-
-        castle_printk(LOG_DEBUG, "%s: conn=%p stateful_op=%p in_use=%d expiring=%d cancel_on_op_complete=%d curr_op=%p\n",
-                __FUNCTION__, conn, stateful_op, stateful_op->in_use, stateful_op->expiring,
-                stateful_op->cancel_on_op_complete, stateful_op->curr_op);
 
         /* if it's in use but already expiring we don't need to do anything here */
         if (stateful_op->in_use && !stateful_op->expiring)
