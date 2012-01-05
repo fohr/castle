@@ -11568,7 +11568,6 @@ static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *
     if (!c_bvec->cts_proxy)
     {
         c_bvec->submit_complete(c_bvec, -ENOMEM, INVAL_VAL_TUP);
-
         return;
     }
 
@@ -11581,8 +11580,8 @@ static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *
     {
         /* No candidate trees available, so the requested key cannot exist.
          * Let submit_complete() handle this case for us. */
+        castle_da_cts_proxy_put(c_bvec->cts_proxy);
         c_bvec->submit_complete(c_bvec, 0, INVAL_VAL_TUP);
-
         return;
     }
     c_bvec->orig_complete   = c_bvec->submit_complete;
