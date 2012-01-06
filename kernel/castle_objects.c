@@ -1608,7 +1608,7 @@ void castle_object_chunk_pull(struct castle_object_pull *pull, void *buf, size_t
     /* Handle inline values. */
     if (CVT_INLINE(pull->cvt))
     {
-        atomic64_add(cvt.length, &c_bvec->cts_proxy->da->read_data_bytes);
+        atomic64_add(pull->cvt.length, &pull->cts_proxy->da->read_data_bytes);
         castle_da_cts_proxy_put(pull->cts_proxy);
         /* this is assured since buf_len >= PAGE_SIZE > MAX_INLINE_VAL_SIZE */
         BUG_ON(buf_len < pull->remaining);
