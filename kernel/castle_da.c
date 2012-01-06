@@ -7937,7 +7937,7 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id, c_da_opts_t opt
     da->flags           = 0;
     da->nr_trees        = 0;
     atomic_set(&da->ref_cnt, 1);
-    da->attachment_cnt  = 0;
+    atomic_set(&da->attachment_cnt, 0);
     atomic_set(&da->ios_waiting_cnt, 0);
     if (castle_da_wait_queue_create(da, NULL) != EXIT_SUCCESS)
         goto err_out;
@@ -11961,7 +11961,7 @@ static void castle_da_put(struct castle_double_array *da)
     if(atomic_dec_return(&da->ref_cnt) == 0)
     {
         /* Ref count dropped to zero -> delete. There should be no outstanding attachments. */
-        BUG_ON(da->attachment_cnt != 0);
+        BUG_ON(atomic_read(&da->attachment_cnt) != 0);
         BUG_ON(!castle_da_deleted(da));
         CASTLE_TRANSACTION_BEGIN;
         castle_da_destroy_complete(da);
@@ -11975,7 +11975,7 @@ static void castle_da_put_locked(struct castle_double_array *da)
     if(atomic_dec_return(&da->ref_cnt) == 0)
     {
         /* Ref count dropped to zero -> delete. There should be no outstanding attachments. */
-        BUG_ON(da->attachment_cnt != 0);
+        BUG_ON(atomic_read(&da->attachment_cnt) != 0);
         BUG_ON((da->hash_list.next != NULL) || (da->hash_list.prev != NULL));
         BUG_ON(!castle_da_deleted(da));
         castle_da_destroy_complete(da);
@@ -12018,7 +12018,7 @@ int castle_double_array_get(c_da_t da_id)
 
     castle_da_get(da);
 
-    da->attachment_cnt++;
+    atomic_inc(&da->attachment_cnt);
 
     read_unlock_irqrestore(&castle_da_hash_lock, flags);
 
@@ -12036,9 +12036,7 @@ void castle_double_array_put(c_da_t da_id)
     /* DA allocated + our ref count on it. */
     BUG_ON(atomic_read(&da->ref_cnt) < 2);
 
-    write_lock(&da->lock);
-    da->attachment_cnt--;
-    write_unlock(&da->lock);
+    atomic_dec(&da->attachment_cnt);
 
     /* Put the ref cnt too. */
     castle_da_put(da);
@@ -12094,26 +12092,29 @@ int castle_double_array_destroy(c_da_t da_id)
     struct castle_double_array *da;
     unsigned long flags;
     int ret;
+    int attachment_cnt;
 
     write_lock_irqsave(&castle_da_hash_lock, flags);
     da = __castle_da_hash_get(da_id);
     /* Fail if we cannot find the da in the hash. */
-    if(!da)
+    if (!da)
     {
         castle_printk(LOG_USERINFO, "No Version Tree exists with id: %u\n", da_id);
         ret = -EINVAL;
         goto err_out;
     }
-    BUG_ON(da->attachment_cnt < 0);
+
+    attachment_cnt = atomic_read(&da->attachment_cnt);
+    BUG_ON(attachment_cnt < 0);
     /* Fail if there are attachments to the DA. */
-    if(da->attachment_cnt > 0)
+    if (attachment_cnt > 0)
     {
-        castle_printk(LOG_USERINFO, "Version Tree %u has %u outstanding attachments\n",
-                      da_id,
-                      da->attachment_cnt);
+        castle_printk(LOG_USERINFO, "Version Tree %u has %d outstanding attachments\n",
+                      da_id, attachment_cnt);
         ret = -EBUSY;
         goto err_out;
     }
+
     BUG_ON(castle_da_deleted(da));
 
     /* Now we are happy to delete the DA. */

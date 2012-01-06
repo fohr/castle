@@ -2333,7 +2333,7 @@ struct castle_double_array {
     struct castle_da_lfs_ct_t   l1_merge_lfs;       /**< LFS structure for level 1 merge.       */
     struct list_head            hash_list;
     atomic_t                    ref_cnt;
-    uint32_t                    attachment_cnt;
+    atomic_t                    attachment_cnt;
 
     /* Write IO wait queue members */
     struct castle_da_io_wait_queue {
