@@ -275,10 +275,6 @@ c_bio_t *castle_utils_bio_alloc(int nr_bvecs)
         c_bvecs[i].cts_index = -1;
         CVT_INVALID_INIT(c_bvecs[i].accum);
         c_bvecs[i].flags     = 0;
-        /* The following 2 flags must be set for pulls and gets. They are not used for other
-           ops so it's safe to set them for all ops. */
-        set_bit(CBV_PG_RSLV_COUNTERS, &c_bvecs[i].flags);
-        set_bit(CBV_PG_RSLV_TIMESTAMPS, &c_bvecs[i].flags);
 #ifdef CASTLE_PERF_DEBUG
         c_bvecs[i].timeline  = NULL;
 #endif

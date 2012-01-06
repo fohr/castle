@@ -11266,100 +11266,22 @@ void castle_da_next_ct_read(c_bvec_t *c_bvec)
 }
 
 /**
- * Update get->cvt with most up-to-date (according to user-timestamp) instance of an object.
- *
- * Return 1 if we're sure that we have the most up-to-date entry in get->cvt; else return 0.
- */
-int castle_da_ct_read_complete_cvt_timestamp_check(c_bvec_t *c_bvec,
-                                                   c_val_tup_t *cvt)
-{
-    BUG_ON(!c_bvec->tree);
-    BUG_ON(CVT_INVALID(*cvt));
-
-    if (CVT_ANY_COUNTER(*cvt))
-    {
-        /* the only way we expect to get here is if the user had inserted some value into a
-           timestamped DA after inserting a counter to the same key, which would mean that we
-           should have already seen a get candidate cvt that wasn't a counter, which would mean
-           the following assertions must hold. */
-        BUG_ON(test_bit(CBV_PG_RSLV_COUNTERS, &c_bvec->flags));
-        BUG_ON(CVT_INVALID(c_bvec->accum));
-
-        /* If the user is mixing counters and non-counters on the same key, then they must not be
-           relying on timestamps. Ignore this counter and terminate the query now before we get
-           into any more trouble */
-        castle_printk(LOG_WARN, "Mixing counters and timestamped object on the same key; results undefined!\n");
-        return 1;
-    }
-
-    /* if we make it this far, that means we have seen at least one non-counter and not seen
-       any counters, and so we don't expect to resolve counters. */
-    clear_bit(CBV_PG_RSLV_COUNTERS, &c_bvec->flags);
-    /*
-    Further work: Use suspicioun tags to indicate if we can safely terminate
-                  the query; If c_bvec->accum is non-suspicious candidate, and cvt
-                  is ancestral, then we can stop.
-    if(!CVT_INVALID(c_bvec->accum) && !CVT_INVALID(cvt))
-        if(!CVT_SUSPICIOUS(c_bvec->accum) && castle_version_is_ancestor(c_bvec->accum.version, cvt.version))
-            return 1;
-    Note: doing this means we need the version of the cvt, which is not immediately available here.
-    */
-
-#ifdef CASTLE_DEBUG
-    debug(
-            "%s::[%p, rp %u] cvt of type %u u_ts %llu, get->cvt of type %u u_ts %llu\n",
-            __FUNCTION__,
-            c_bvec,
-            atomic_read(&c_bvec->read_passes),
-            cvt->type,
-            cvt->user_timestamp,
-            get->cvt.type,
-            get->cvt.user_timestamp);
-#endif
-
-    if(CVT_INVALID(c_bvec->accum))
-        c_bvec->accum = *cvt;
-    else if(!CVT_INVALID(*cvt))
-    {
-        if(cvt->user_timestamp > c_bvec->accum.user_timestamp)
-        {
-            /* found a new object */
-            c_bvec->val_put(&c_bvec->accum);
-            c_bvec->accum = *cvt;
-        }
-        else
-        {
-            /* found an old object */
-            atomic64_inc(&c_bvec->tree->da->stats.user_timestamps.ct_max_uts_false_positives);
-            c_bvec->val_put(cvt);
-            *cvt = c_bvec->accum;
-        }
-    }
-
-    return 0;
-}
-
-/**
  * Callback for completing a Component Tree read.
  *
  * Arranges to search the next CT in DA if:
  * - Doing counter accumulation
+ * - Doing timestamp accumulation
  * - Key not found in CT
  *
  * Completes if:
  * - All candidate CTs have been searched
- * - Key found
+ * - Key found (and no accumulation is performed)
+ * - Key found (and signals the end of the current accumulation)
  * - An error occurred
- *
- * DA CT's proxy structure reference gets dropped here unless CVT is on-disk.
- * In this case the caller will need to do an out-of-line read and drop the
- * reference when complete.
  */
 static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cvt)
 {
-    void (*callback) (struct castle_bio_vec *c_bvec, int err, c_val_tup_t cvt);
-
-    callback = c_bvec->orig_complete;
+    void (*callback)(c_bvec_t *c_bvec, int err, c_val_tup_t cvt) = c_bvec->orig_complete;
 
     BUG_ON(c_bvec_data_dir(c_bvec) != READ);
     BUG_ON(atomic_read(&c_bvec->reserv_nodes));
@@ -11368,87 +11290,105 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
     atomic_inc(&c_bvec->read_passes);
 #endif
 
-    /* No more candidate trees available, callback now. */
-    if (!err && !c_bvec->tree)
+    if (!err && c_bvec->tree)   /* haven't run out of trees yet */
     {
-        if(test_bit(CBV_PG_RSLV_TIMESTAMPS, &c_bvec->flags) &&
-           CVT_INVALID(cvt) &&
-           !CVT_INVALID(c_bvec->accum))
+        /* No key found, go to the next tree. */
+        if (CVT_INVALID(cvt))
         {
-            /* If we had performed any timestamp resolution, we must have disabled
-               counter resolution. */
-            BUG_ON(test_bit(CBV_PG_RSLV_COUNTERS, &c_bvec->flags));
-            cvt = c_bvec->accum;
-            c_bvec->accum = INVAL_VAL_TUP;
-        }
-        goto complete;
-    }
-
-    /* Fail if we find a key in a CT the bloom filter told us to skip. */
-    BUG_ON(castle_bloom_debug && !err && !CVT_INVALID(cvt) && c_bvec->bloom_skip);
-
-    /* Handle counter accumulation. */
-    if (!err &&                    /* no error */
-        test_bit(CBV_PG_RSLV_COUNTERS, &c_bvec->flags) && /* we are still resolving counters */
-        CVT_ADD_ALLV_COUNTER(cvt)) /* we have something that needs accumulating */
-    {
-        /* Callback handles counter accumulation. */
-        callback(c_bvec, err, cvt);
-
-        /* Continue. */
-        castle_da_next_ct_read(c_bvec);
-        return;
-    }
-    /* Handle timestamps */
-    else if (!err &&                                             /* no error */
-             test_bit(CBV_PG_RSLV_TIMESTAMPS, &c_bvec->flags) && /* still resolving timestamps */
-             !CVT_INVALID(cvt) &&                                /* this cvt is valid */
-             castle_da_user_timestamping_check(c_bvec->tree->da) && /* this DA is timestamped */
-             !CVT_ANY_COUNTER(cvt) &&                      /* not dealing with a counter */
-             !CVT_ANY_COUNTER(c_bvec->accum))              /* not already accumulating a counter. */
-    {
-        /* handle timestamps */
-        if(!castle_da_ct_read_complete_cvt_timestamp_check(c_bvec, &cvt))
-        {
-            /* Continue. */
+#ifdef CASTLE_BLOOM_FP_STATS
+            if (c_bvec->tree->bloom_exists && c_bvec->bloom_positive)
+            {
+                atomic64_inc(&c_bvec->tree->bloom.false_positives);
+                c_bvec->bloom_positive = 0;
+            }
+#endif
             castle_da_next_ct_read(c_bvec);
             return;
         }
-    }
 
-    /* No key found, go to the next tree. */
-    if (!err && CVT_INVALID(cvt))
-    {
-#ifdef CASTLE_BLOOM_FP_STATS
-        if (c_bvec->tree->bloom_exists && c_bvec->bloom_positive)
+        /* Fail if we find a key in a CT the bloom filter told us to skip. */
+        else if (c_bvec->bloom_skip)
+            BUG();
+
+        /* Handle counter accumulation. */
+        else if (CVT_ANY_COUNTER(cvt) &&
+                 (CVT_INVALID(c_bvec->accum) || CVT_ANY_COUNTER(c_bvec->accum)))
         {
-            atomic64_inc(&c_bvec->tree->bloom.false_positives);
-            c_bvec->bloom_positive = 0;
-        }
-#endif
-        debug_verbose("Checking next ct.\n");
+            if (CVT_INVALID(c_bvec->accum))
+            {
+                CVT_COUNTER_LOCAL_ADD_INIT(c_bvec->accum, 0);
+                c_bvec->accum.user_timestamp = 0;
+            }
 
-        /* Continue. */
-        castle_da_next_ct_read(c_bvec);
-        return;
+            if (!castle_counter_simple_reduce(&c_bvec->accum, cvt)) /* not done yet */
+            {
+                c_bvec->val_put(&cvt);
+                castle_da_next_ct_read(c_bvec);
+                return;
+            }
+            /* otherwise fall through to the end of the function */
+        }
+
+        /* Handle timestamp accumulation. */
+        else if (!CVT_ANY_COUNTER(cvt) &&
+                 (CVT_INVALID(c_bvec->accum) || !CVT_ANY_COUNTER(c_bvec->accum)))
+        {
+            if (castle_da_user_timestamping_check(c_bvec->tree->da))
+            {
+                if (CVT_INVALID(c_bvec->accum))
+                {
+                    c_bvec->accum = cvt;
+                }
+                else if (cvt.user_timestamp > c_bvec->accum.user_timestamp)
+                {
+                    c_bvec->val_put(&c_bvec->accum);
+                    c_bvec->accum = cvt;
+                }
+                else
+                {
+                    c_bvec->val_put(&cvt);
+                    atomic64_inc(&c_bvec->tree->da->stats.user_timestamps.ct_max_uts_false_positives);
+                }
+
+                castle_da_next_ct_read(c_bvec);
+                return;
+            }
+
+            else                /* non-timestamped DA; simply return the value */
+            {
+                BUG_ON(!CVT_INVALID(c_bvec->accum));
+                callback(c_bvec, err, cvt);
+                return;
+            }
+        }
+
+        /* If we've fallen through here, we don't need the value we got any more. */
+        c_bvec->val_put(&cvt);
     }
 
-complete:
     /* Terminate now.  One of the following conditions must be true:
      *
      * 1) no more candidate trees were available
      * 2) an error occurred
-     * 3) valid key to return
+     * 3) we received a counter SET, which terminated the counter accumulation
+     * 4) we received a counter while accumulating timestamps
+     * 5) we received a non-counter while accumulating counters
      *
-     * For out-of-line CVTs don't drop DA CT's proxy reference.  The caller will
-     * need the references for the during of the out-of-line read.  The caller
-     * must drop the reference when complete. */
-    if (!CVT_ON_DISK(cvt))
+     * In the error case, we drop the accumulated value and return whatever we got (which
+     * won't be used anyway). In all other cases, we drop the value we just received (if
+     * any) and return the accumulated value (again, if any).
+     */
+    BUG_ON(!c_bvec->tree && !CVT_INVALID(cvt));
+    if (err)
     {
+        /* Drop the CT proxy reference on error, as the client will not. This is because,
+         * in case of an error, the proxy reference might not have been taken in the
+         * first place. */
         castle_da_cts_proxy_put(c_bvec->cts_proxy);
-        c_bvec->cts_proxy = NULL;
-        c_bvec->tree      = NULL;
+        c_bvec->val_put(&c_bvec->accum);
     }
+    else cvt = c_bvec->accum;
+    CVT_INVALID_INIT(c_bvec->accum);
     callback(c_bvec, err, cvt);
 }
 

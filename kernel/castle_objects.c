@@ -1400,40 +1400,13 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     BUG_ON(atomic_read(&c_bio->count) != 1);
     BUG_ON(c_bio->err != 0);
 
-    /* We are handling a counter if either we just got a counter or we were already
-       accumulating counters, and we did not already attempt to resolve timestamps,
-       which would have meant this query would not be resolving counters. */
-    if ( test_bit(CBV_PG_RSLV_COUNTERS, &c_bvec->flags) &&
-        (CVT_ANY_COUNTER(cvt) || CVT_ANY_COUNTER(c_bvec->accum)) )
-    {
-        int finished;
-
-        clear_bit(CBV_PG_RSLV_TIMESTAMPS, &c_bvec->flags);
-
-        /* Prepare the accumulator, if isn't ready yet. */
-        if( !CVT_LOCAL_COUNTER(c_bvec->accum) )
-        {
-            CVT_COUNTER_LOCAL_ADD_INIT(c_bvec->accum, 0);
-            c_bvec->accum.user_timestamp = 0;
-        }
-
-        finished = castle_counter_simple_reduce(&c_bvec->accum, cvt);
-        castle_object_value_release(&cvt);
-        /* Return early if we have to keep accumulating. */
-        if(!finished)
-            return;
-        cvt = c_bvec->accum;
-        c_bvec->accum = INVAL_VAL_TUP;
-    }
-    else if (!test_bit(CBV_PG_RSLV_COUNTERS, &c_bvec->flags) && CVT_ANY_COUNTER(cvt))
-        castle_object_value_release(&c_bvec->accum);
-
     get->cvt = cvt;
 
     /* Deal with error case, or non-existent value. */
     if (err || CVT_INVALID(cvt) || CVT_TOMBSTONE(cvt))
     {
-        BUG_ON(c_bvec->cts_proxy); // _da_ct_read_complete() puts for !on disk
+        if (!err)
+            castle_da_cts_proxy_put(c_bvec->cts_proxy);
 
         /* Turn tombstones into invalid CVTs. */
         CVT_INVALID_INIT(get->cvt);
@@ -1448,12 +1421,8 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
     /* Inline values and local (all) counters. */
     else if (CVT_INLINE(cvt))
     {
-        BUG_ON(c_bvec->cts_proxy); // _da_ct_read_complete() puts for !on disk
-
-//        castle_printk(LOG_DEBUG, "%s::Inline.\n", __FUNCTION__);
-
-        /* For INLINE values reference on CT is already released. Not safe to depend on ct pointer. */
-        atomic64_add(cvt.length, &(castle_da_ptr_get(c_bvec->c_bio->attachment)->read_data_bytes));
+        atomic64_add(cvt.length, &c_bvec->cts_proxy->da->read_data_bytes);
+        castle_da_cts_proxy_put(c_bvec->cts_proxy);
         castle_object_bvec_attach_key_dealloc(c_bvec);
         castle_utils_bio_free(c_bvec->c_bio);
         /* WARNING: after reply_start() its unsafe to access the attachment
@@ -1475,14 +1444,11 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
 #if 0
         BUG_ON(CVT_MEDIUM_OBJECT(cvt) &&
                 cvt.cep.ext_id != c_bvec->tree->data_ext_free.ext_id);
-        BUG_ON(!c_bvec->tree); // _da_ct_read_complete() leaves this for us
 #endif
-        BUG_ON(!c_bvec->cts_proxy); // _da_ct_read_complete() leaves this for us
+        BUG_ON(!c_bvec->cts_proxy); /* da_ct_read_complete() leaves this for us */
         BUG_ON(!CVT_ON_DISK(cvt));
 
-        //castle_printk(LOG_DEBUG, "%s::Out of line.\n", __FUNCTION__);
-
-        /* Initialise call variables for _object_get_continue(). */
+        /* Initialise call variables for object_get_continue(). */
         get->data_c2b        = NULL;
         get->data_c2b_length = 0;
         get->data_length     = cvt.length;
@@ -1642,7 +1608,8 @@ void castle_object_chunk_pull(struct castle_object_pull *pull, void *buf, size_t
     /* Handle inline values. */
     if (CVT_INLINE(pull->cvt))
     {
-        BUG_ON(pull->cts_proxy); // _da_ct_read_complete() puts for !on disk
+        atomic64_add(cvt.length, &c_bvec->cts_proxy->da->read_data_bytes);
+        castle_da_cts_proxy_put(pull->cts_proxy);
         /* this is assured since buf_len >= PAGE_SIZE > MAX_INLINE_VAL_SIZE */
         BUG_ON(buf_len < pull->remaining);
         memcpy(buf, CVT_INLINE_VAL_PTR(pull->cvt), pull->remaining);
@@ -1688,20 +1655,14 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
     pull->cts_proxy = c_bvec->cts_proxy;
     pull->cvt       = cvt;
 
-    /* For inline values, update stats here. We willn't have c_bvec after this. Can't get DA
-     * pointer. */
-    if (!err && CVT_INLINE(cvt))
-        atomic64_add(cvt.length, &(castle_da_ptr_get(c_bvec->c_bio->attachment)->read_data_bytes));
-
     castle_object_bvec_attach_key_dealloc(c_bvec);
     castle_utils_bio_free(c_bvec->c_bio);
 
     /* Deal with error case, or non-existent value. */
     if (err || CVT_INVALID(cvt) || CVT_TOMBSTONE(cvt))
     {
-        BUG_ON(pull->cts_proxy); // _da_ct_read_complete() puts for !on disk
-
-        debug("Error, invalid or tombstone.\n");
+        if (!err)
+            castle_da_cts_proxy_put(pull->cts_proxy);
 
         CVT_INVALID_INIT(pull->cvt);
         pull->pull_continue(pull, err, 0, 1 /*done*/);

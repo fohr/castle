@@ -1410,9 +1410,6 @@ struct castle_request_timeline;
 #define CBV_CHILD_WRITE_LOCKED        (3)
 /* Temporary variable used to set the above correctly, at the right point in time */
 #define CBV_C2B_WRITE_LOCKED          (4)
-/* These 2 flags are used to maintain the peace between timestamps and counters on point gets */
-#define CBV_PG_RSLV_COUNTERS          (5)
-#define CBV_PG_RSLV_TIMESTAMPS        (6)
 
 /**
  * Bloom lookup request structure.
