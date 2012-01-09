@@ -151,6 +151,8 @@ check_pid:
 
 static void castle_ctrl_prog_work_do(void *unused)
 {
+    struct timeval tv;
+
     /* Do nothing if the FS hasn't been inited yet. */
     if(!castle_fs_inited)
         return;
@@ -163,7 +165,10 @@ static void castle_ctrl_prog_work_do(void *unused)
             castle_ctrl_prog_touch();
             /* If the nugget_disbaled parameter is set, don't send event to start nugget. */
             if (!castle_nugget_disabled)
-                castle_uevent1(CASTLE_CTRL_PROG_REGISTER, 0);
+            {
+                do_gettimeofday(&tv);
+                castle_uevent1(CASTLE_CTRL_PROG_REGISTER, (uint64_t)tv.tv_sec);
+            }
             break;
         case CTRL_PROG_PRESENT:
             castle_printk(LOG_USERINFO, "No heartbeat from ctrl prog.\n");
