@@ -1673,13 +1673,13 @@ void castle_release_device(struct castle_slave *cs)
     BUG_ON(atomic_read(&cs->io_in_flight));
     if (test_and_clear_bit(CASTLE_SLAVE_BDCLAIMED_BIT, &cs->flags))
     {
+        sysfs_remove_link(&cs->kobj, "dev");
         bd_release(cs->bdev);
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
         blkdev_put(cs->bdev);
 #else
         blkdev_put(cs->bdev, FMODE_READ|FMODE_WRITE);
 #endif
-        sysfs_remove_link(&cs->kobj, "dev");
         castle_printk(LOG_USERINFO, "Device 0x%x [%s] has been released.\n",
                       cs->uuid, cs->bdev_name);
     }
