@@ -1664,7 +1664,10 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
     if (err || CVT_INVALID(cvt) || CVT_TOMBSTONE(cvt))
     {
         if (!err)
+        {
             castle_da_cts_proxy_put(pull->cts_proxy);
+            pull->cts_proxy = NULL;
+        }
 
         CVT_INVALID_INIT(pull->cvt);
         pull->pull_continue(pull, err, 0, 1 /*done*/);
