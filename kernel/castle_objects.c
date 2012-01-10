@@ -1535,10 +1535,10 @@ EXPORT_SYMBOL(castle_object_get);
  */
 void castle_object_pull_finish(struct castle_object_pull *pull)
 {
-    if (CVT_ON_DISK(pull->cvt))
+    if (pull->cts_proxy)
         castle_da_cts_proxy_put(pull->cts_proxy); /* castle_da_ct_read_complete() */
 
-    if (!CVT_INLINE(pull->cvt)) /* inline values are freed in chunk_pull() */
+    if (!CVT_INVALID(pull->cvt)) /* inline values are usually freed in chunk_pull() */
         castle_object_value_release(&pull->cvt);
 }
 
@@ -1577,7 +1577,6 @@ void castle_object_chunk_pull_io_end(c2_block_t *c2b)
     debug("IO end for cdb, c2b->nr_pages=%d, cep" cep_fmt_str_nl, c2b->nr_pages, cep2str(c2b->cep));
     write_unlock_c2b(pull->curr_c2b);
 
-
     /* @TODO deal with not up to date - get error and pass it on? */
 
     CASTLE_INIT_WORK(&pull->work, __castle_object_chunk_pull_complete);
@@ -1610,12 +1609,15 @@ void castle_object_chunk_pull(struct castle_object_pull *pull, void *buf, size_t
     {
         atomic64_add(pull->cvt.length, &pull->cts_proxy->da->read_data_bytes);
         castle_da_cts_proxy_put(pull->cts_proxy);
+        pull->cts_proxy = NULL;
+
         /* this is assured since buf_len >= PAGE_SIZE > MAX_INLINE_VAL_SIZE */
         BUG_ON(buf_len < pull->remaining);
         memcpy(buf, CVT_INLINE_VAL_PTR(pull->cvt), pull->remaining);
         castle_object_value_release(&pull->cvt);
-        pull->pull_continue(pull, 0, pull->remaining, 1 /*done*/);
+        CVT_INVALID_INIT(pull->cvt);
 
+        pull->pull_continue(pull, 0, pull->remaining, 1 /*done*/);
         return;
     }
 
