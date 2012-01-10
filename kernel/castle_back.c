@@ -2504,7 +2504,8 @@ static void _castle_back_iter_next(struct castle_back_op *op,
     }
 
     /* Put this op on the queue for the iterator */
-    stateful_debug("op=%p "stateful_op_fmt_str"\n", op, stateful_op2str(stateful_op));
+    stateful_debug("op=%p "stateful_op_fmt_str" fastpath=%d\n",
+            op, stateful_op2str(stateful_op), fastpath);
     err = castle_back_stateful_op_queue_op(stateful_op, op->req.iter_next.token, op);
     if (err)
     {
