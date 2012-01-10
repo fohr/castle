@@ -2132,7 +2132,8 @@ static void castle_back_iter_start(void *data)
 
     return;
 
-err4: castle_free(end_key);
+err4: stateful_op->curr_op = NULL; /* revert the abuse performed above */
+      castle_free(end_key);
 err3: castle_free(start_key);
 err2: castle_attachment_put(attachment);
       stateful_op->attachment = NULL;
