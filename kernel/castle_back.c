@@ -53,6 +53,7 @@ static wait_queue_head_t        conn_close_wait;
 atomic_t                        castle_back_conn_count; /**< Number of active castle_back_conns */
 spinlock_t                      conns_lock;         /**< Protects castle_back_conns list        */
 static                LIST_HEAD(castle_back_conns); /**< List of all active castle_back_conns   */
+int                             castle_back_inited = 0;
 
 struct castle_back_op;
 
@@ -3795,6 +3796,13 @@ int castle_back_open(struct inode *inode, struct file *file)
 
     debug("castle_back_dev_open\n");
 
+    /* Do nothing if the castle_init hasn't yet completed. */
+    if(!castle_back_inited)
+    {
+        err = -EINVAL;
+        goto err0;
+    }
+
     conn = castle_alloc(sizeof(struct castle_back_conn));
     if (conn == NULL)
     {
@@ -4198,6 +4206,8 @@ int castle_back_init(void)
     init_waitqueue_head(&conn_close_wait);
     spin_lock_init(&conns_lock);
     atomic_set(&castle_back_conn_count, 0);
+
+    castle_back_inited = 1;
 
     debug("done!\n");
 
