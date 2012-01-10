@@ -2433,7 +2433,8 @@ alloc_fail:
  * @param   key_exists  Whether relevant_ct->iter->stripped_start exists
  *
  * NOTE: Called only from castle_bloom_key_exists() if it needed to go
- *       asynchronous to issue read I/O.
+ *       asynchronous to issue read I/O.  It does requeue, so we are not
+ *       called in interrupt context.
  *
  * @also castle_da_rq_iter_relevant_cts_get()
  */
