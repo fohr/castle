@@ -1535,11 +1535,8 @@ EXPORT_SYMBOL(castle_object_get);
  */
 void castle_object_pull_finish(struct castle_object_pull *pull)
 {
-    if (pull->cts_proxy)
-        castle_da_cts_proxy_put(pull->cts_proxy); /* castle_da_ct_read_complete() */
-
-    if (!CVT_INVALID(pull->cvt)) /* inline values are usually freed in chunk_pull() */
-        castle_object_value_release(&pull->cvt);
+    castle_da_cts_proxy_put(pull->cts_proxy);
+    castle_object_value_release(&pull->cvt);
 }
 
 void __castle_object_chunk_pull_complete(struct work_struct *work)
@@ -1608,14 +1605,9 @@ void castle_object_chunk_pull(struct castle_object_pull *pull, void *buf, size_t
     if (CVT_INLINE(pull->cvt))
     {
         atomic64_add(pull->cvt.length, &pull->cts_proxy->da->read_data_bytes);
-        castle_da_cts_proxy_put(pull->cts_proxy);
-        pull->cts_proxy = NULL;
-
         /* this is assured since buf_len >= PAGE_SIZE > MAX_INLINE_VAL_SIZE */
         BUG_ON(buf_len < pull->remaining);
         memcpy(buf, CVT_INLINE_VAL_PTR(pull->cvt), pull->remaining);
-        castle_object_value_release(&pull->cvt);
-        CVT_INVALID_INIT(pull->cvt);
 
         pull->pull_continue(pull, 0, pull->remaining, 1 /*done*/);
         return;
@@ -1663,12 +1655,6 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
     /* Deal with error case, or non-existent value. */
     if (err || CVT_INVALID(cvt) || CVT_TOMBSTONE(cvt))
     {
-        if (!err)
-        {
-            castle_da_cts_proxy_put(pull->cts_proxy);
-            pull->cts_proxy = NULL;
-        }
-
         CVT_INVALID_INIT(pull->cvt);
         pull->pull_continue(pull, err, 0, 1 /*done*/);
     }
