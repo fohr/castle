@@ -20,7 +20,7 @@ static int castle_bloom_use = 1;    /**< Whether to use bloom filters, 1 or 0. *
 module_param(castle_bloom_use, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_bloom_use, "Use bloom filters");
 
-int castle_bloom_debug = 1;         /**< Whether to verify bloom filter misses (for point gets),
+int castle_bloom_debug = 0;         /**< Whether to verify bloom filter misses (for point gets),
                                          1 or 0. */
 module_param(castle_bloom_debug, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_bloom_debug, "Verify bloom misses (for point gets)");
