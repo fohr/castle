@@ -24,6 +24,9 @@ struct castle_bloom_build_params
     c_ext_pos_t                 chunk_cep;
     uint32_t                    nodes_complete;
 
+    uint8_t                     force_stripped_insert;  /**< Should we insert the stripped key
+                                                             hash, even if it matches
+                                                             last_stripped_hash?                */
     uint32_t                    last_stripped_hash;     /**< Hash of last stripped key, see
                                                              @also castle_bloom_add().          */
 #ifdef DEBUG
