@@ -912,6 +912,10 @@ int castle_fs_init(void)
     if (!first) ret = castle_double_array_read();
     if (ret) return ret;
 
+    /* Delete any orphan version trees. Note: If the system checkpoints DA deletion and crashes
+     * before it completes the deletion, then version tree can exist with out DA. */
+    castle_versions_orphans_check();
+
     /* Read Collection Attachments. */
     if (!first && (ret = castle_attachments_read()))
         return ret;

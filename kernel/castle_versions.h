@@ -81,5 +81,6 @@ void        castle_versions_fini                    (void);
 
 c_ver_t     castle_version_max_get                  (void);
 int         castle_versions_writeback               (int is_fini);
+void        castle_versions_orphans_check           (void);
 
 #endif /*__CASTLE_VERSIONS_H__ */
