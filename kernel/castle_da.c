@@ -2819,6 +2819,8 @@ static int castle_da_merge_cts_get(struct castle_double_array *da,
     for (i=0; i<nr_trees; i++)
         cts[i] = NULL;
 
+    /* Take read lock on DA, to make sure neither CTs nor DA would go away while looking at the
+     * list. */
     read_lock(&da->lock);
 
     i=nr_trees;
@@ -10681,6 +10683,8 @@ reallocate:
 
     /* Verify nr_cts still matches under DA lock.  Write because we're going
      * to make this proxy structure active once it is generated. */
+    /* Take lock on DA, to make sure neither CTs nor DA would go away
+     * while looking at the list. */
     write_lock(&da->lock);
 
     if (nr_cts != da->nr_trees
@@ -11909,8 +11913,13 @@ void castle_da_destroy_complete(struct castle_double_array *da)
              * shouldn't be referenced any-where. */
             BUG_ON(atomic_read(&ct->ref_count) != 1);
             BUG_ON(atomic_read(&ct->write_ref_count));
-            list_del(&ct->da_list);
-            ct->da_list.next = ct->da_list.prev = NULL;
+
+            /* It is possible that, there are few outstanding clients accessing sysfs. Take
+             * write lock to avoid race with sysfs functions. */
+            write_lock(&da->lock);
+            castle_component_tree_del(da, ct);
+            write_unlock(&da->lock);
+
             castle_ct_put(ct, 0 /*write*/, NULL);
         }
     }
@@ -12305,6 +12314,8 @@ static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_id
         return C_ERR_MERGE_INVAL_ARRAY;
     }
 
+    /* Take read lock on DA, to make sure neither CTs nor DA would go away while looking at the
+     * list. */
     read_lock(&da->lock);
 
     found = i = ret = 0;
@@ -12652,7 +12663,7 @@ int castle_da_vertree_tdp_set(c_da_t da_id, uint64_t seconds)
 castle_user_timestamp_t castle_da_min_ts_cts_exclude_this_merge_get(struct castle_da_merge *merge)
 {
     struct castle_component_tree *ct;
-    struct list_head *lh, *t;
+    struct list_head *lh;
     int i;
     castle_user_timestamp_t min_ts = ULLONG_MAX;
 
@@ -12663,17 +12674,20 @@ castle_user_timestamp_t castle_da_min_ts_cts_exclude_this_merge_get(struct castl
     da = merge->da;
     this_merge_id = merge->id;
 
-    write_lock(&da->lock);
+    /* Take read lock on DA, to make sure neither CTs nor DA would go away while looking at the
+     * list. */
+    read_lock(&da->lock);
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
-        list_for_each_safe(lh, t, &da->levels[i].trees)
+        list_for_each(lh, &da->levels[i].trees)
         {
             ct = list_entry(lh, struct castle_component_tree, da_list);
             if (ct->merge_id != this_merge_id)
                 min_ts = min(min_ts, (uint64_t)atomic64_read(&ct->min_user_timestamp));
         }
     }
-    write_unlock(&da->lock);
+    read_unlock(&da->lock);
+
     return min_ts;
 }
 
