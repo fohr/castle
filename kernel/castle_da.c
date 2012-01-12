@@ -11100,38 +11100,22 @@ found:
 /**
  * Let t = cvt->user_timestamp, returns a +ve if the ct's max timestamp is > t,
  * -ve if it's < t, 0 if it's == t.
- *
- * Up to the caller to make sure this DA is timestamping, the candidate cvt is valid,
- * and the candidate cvt is not a counter.
  */
-static int64_t castle_da_ct_timestamp_compare(struct castle_component_tree *ct,
-                                              c_val_tup_t *cvt_p,
+static signed int castle_da_ct_timestamp_compare(struct castle_component_tree *ct,
                                               castle_user_timestamp_t candidate_timestamp)
 {
-    int64_t ret;
-    uint64_t max_ct_ts_for_cvt;
-    BUG_ON(!ct);
+    uint64_t max_ct_ts_for_cvt = atomic64_read(&ct->max_user_timestamp);
+    BUILD_BUG_ON(sizeof(castle_user_timestamp_t) != sizeof(uint64_t));
 
-    /* not sure what to return if any of the following conditions are true, so we leave it to the
-       caller to make sure it never happens */
-    BUG_ON(!castle_da_user_timestamping_check(ct->da));
-    BUG_ON(CVT_INVALID(*cvt_p));
-    BUG_ON(CVT_ANY_COUNTER(*cvt_p));
-
-    max_ct_ts_for_cvt = atomic64_read(&ct->max_user_timestamp);
-    ret = max_ct_ts_for_cvt - candidate_timestamp;
-    if(ret < 0) /* the entire ct does not have anything with a timestamp > t */
-    {
-        debug("%s::ct %d skippable (max user timestamp = %lld, cvt user timestamp = %lld)",
-                __FUNCTION__, ct->seq, max_ct_ts_for_cvt, candidate_timestamp);
-        return ret;
-    }
-
-    /* Further work: If we come up with something more fine-grained than the max timestamp of all
-                     the entries in the ct, then here is probably where we would set an improved
-                     guess for max_ct_ts_for_cvt and calculate the new ret. */
-
-    return ret;
+    if(max_ct_ts_for_cvt == candidate_timestamp)
+        return 0;
+    else if(max_ct_ts_for_cvt < candidate_timestamp)
+        return -1;
+    else
+        return 1;
+        /* Further work: If we come up with something more fine-grained than the max timestamp of
+                         all the entries in the ct, then here is probably where we would set an
+                         improved guess for max_ct_ts_for_cvt and redo the comparisons. */
 }
 
 /**
@@ -11244,14 +11228,16 @@ void castle_da_next_ct_read(c_bvec_t *c_bvec)
         }
         else if (castle_da_user_timestamping_check(c_bvec->tree->da))
         {
-            struct castle_object_get *get = c_bvec->c_bio->get;
-            if(CVT_INVALID(get->cvt) || (CVT_ANY_COUNTER(get->cvt)))
+            if(CVT_INVALID(c_bvec->accum) || (CVT_ANY_COUNTER(c_bvec->accum)))
                 break; /* no candidate return object yet, or it's a counter */
 
             /* We have a tree, we have a previously found object that is not a counter, and we are
                timestamping this DA; let's compare timestamps to see if we need to query this tree,
-               or if we can go on to the next tree right away. */
-            if (castle_da_ct_timestamp_compare(c_bvec->tree, &get->cvt, get->cvt.user_timestamp) > 0)
+               or if we can go on to the next tree right away. The comparison is '>' instead of '>='
+               because we only care about objects with a timestamp greater than the timestamp of
+               the current accumulated cvt; if the timestamp is equal, then the current accumulated
+               cvt will be the return candidate anyway, due to insertion order. */
+            if (castle_da_ct_timestamp_compare(c_bvec->tree, c_bvec->accum.user_timestamp) > 0)
                 break; /* this tree might have something newer (according to user_timestamp) */
             else
             {
