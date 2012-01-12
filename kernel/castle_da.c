@@ -11538,32 +11538,11 @@ static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *
 }
 
 /**
- * Retrieve the DA pointer associated with a particular request.
- *
- * Since an attachment exists, the DA structure is guaranteed to be found, and thus this
- * function cannot return NULL.
- */
-struct castle_double_array *castle_da_ptr_get(struct castle_attachment *att)
-{
-    struct castle_double_array *da;
-    c_da_t da_id;
-
-    down_read(&att->lock);
-    /* Since the version is attached, it must be found */
-    BUG_ON(DA_INVAL(da_id = castle_version_da_id_get(att->version)));
-    up_read(&att->lock);
-
-    da = castle_da_hash_get(da_id);
-    BUG_ON(!da);
-    return da;
-}
-
-/**
  * Return the btree type structure associated with a particular DA.
  */
 struct castle_btree_type *castle_double_array_btree_type_get(struct castle_attachment *att)
 {
-    return castle_btree_type_get(castle_da_ptr_get(att)->btree_type);
+    return castle_btree_type_get(att->col.da->btree_type);
 }
 
 /**
@@ -11576,7 +11555,7 @@ uint8_t castle_da_user_timestamping_check(struct castle_double_array *da)
 }
 uint8_t castle_attachment_user_timestamping_check(struct castle_attachment *att)
 {
-    return castle_da_user_timestamping_check(castle_da_ptr_get(att));
+    return castle_da_user_timestamping_check(att->col.da);
 }
 
 /**
@@ -11596,7 +11575,7 @@ uint8_t castle_attachment_user_timestamping_check(struct castle_attachment *att)
  */
 void castle_double_array_submit(c_bvec_t *c_bvec)
 {
-    struct castle_double_array *da = castle_da_ptr_get(c_bvec->c_bio->attachment);
+    struct castle_double_array *da = c_bvec->c_bio->attachment->col.da;
 
     /* orig_complete should be null it is for our privte use */
     BUG_ON(c_bvec->orig_complete);
@@ -11707,7 +11686,7 @@ void castle_double_array_unreserve(c_bvec_t *c_bvec)
 void castle_double_array_queue(c_bvec_t *c_bvec)
 {
     struct castle_da_io_wait_queue *wq;
-    struct castle_double_array *da = castle_da_ptr_get(c_bvec->c_bio->attachment);
+    struct castle_double_array *da = c_bvec->c_bio->attachment->col.da;
 
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
 
@@ -11987,53 +11966,33 @@ int castle_double_array_alive(c_da_t da_id)
 {
     BUG_ON(!CASTLE_IN_TRANSACTION);
 
-    return (castle_da_hash_get(da_id)?1:0);
+    return castle_da_hash_get(da_id) != NULL;
 }
 
-static struct castle_double_array * castle_da_ptr_get_from_id(c_da_t da_id)
+static struct castle_double_array *castle_da_ptr_get(c_da_t da_id, int attach)
 {
     struct castle_double_array *da;
     unsigned long flags;
 
     read_lock_irqsave(&castle_da_hash_lock, flags);
-
     if ((da = __castle_da_hash_get(da_id)))
+    {
         castle_da_get(da);
+        if (attach)
+            atomic_inc(&da->attachment_cnt);
+    }
 
     read_unlock_irqrestore(&castle_da_hash_lock, flags);
-
     return da;
 }
 
-int castle_double_array_get(c_da_t da_id)
+struct castle_double_array *castle_double_array_get(c_da_t da_id)
 {
-    struct castle_double_array *da;
-    unsigned long flags;
-
-    read_lock_irqsave(&castle_da_hash_lock, flags);
-    if ((da = __castle_da_hash_get(da_id)) == NULL)
-    {
-        read_unlock_irqrestore(&castle_da_hash_lock, flags);
-        return -EINVAL;
-    }
-
-    castle_da_get(da);
-
-    atomic_inc(&da->attachment_cnt);
-
-    read_unlock_irqrestore(&castle_da_hash_lock, flags);
-
-    return 0;
+    return castle_da_ptr_get(da_id, 1 /* increase the attachment count */);
 }
 
-void castle_double_array_put(c_da_t da_id)
+void castle_double_array_put(struct castle_double_array *da)
 {
-    struct castle_double_array *da;
-
-    /* We only call this for attached DAs which _must_ be in the hash. */
-    da = castle_da_hash_get(da_id);
-    BUG_ON(!da);
-
     /* DA allocated + our ref count on it. */
     BUG_ON(atomic_read(&da->ref_cnt) < 2);
 
@@ -12044,47 +12003,31 @@ void castle_double_array_put(c_da_t da_id)
 }
 
 /**
- * Prefetch extents associated with DA da_id.
+ * Prefetch extents associated with DA da.
  *
  * Blocks until all prefetch IO completes.
  */
-int castle_double_array_prefetch(c_da_t da_id)
+int castle_double_array_prefetch(struct castle_double_array *da)
 {
-    struct castle_double_array *da;
     struct castle_da_cts_proxy *proxy;
     int i;
 
-    if (castle_double_array_get(da_id) != 0)
-    {
-        castle_printk(LOG_USERINFO, "no such DA id=0x%x\n", da_id);
-        return -EINVAL;
-    }
-
-    da = castle_da_hash_get(da_id);
-    if (!da)
-    {
-        castle_printk(LOG_USERINFO, "No such DA id=0x%x\n", da_id);
-        return -EINVAL;
-    }
+    /* We don't need to take a reference to the DA because our caller should have done
+     * that for us. */
 
     proxy = castle_da_cts_proxy_get(da);
     if (!proxy)
     {
-        castle_printk(LOG_USERINFO, "Couldn't get CTs proxy for DA id=0x%x\n",
-                da_id);
-        castle_double_array_put(da_id);
+        castle_printk(LOG_USERINFO, "Couldn't get CTs proxy for DA id=0x%x\n", da->id);
         return -EINVAL;
     }
-
-    castle_printk(LOG_DEVEL, "Prefetching CTs for DA=%p id=0x%d\n", da, da_id);
+    castle_printk(LOG_DEVEL, "Prefetching CTs for DA=%p id=0x%d\n", da, da->id);
 
     /* Prefetch CTs. */
     for (i = 0; i < proxy->nr_cts; i++)
         castle_component_tree_prefetch(proxy->cts[i].ct);
 
     castle_da_cts_proxy_put(proxy);
-    castle_double_array_put(da_id);
-
     return 0;
 }
 
@@ -12354,8 +12297,8 @@ static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_id
         return ret;
     }
 
-    /* Get a reference on DA with ID. As it looks at da_hash */
-    da = castle_da_ptr_get_from_id(da_id);
+    /* Get a reference on DA with ID. */
+    da = castle_da_ptr_get(da_id, 0 /* don't increase the attachment count */);
     if (!da)
     {
         castle_printk(LOG_USERINFO, "Associated DA is not valid anymore. DA_ID: 0x%x\n", da_id);

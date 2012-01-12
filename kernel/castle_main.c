@@ -2187,15 +2187,13 @@ void castle_attachment_put(struct castle_attachment *ca)
     if (to_free)
     {
         c_ver_t version = ca->version;
-        c_da_t da_id = castle_version_da_id_get(version);
-        c_collection_id_t ca_id = ca->col.id;
 
         castle_events_collection_detach(ca->col.id);
         castle_sysfs_collection_del(ca);
 
         castle_version_detach(version);
-        castle_double_array_put(da_id);
-        castle_printk(LOG_USERINFO, "Attachment %u is completely removed\n", ca_id);
+        castle_double_array_put(ca->col.da);
+        castle_printk(LOG_USERINFO, "Attachment %u is completely removed\n", ca->col.id);
 
         set_bit(CASTLE_ATTACH_DEAD, &ca->col.flags);
 
@@ -2354,29 +2352,29 @@ struct castle_attachment* castle_collection_init(c_ver_t version, uint32_t flags
     struct castle_attachment *collection = NULL;
     static c_collection_id_t collection_id = 0;
     c_da_t da_id;
+    struct castle_double_array *da = NULL;
     int err;
-    int da_get = 0;
 
     BUG_ON(strlen(name) > MAX_NAME_SIZE);
 
     collection = castle_attachment_init(0, version, &da_id, NULL, NULL);
-    if(!collection)
+    if (!collection)
         goto error_out;
 
-    if(DA_INVAL(da_id))
+    if (DA_INVAL(da_id))
     {
         castle_printk(LOG_WARN,
                       "Could not attach collection: %s, version: %d, because no DA found.\n",
                       name, version);
         goto error_out;
     }
-    if (castle_double_array_get(da_id) < 0)
+    if (!(da = castle_double_array_get(da_id)))
         goto error_out;
-    da_get = 1;
 
-    collection->col.id   = collection_id++;
-    collection->col.name = name;
-    collection->col.flags= flags;
+    collection->col.id    = collection_id++;
+    collection->col.name  = name;
+    collection->col.flags = flags;
+    collection->col.da    = da;
     spin_lock(&castle_attachments.lock);
     list_add(&collection->list, &castle_attachments.attachments);
     spin_unlock(&castle_attachments.lock);
@@ -2396,12 +2394,13 @@ struct castle_attachment* castle_collection_init(c_ver_t version, uint32_t flags
 
 error_out:
     castle_free(name);
-    if(collection)
+    if (collection)
     {
         castle_version_detach(version);
         castle_free(collection);
     }
-    if(da_get) castle_double_array_put(da_id);
+    if (da)
+        castle_double_array_put(da);
     castle_printk(LOG_USERINFO, "Failed to init collection.\n");
     return NULL;
 }

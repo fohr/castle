@@ -603,9 +603,8 @@ static ssize_t devel_collection_prefetch_store(struct kobject *kobj,
                                                size_t count)
 {
     struct castle_attachment *attachment;
+    struct castle_double_array *da;
     c_collection_id_t col_id;
-    c_ver_t version;
-    c_da_t da_id;
     char *endp;
 
     /* Get collection ID. */
@@ -613,27 +612,22 @@ static ssize_t devel_collection_prefetch_store(struct kobject *kobj,
     if ((endp + 1) < (buf + count))
         return -EINVAL;
 
-    /* Get version ID. */
+    /* Get attachment structure. */
     attachment = castle_attachment_get(col_id, READ);
     if (attachment == NULL)
     {
         castle_printk(LOG_WARN, "Collection not found id=0x%x\n", col_id);
         return -EINVAL;
     }
-    version = attachment->version;
-    castle_attachment_put(attachment);
 
-    /* Get DA ID. */
-    da_id = castle_version_da_id_get(version);
-    if (da_id == INVAL_DA)
-    {
-        castle_printk(LOG_WARN, "Invalid da ID for collection id=0x%x\n", col_id);
-        return -EINVAL;
-    }
+    /* Get DA structure. */
+    da = attachment->col.da;
+    BUG_ON(da == NULL);
 
     /* Prefetch extents. */
-    castle_double_array_prefetch(da_id);
+    castle_double_array_prefetch(da);
 
+    castle_attachment_put(attachment);
     return count;
 }
 

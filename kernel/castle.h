@@ -1877,12 +1877,13 @@ struct castle_attachment {
     int                 device; /* !=0 if block device, == 0 if object collection */
     union {
         struct {
-            struct gendisk   *gd;
+            struct gendisk             *gd;
         } dev; /* Only valid for block devices */
         struct {
-            c_collection_id_t id;
-            uint32_t          flags;
-            char             *name;
+            c_collection_id_t           id;
+            uint32_t                    flags;
+            char                       *name;
+            struct castle_double_array *da;
         } col; /* Only valid for object collections */
     };
 
