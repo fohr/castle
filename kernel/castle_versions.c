@@ -847,6 +847,24 @@ error_out:
     return ret;
 }
 
+void castle_versions_orphans_check(void)
+{
+    struct castle_version *t, *v, *root = castle_versions_hash_get(0);
+
+    BUG_ON(root == NULL);
+
+    v = root->first_child;
+    while (v != NULL)
+    {
+        t = v->next_sybling;
+        if (!castle_double_array_alive(v->da_id))
+        {
+            castle_printk(LOG_WARN, "Found a orphan version tree: %u\n", v->version);
+            castle_version_tree_delete(v->version);
+        }
+        v = t;
+    }
+}
 
 /**
  * Free the resources used by version.
