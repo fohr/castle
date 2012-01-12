@@ -1020,6 +1020,16 @@ static void castle_extent_part_schk_free(c_part_schk_t *part_schk, c_res_pool_t 
     kmem_cache_free(castle_partial_schks_cache, part_schk);
 }
 
+/* Note: Ordering of chunks of a superchunk in extent space - As there can't be any
+ * grow after shrink, chunks of a given superchunk should be in increasing order in
+ * a given extent space.
+ *
+ *                     However, because of rebuild, which can take partial superchunks
+ * created by a shrink/truncate and could use them to rebuild any part of extent. So,
+ * shouldn't have any assumptions on chunk ordering. And partial superchunk code has
+ * no assumtions on ordering and can create multiple partial schks for a given superchunk
+ * as long as they are not contiguous. */
+
 static void castle_extent_part_schk_save(c_ext_t       *ext,
                                          uint32_t       slave_id,
                                          c_chk_t        first_chk,
@@ -1084,6 +1094,7 @@ static void castle_extent_part_schks_converge(c_ext_t *ext)
     struct list_head *pos, *tmp, *pos1;
     c_part_schk_t *part_schk, *part_schk1;
     LIST_HEAD(free_list);
+    uint32_t nr_schks;
 
     BUG_ON(!castle_extent_in_transaction());
 
@@ -1119,6 +1130,7 @@ static void castle_extent_part_schks_converge(c_ext_t *ext)
         }
     }
 
+    nr_schks = 0;
     /* Free superchunks, that are full. */
     list_for_each_safe(pos, tmp, &ext->schks_list)
     {
@@ -1127,7 +1139,13 @@ static void castle_extent_part_schks_converge(c_ext_t *ext)
         /* If the superchunk is full, free it. */
         if (part_schk->count == CHKS_PER_SLOT)
             castle_extent_part_schk_free(part_schk, ext->pool);
+        else
+            nr_schks++;
     }
+
+    if (nr_schks > 100)
+        castle_printk(LOG_WARN, "Extent %llu has ended-up more than 100 superchunks: %u.\n",
+                                ext->ext_id, nr_schks);
 }
 
 static int castle_extent_part_schks_writeback(c_ext_t *ext, void *store)
@@ -1161,6 +1179,8 @@ static int castle_extent_part_schks_writeback(c_ext_t *ext, void *store)
 static int castle_extents_part_schks_writeback(void)
 {
     c_mstore_t *castle_part_schks_mstore;
+
+    BUG_ON(!castle_extent_in_transaction());
 
     castle_part_schks_mstore = castle_mstore_init(MSTORE_PART_SCHKS);
     if (!castle_part_schks_mstore)
@@ -2774,9 +2794,9 @@ static c_disk_chk_t castle_extent_disk_chk_alloc(c_da_t da_id,
     if (CHK_INVAL(*chk) &&
             !CHK_SEQ_INVAL(chk_seq = castle_extent_part_schk_get(ext_state->ext, slave)))
     {
-        /* Check if the partial superchunk is preoperly aligned. This has to be true as no grow
+        /* Check if the partial superchunk is properly aligned. This has to be true as no grow
          * happens after shrink or truncate. */
-        /* Note: Rebuild can happen after shrink or truncate. But, rebuild doenst go thrrough
+        /* Note: Rebuild can happen after shrink or truncate. But, rebuild doesn't go through
          * this code flow. */
         if ((chk_seq.first_chk + chk_seq.count) % CHKS_PER_SLOT)
             printk("%p %u %u\n", ext_state, chk_seq.first_chk, chk_seq.count);
@@ -2862,7 +2882,6 @@ int castle_extent_space_alloc(c_ext_t *ext, c_da_t da_id, c_chk_cnt_t alloc_size
 {
     struct castle_extent_state *ext_state;
     struct castle_slave *slaves[ext->k_factor];
-    int schk_ids[ext->k_factor];
     c_rda_spec_t *rda_spec;
     c_chk_cnt_t chunk;
     void *rda_state;
@@ -2954,7 +2973,6 @@ retry:
 
         /* Ask the RDA spec which slaves to use. */
         if (rda_spec->next_slave_get( slaves,
-                                      schk_ids,
                                       rda_state,
                                       chunk) < 0)
         {
@@ -2968,8 +2986,7 @@ retry:
         {
             disk_chk = castle_extent_disk_chk_alloc(da_id,
                                                     ext_state,
-                                                    slaves[j],
-                                                    schk_ids[j]);
+                                                    slaves[j], j);
             debug("Allocation for (logical_chunk=%d, copy=%d) -> (slave=0x%x, "disk_chk_fmt")\n",
                 chunk, j, slaves[j]->uuid, disk_chk2str(disk_chk));
             if(DISK_CHK_INVAL(disk_chk))

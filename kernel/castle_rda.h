@@ -16,7 +16,6 @@
  * @param chk_num             Logical chunk number for which we are allocating space.
  */
 typedef int  (*c_next_slave_get_t)(struct castle_slave                 **cs,
-                                   int                                  *schk_ids,
                                    void                                 *state,
                                    c_chk_t                               chk_num);
 

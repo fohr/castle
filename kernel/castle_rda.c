@@ -329,7 +329,6 @@ void castle_def_rda_extent_fini(void *state_p)
 }
 
 int castle_def_rda_next_slave_get(struct castle_slave **cs,
-                                  int *schk_ids,
                                   void *state_p,
                                   c_chk_t chk_num)
 {
@@ -358,10 +357,7 @@ int castle_def_rda_next_slave_get(struct castle_slave **cs,
     /* Fill the cs array. Use current permutation slave pointer for the first slave,
        and simple modulo shift for the other ones. */
     for (i=0; i<rda_spec->k_factor; i++)
-    {
         cs[i] = state->permuted_slaves[(state->permut_idx + i) % state->nr_slaves];
-        schk_ids[i] = i;
-    }
 
     /* Advance the permutation index. */
     state->permut_idx++;
@@ -449,7 +445,6 @@ void castle_ssd_rda_extent_fini(void *state_v)
 }
 
 int castle_ssd_rda_next_slave_get(struct castle_slave **cs,
-                                  int *schk_ids,
                                   void *state_v,
                                   c_chk_t chk_num)
 {
@@ -461,7 +456,6 @@ int castle_ssd_rda_next_slave_get(struct castle_slave **cs,
     {
         BUG_ON(!state->def_state);
         ret = castle_def_rda_next_slave_get(&cs[1],
-                                            &schk_ids[1],
                                             state->def_state,
                                             chk_num);
         if(ret)
@@ -476,7 +470,6 @@ int castle_ssd_rda_next_slave_get(struct castle_slave **cs,
     }
     /* Use SSD for the 0th copy. */
     cs[0] = state->permuted_slaves[state->permut_idx];
-    schk_ids[0] = 0;
     state->permut_idx++;
 
     return 0;
