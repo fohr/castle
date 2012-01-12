@@ -167,14 +167,15 @@ int castle_bloom_create(castle_bloom_t *bf,
 #endif
 
 #ifdef DEBUG
-    bf_bp->elems_in_block = castle_alloc(sizeof(uint32_t)
+    bf_bp->elems_in_block       = castle_alloc(sizeof(uint32_t)
             * BLOOM_BLOCKS_PER_CHUNK(bf)); /* safe if this fails */
 #endif
-    bf_bp->max_num_elements = num_elements;
-    bf_bp->node_cep.ext_id  = bf->ext_id;
-    bf_bp->node_cep.offset  = 0;
-    bf_bp->chunk_cep.ext_id = bf->ext_id;
-    bf_bp->chunk_cep.offset = bf->chunks_offset;
+    bf_bp->max_num_elements      = num_elements;
+    bf_bp->node_cep.ext_id       = bf->ext_id;
+    bf_bp->node_cep.offset       = 0;
+    bf_bp->chunk_cep.ext_id      = bf->ext_id;
+    bf_bp->chunk_cep.offset      = bf->chunks_offset;
+    bf_bp->force_stripped_insert = 1;
 
     castle_printk(LOG_DEBUG, "%s: bf=%p bf_bp=%p num_elements=%llu "
             "num_chunks=%u size=%llu num_btree_nodes=%u "
@@ -527,9 +528,8 @@ void castle_bloom_add(castle_bloom_t *bf, struct castle_btree_type *btree, void 
         castle_bloom_next_chunk(bf);
         castle_bloom_add_index_key(bf, bf->btree->max_key, BAIK_INSERT_KEY);
 
-        /* By resetting the stripped hash we guarantee the stripped key be
-         * (re)inserted into the new chunk, necessary for search ordering. */
-        bf_bp->last_stripped_hash = 0;
+        /* Force insert the stripped key hash into the new bloom chunk. */
+        bf_bp->force_stripped_insert = 1;
     }
 
     /* Add hash of current key to the bloom filter. */
@@ -541,11 +541,12 @@ void castle_bloom_add(castle_bloom_t *bf, struct castle_btree_type *btree, void 
     if ((bf->btree->nr_dims(key)) > HASH_STRIPPED_DIMS)
     {
         hash = bf->btree->key_hash(key, HASH_STRIPPED_KEYS, 0);
-        if (hash != bf_bp->last_stripped_hash)
+        if (hash != bf_bp->last_stripped_hash || bf_bp->force_stripped_insert)
         {
             hash2 = bf->btree->key_hash(key, HASH_STRIPPED_KEYS, hash /*seed*/);
             castle_bloom_bits_set(bf, key, HASH_STRIPPED_KEYS, hash, hash2);
             bf_bp->last_stripped_hash = hash;
+            bf_bp->force_stripped_insert = 0;
             new_elems++; // initialised to 1
         }
     }
@@ -1160,6 +1161,7 @@ void castle_bloom_build_param_unmarshall(castle_bloom_t *bf, struct castle_bbp_e
     bf_bp->chunks_complete       = bbpm->chunks_complete;
     bf_bp->cur_node_cur_chunk_id = bbpm->cur_node_cur_chunk_id;
     bf_bp->nodes_complete        = bbpm->nodes_complete;
+    bf_bp->force_stripped_insert = 1;
     bf_bp->last_stripped_hash    = bbpm->last_stripped_hash;
 
     /* recover node cep, c2b, and node */
