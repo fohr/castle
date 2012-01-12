@@ -209,10 +209,11 @@ int  castle_double_array_init  (void);
 void castle_double_array_fini  (void);
 
 int  castle_double_array_alive          (c_da_t da_id);
-int  castle_double_array_get            (c_da_t da_id);
-void castle_double_array_put            (c_da_t da_id);
+struct castle_double_array
+    *castle_double_array_get            (c_da_t da_id);
+void castle_double_array_put            (struct castle_double_array *da);
+int  castle_double_array_prefetch       (struct castle_double_array *da);
 int  castle_double_array_destroy        (c_da_t da_id);
-int  castle_double_array_prefetch       (c_da_t da_id);
 void castle_double_arrays_writeback     (void);
 void castle_double_arrays_pre_writeback (void);
 void castle_double_array_merges_fini    (void);
@@ -260,8 +261,6 @@ int  castle_tree_size_stats_update      (void                            *key,
 uint16_t castle_da_merge_node_size_get(struct castle_da_merge *merge,
                                               uint8_t level);
 castle_user_timestamp_t castle_da_min_ts_cts_exclude_this_merge_get(struct castle_da_merge *merge);
-
-struct castle_double_array *castle_da_ptr_get(struct castle_attachment *att);
 
 void castle_double_array_inserts_enable(void);
 #endif /* __CASTLE_DA_H__ */
