@@ -274,6 +274,8 @@ struct task_struct         *extents_gc_thread;
 
 static struct kmem_cache   *castle_partial_schks_cache = NULL;
 
+static int                  min_rda_lvl = RDA_2; /* Keep track of minimum RDA used for extents. */
+
 /**
  * Reservation pools.
  */
@@ -1938,6 +1940,10 @@ static int load_extent_from_mentry(struct castle_elist_entry *mstore_entry)
         goto err2;
     }
 
+    /* Record if this extent was created with 1 RDA. */
+    if (ext->type == RDA_1)
+        min_rda_lvl = RDA_1;
+
     /* Create the initial masks. */
     BUG_ON(castle_extent_mask_create(ext,
                                      mstore_entry->prev_mask,
@@ -3184,6 +3190,10 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     ext->dirtytree->ext_size= ext->size;
     ext->dirtytree->ext_type= ext->ext_type;
 #endif
+
+    /* Record if this extent is 1 RDA. */
+    if (ext->type == RDA_1)
+        min_rda_lvl = RDA_1;
 
     /* The rebuild sequence number that this extent starts off at */
     ext->curr_rebuild_seqno = atomic_read(&current_rebuild_seqno);
@@ -7152,4 +7162,12 @@ static void castle_extent_mask_reduce(c_ext_t             *ext,
 
     castle_extent_reduce_global_mask(global_mask, split2);
     if (do_free)    castle_extent_free_range(ext, split2);
+}
+
+/*
+ * Return the minimum RDA level used by any extent in this fs.
+ */
+int castle_extent_min_rda_lvl_get(void)
+{
+    return min_rda_lvl;
 }

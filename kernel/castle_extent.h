@@ -196,6 +196,7 @@ void                castle_res_pool_extent_attach            (c_res_pool_id_t   
 void                castle_res_pool_extent_detach            (c_ext_id_t           ext_id);
 void                castle_res_pool_destroy                  (c_res_pool_id_t      pool_id);
 int                 castle_res_pool_is_alive                 (c_res_pool_id_t      pool_id);
+int                 castle_extent_get_min_rda_level          (void);
 
 #define castle_res_pool_counter_check(_pool, _id)                                           \
 do {                                                                                        \
