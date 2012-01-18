@@ -860,7 +860,7 @@ void castle_versions_orphans_check(void)
         if (!DA_INVAL(v->da_id) && !castle_double_array_alive(v->da_id))
         {
             BUG_ON(v->size != 0);
-            castle_printk(LOG_WARN, "Found a orphan version tree: %u\n", v->version);
+            castle_printk(LOG_WARN, "Found an orphan version tree: %u\n", v->version);
             castle_version_tree_delete(v->version);
         }
         v = t;
