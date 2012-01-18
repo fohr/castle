@@ -68,9 +68,10 @@ void ATTRIB_NORET bug_fn(char *file, unsigned long line);
 #define NR_ENV_VARS          8
 #define MAX_ENV_LEN          128
 STATIC_BUG_ON(LAST_ENV_VAR_ID >= NR_ENV_VARS);
-extern char *castle_environment[NR_ENV_VARS];
-extern int   castle_fs_inited;
-extern int   castle_fs_exiting;
+extern char     *castle_environment[NR_ENV_VARS];
+extern int       castle_fs_inited;
+extern int       castle_fs_exiting;
+extern c_state_t castle_fs_state;
 
 typedef c_array_id_t tree_seq_t;
 #define GLOBAL_TREE         ((tree_seq_t)0)

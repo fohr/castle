@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 32 /* last updated by BM */
+#define CASTLE_PROTOCOL_VERSION 33 /* last updated by GM */
 
 #ifdef SWIG
 #define PACKED               //overide gcc intrinsics for SWIG
@@ -277,6 +277,7 @@ typedef struct castle_merge_config {
 
 #define CASTLE_CTRL_CREATE_WITH_OPTS         45
 #define CASTLE_CTRL_VERTREE_TDP_SET          46
+#define CASTLE_CTRL_STATE_QUERY              47
 
 
 
@@ -497,10 +498,21 @@ typedef struct castle_control_cmd_prog_heartbeat {
 } cctrl_cmd_prog_heartbeat_t;
 
 typedef struct castle_control_cmd_vertree_tdp_set {
-    c_da_t   vertree_id;      /* IN */
-    uint64_t seconds;         /* IN */
-    int      ret;             /* OUT */
+    c_da_t          vertree_id;     /* IN */
+    uint64_t        seconds;        /* IN */
+    int             ret;            /* OUT */
 } cctrl_cmd_vertree_tdp_set_t;
+
+typedef enum {
+    CASTLE_STATE_LOADING = 0,
+    CASTLE_STATE_UNINITED,
+    CASTLE_STATE_INITED,
+} c_state_t;
+
+typedef struct castle_control_cmd_state_query {
+    c_state_t       state;          /* OUT */
+    int             ret;            /* OUT */
+} cctrl_cmd_state_query_t;
 
 typedef struct castle_control_ioctl {
     uint16_t cmd;
@@ -555,6 +567,7 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_prog_heartbeat_t      ctrl_prog_heartbeat;
 
         cctrl_cmd_vertree_tdp_set_t     vertree_tdp_set;
+        cctrl_cmd_state_query_t         state_query;
     };
 } cctrl_ioctl_t;
 
@@ -638,6 +651,8 @@ enum {
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_PROG_HEARTBEAT, cctrl_ioctl_t),
     CASTLE_CTRL_VERTREE_TDP_SET_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_VERTREE_TDP_SET, cctrl_ioctl_t),
+    CASTLE_CTRL_STATE_QUERY_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_STATE_QUERY, cctrl_ioctl_t),
 };
 
 /*
