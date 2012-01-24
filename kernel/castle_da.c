@@ -3639,7 +3639,9 @@ static int castle_da_t0_extents_alloc(struct castle_double_array    *da,
     if (ret)
     {
         /* FAILED to allocate internal node HDD extent. */
-        castle_printk(LOG_WARN, "Merge failed due to space constraint for internal node tree.\n");
+        castle_printk(LOG_WARN,
+                      "New T0[DA%u] failed due to space constraint for internal node tree.\n",
+                      da->id);
         goto no_space;
     }
 
@@ -3653,7 +3655,9 @@ static int castle_da_t0_extents_alloc(struct castle_double_array    *da,
     if (ret)
     {
         /* FAILED to allocate leaf node HDD extent. */
-        castle_printk(LOG_WARN, "Merge failed due to space constraint for leaf node tree.\n");
+        castle_printk(LOG_WARN,
+                      "New T0[DA%u] failed due to space constraint for leaf node tree.\n",
+                      da->id);
         goto no_space;
     }
 
@@ -3667,7 +3671,9 @@ static int castle_da_t0_extents_alloc(struct castle_double_array    *da,
     if (ret)
     {
         /* FAILED to allocate value extent. */
-        castle_printk(LOG_WARN, "Merge failed due to space constraint for value extent.\n");
+        castle_printk(LOG_WARN,
+                      "New T0[DA%u] failed due to space constraint for value extent.\n",
+                      da->id);
         goto no_space;
     }
 
