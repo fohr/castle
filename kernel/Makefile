@@ -78,7 +78,7 @@ etags:
 .PHONY: cscope
 cscope:
 	$(all_sources) > cscope.files
-	cscope -k -b -q
+	cscope -k -b
 
 depend .depend dep:
 	$(CC) $(EXTRA_FLAGS) -M *.c > .depend
