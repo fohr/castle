@@ -18,7 +18,7 @@ static char          *castle_trace_dir_str        = NULL;
  *
  * XXX
  * XXX Don't forget to bump CASTLE_TRACE_MAGIC in castle_public.h!
- * XXX Once bumped add #include <sys/time.h> and copy to acunutils.hg/libcastle
+ * XXX Once bumped copy to libcastle.hg
  * XXX
  *
  * Trace events are broken down by:
@@ -42,9 +42,9 @@ static char          *castle_trace_dir_str        = NULL;
  *                    castle_trace_tracepoints_unregister()
  * 7. castle_trace.c: Write castle_trace_foo_event(...) which should call _castle_trace_event()
  *                    to allocate and dispatch the event
- * userland hg: acunutils.hg/castle-trace:
- * 1. Copy castle_public.h from fs.hg/kernel to acunutils.hg/libcastle and add #include <sys/time.h>
-
+ *
+ * userland hg: castle-utils.hg/castle-trace:
+ * 1. Copy castle_public.h from fs.hg/kernel to libcastle.hg
  * 2. castle_trace.c: Add foo_var_name[] string index array (see cache_var_name[])
  * 3. castle_trace.c: Add TRACE_FOO provider to decode_trace()'s main switch statement
  *
@@ -52,8 +52,8 @@ static char          *castle_trace_dir_str        = NULL;
  *
  * 1. fs.hg/kernel/castle_public.h: bump CASTLE_TRACE_MAGIC
  * 2. fs.hg/kernel/castle_public.h: add TRACE_CACHE_CLEAN_PGS to c_trc_cache_var_t enum
- * 3. Update castle_public.h in acunutils.hg/libcastle (see above)
- * 4. acunutils.hg/castle-trace/castle_trace.c: add TRACE_CACHE_CLEAN_PGS to cache_var_name[]
+ * 3. Update castle_public.h in libcastle.hg (see above)
+ * 4. castle-utils.hg/castle-trace/castle_trace.c: add TRACE_CACHE_CLEAN_PGS to cache_var_name[]
  *
  * USING TRACE_PERCENTAGE (for castle_trace_cache() only, at current):
  *
@@ -161,6 +161,15 @@ static void castle_trace_da_merge_unit_event(c_trc_type_t type,
     _castle_trace_event(TRACE_DA_MERGE_UNIT, type, var, da, level, unit, v4, 0);
 }
 
+/* castle_trace_io_sched() */
+static void castle_trace_io_sched_event(c_trc_type_t type,
+                                        c_trc_io_sched_var_t var,
+                                        uint64_t val)
+{
+    _castle_trace_event(TRACE_IO_SCHED, type, var, val, 0, 0, 0, 0);
+}
+
+
 /**************************************************************************************************/
 
 static int castle_trace_subbuf_start(struct rchan_buf *buf,
@@ -235,10 +244,12 @@ static int castle_trace_tracepoints_register(void)
     trace_register(cache);
     trace_register(da);
     trace_register(da_merge);
-    last_trace_register(da_merge_unit);
+    trace_register(da_merge_unit);
+    last_trace_register(io_sched);
 
     return 0;
 
+    trace_register_fail(da_merge_unit);
     trace_register_fail(da_merge);
     trace_register_fail(da);
     trace_register_fail(cache);
@@ -261,6 +272,7 @@ static void castle_trace_tracepoints_unregister(void)
     castle_trace_da_unregister(castle_trace_da_event);
     castle_trace_da_merge_unregister(castle_trace_da_merge_event);
     castle_trace_da_merge_unit_unregister(castle_trace_da_merge_unit_event);
+    castle_trace_io_sched_unregister(castle_trace_io_sched_event);
 }
 
 int castle_trace_setup(char *dir_str)
