@@ -59,6 +59,12 @@ CASTLE_DEFINE_TRACE(da_merge_unit,
                         c_da_t da, uint8_t level, uint64_t unit, uint64_t v4),
                     TPARGS(type, var, da, level, unit, v4));
 
+/* castle_trace_io_sched() */
+CASTLE_DEFINE_TRACE(io_sched,
+                    TPPROTO(c_trc_type_t type, c_trc_io_sched_var_t var, uint64_t val),
+                    TPARGS(type, var, val));
+
+
 int castle_trace_setup   (char *dir);
 int castle_trace_start   (void);
 int castle_trace_stop    (void);

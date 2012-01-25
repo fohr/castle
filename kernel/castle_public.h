@@ -55,10 +55,11 @@ typedef enum {
  * Trace providers.
  */
 typedef enum {
-    TRACE_CACHE,            /**< Cache events       */
-    TRACE_DA,               /**< DA events          */
-    TRACE_DA_MERGE,         /**< Merge events       */
-    TRACE_DA_MERGE_UNIT,    /**< Merge unit events  */
+    TRACE_CACHE,            /**< Cache events        */
+    TRACE_DA,               /**< DA events           */
+    TRACE_DA_MERGE,         /**< Merge events        */
+    TRACE_DA_MERGE_UNIT,    /**< Merge unit events   */
+    TRACE_IO_SCHED,         /**< IO scheduler events */
 } c_trc_prov_t;
 
 /**
@@ -154,12 +155,23 @@ typedef enum {
     TRACE_DA_MERGE_UNIT_CACHE_BTREE_EFFICIENCY_ID,  /**< % of up2date btree chunk-c2bs.         */
     TRACE_DA_MERGE_UNIT_CACHE_DATA_EFFICIENCY_ID,   /**< % of up2date data chunk-c2bs.          */
 } c_trc_da_var_t;
-
 #define MERGE_START_FLAG    (1U<<0)
 #define MERGE_END_FLAG      (1U<<1)
 
+/**
+ * IO scheduler trace variables.
+ */
+typedef enum {
+    TRACE_IO_SCHED_NUM_READ_IOS_ID,          /**< Number of IOs done due to reads               */
+    TRACE_IO_SCHED_NUM_MERGE_IOS_ID,         /**< Number of IOs done due to merges (and writes) */
+    TRACE_IO_SCHED_NUM_CHECKPOINT_IOS_ID,    /**< Number of IOs done due to checkpoints         */
+    TRACE_IO_SCHED_BYTES_READ_IOS_ID,        /**< Amount of IO data due to reads                */
+    TRACE_IO_SCHED_BYTES_MERGE_IOS_ID,       /**< Amount of IO data due to merges (and writes)  */
+    TRACE_IO_SCHED_BYTES_CHECKPOINT_IOS_ID,  /**< Amount of IO data due to checkpoints          */
+} c_trc_io_sched_var_t;
+
 /* Bump the magic version byte (LSB) when c_trc_evt_t changes. */
-#define CASTLE_TRACE_MAGIC          0xCAE5E10F
+#define CASTLE_TRACE_MAGIC          0xCAE5E110
 typedef struct castle_trace_event {
     uint32_t                    magic;
     struct timeval              timestamp;
