@@ -12064,13 +12064,13 @@ int castle_double_array_destroy(c_da_t da_id)
 
     /* Now we are happy to delete the DA. */
 
-    /* Send an event, first. */
-    castle_events_version_tree_destroyed(da->id);
-
     /* Remove it from the hash. */
     __castle_da_hash_remove(da);
     da->hash_list.next = da->hash_list.prev = NULL;
     write_unlock_irqrestore(&castle_da_hash_lock, flags);
+
+    /* Send an event to userspace. */
+    castle_events_version_tree_destroyed(da->id);
 
     castle_sysfs_da_del(da);
 
