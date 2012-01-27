@@ -1686,6 +1686,10 @@ int castle_iterator_has_next_sync(struct castle_iterator_type *iter_type, void *
     return iter_type->has_next(iter);
 }
 
+/* @TODO: This function only issues I/O on one component iterator at a time.
+ * If one iterator goes asynchronous, we do not kick other component iterators
+ * at the same time, which makes the RQ essentially synchronous.
+ * If we fix this, iter_running would need to become a counter. */
 static int castle_ct_merged_iter_prep_next(c_merged_iter_t *iter)
 {
     int i;
@@ -1705,6 +1709,7 @@ static int castle_ct_merged_iter_prep_next(c_merged_iter_t *iter)
             debug("Reading next entry for iterator: %d.\n", i);
             if (!comp_iter->iterator_type->prep_next(comp_iter->iterator))
             {
+                /* Component iterator went asynchronous (due to I/O). */
                 debug_iter("%s:%p:%p:%d - schedule\n", __FUNCTION__, iter, comp_iter->iterator, i);
                 iter->iter_running = 1;
                 return 0;
