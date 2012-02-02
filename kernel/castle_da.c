@@ -3562,6 +3562,7 @@ static void castle_da_lfs_rwct_callback(void *data)
 {
     struct castle_double_array *da = data;
 
+    castle_printk(LOG_WARN, "T0 extent low freespace callback invoked.\n");
     if (atomic_dec_and_test(&da->lfs_victim_count))
         castle_da_merge_restart(da, NULL);
 
