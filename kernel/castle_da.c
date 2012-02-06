@@ -5546,8 +5546,7 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
         return EXIT_SUCCESS;
     }
 
-    /* No tv_resolver; rely on merge->is_new_key for serialisation control; TODO@tr get rid of this
-       once the merge iterator provides is_new_key notification. */
+    /* No tv_resolver; rely on merge->is_new_key for serialisation control. */
     if(MERGE_CHECKPOINTABLE(merge) && !merge->tv_resolver)
         castle_da_merge_serialise(merge, 0 /* not using tvr */, 69 /* wutever... */);
 
@@ -9670,14 +9669,14 @@ static int castle_da_merge_deser_mstore_outtree_recover(void)
         if (entry->nr_drain_exts > 0)
         {
             drain_exts = castle_zalloc(sizeof(c_ext_id_t) * entry->nr_drain_exts);
-            BUG_ON(!drain_exts); //TODO@tr handle this better?
+            BUG_ON(!drain_exts);
         }
 
         merge = castle_da_merge_alloc(entry->nr_trees, level, des_da,
                                       entry->merge_id, NULL,
                                       entry->nr_drain_exts, drain_exts);
         /* if we failed to malloc at init, something must be horribly wrong */
-        BUG_ON(!merge); //TODO@tr handle this better?
+        BUG_ON(!merge);
         castle_printk(LOG_DEBUG, "%s::made merge structure at %p.\n", __FUNCTION__, merge);
 
         /* Change the count to 0 for now, while serialising data_ext maps we add them. */
@@ -9696,7 +9695,7 @@ static int castle_da_merge_deser_mstore_outtree_recover(void)
 
         /* Recover partially complete output CT */
         merge->out_tree = castle_da_ct_unmarshall(&merge->serdes.mstore_entry->out_tree);
-        BUG_ON(!merge->out_tree); //TODO@tr handle this better
+        BUG_ON(!merge->out_tree);
         BUG_ON(da_id != merge->out_tree->da->id);
         castle_printk(LOG_DEBUG, "%s::deserialising merge on da %d level %d with partially-"
                                  "complete ct, seq %d\n",
