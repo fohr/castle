@@ -3545,7 +3545,7 @@ void castle_cache_page_block_unreserve(c2_block_t *c2b)
  *  - start_off->end_off: Range within extent ext_id that has been prefetched.
  *  - pref_pages: Number of pages from a requested offset (cep) that will be
  *    prefetched.
- *  - adv_thresh: Number of pages from end_off we get before prefetching.
+ *  - adv_thresh: Percentage of window size from end_off before we advance.
  *
  * Window storage:
  *    All windows are stored in a global RB tree, protected by a spinlock.
@@ -3630,7 +3630,8 @@ void castle_cache_page_block_unreserve(c2_block_t *c2b)
 #define PREF_PAGES                  4 *BLKS_PER_CHK /**< #pages to non-adaptive prefetch.         */
 #define PREF_ADAP_INITIAL           2 *BLKS_PER_CHK /**< Initial #pages to adaptive prefetch.     */
 #define PREF_ADAP_MAX               16*BLKS_PER_CHK /**< Maximum #pages to adaptive prefetch.     */
-#define PREF_ADV_THRESH             4 *BLKS_PER_CHK /**< #pages from window end before prefetch.  */
+#define PREF_ADV_THRESH             25              /**< 25% from end of window before advance.   */
+STATIC_BUG_ON(PREF_ADV_THRESH > 100);
 
 /**
  * Prefetch window definition.
@@ -3646,7 +3647,7 @@ typedef struct castle_cache_prefetch_window {
                                      high rates to trigger reserve list being used)
                                      has been prefetched.  Chunk aligned.                         */
     uint32_t        pref_pages; /**< Number of pages we prefetch.                                 */
-    uint32_t        adv_thresh; /**< #pages from end_off before we prefetch.                      */
+    uint8_t         adv_thresh; /**< Percentage of window size from end_off before we advance.    */
     struct rb_node  rb_node;    /**< RB-node for this window.                                     */
 } c2_pref_window_t;
 
@@ -3666,8 +3667,8 @@ static USED char* c2_pref_window_to_str(c2_pref_window_t *window)
     cep.offset = window->start_off;
 
     snprintf(win_str, PREF_WINDOW_STR_LEN,
-        "%s%s pref win: {cep="cep_fmt_str", start_off=0x%llx (%lld), "
-        "end_off=0x%llx (%lld), pref_pages=%d (%lld), st=0x%.2x",
+        "%s%s pref win: {cep="cep_fmt_str" start_off=0x%llx (%lld) "
+        "end_off=0x%llx (%lld) pref_pages=%d (%lld) adv_thresh=%u%% st=0x%.2x",
         window->state & PREF_WINDOW_SOFTPIN ? "S": "",
         window->state & PREF_WINDOW_ADAPTIVE ? "A" : "",
         cep2str(cep),
@@ -3677,6 +3678,7 @@ static USED char* c2_pref_window_to_str(c2_pref_window_t *window)
         CHUNK(window->end_off),
         window->pref_pages,
         window->pref_pages / BLKS_PER_CHK,
+        window->adv_thresh,
         window->state);
     win_str[PREF_WINDOW_STR_LEN-1] = '\0';
 
@@ -4416,7 +4418,7 @@ static int c2_pref_window_advance(c2_pref_window_t *window,
                                   int debug)
 {
     int ret = EXIT_SUCCESS;
-    int size, from_end, pages, falloff_pages;
+    int pages, size, adv_pos, falloff_pages;
     c_ext_pos_t submit_cep; // old window->end_off cep (prefetch pages from here)
     c_ext_pos_t start_cep;  // old window->start_off cep
 
@@ -4433,16 +4435,18 @@ static int c2_pref_window_advance(c2_pref_window_t *window,
 
     /* No more pages need to be prefetched. */
     if (!pages)
-        goto insert_and_exit;
+        goto dont_advance;
 
     /* Pages doesn't meet advance threshold. */
-    size     = (window->end_off - window->start_off) >> PAGE_SHIFT;
-    from_end = (window->end_off - cep.offset)        >> PAGE_SHIFT;
-    if (size > window->adv_thresh && from_end > window->adv_thresh)
-        goto insert_and_exit;
+    size    = (window->end_off - window->start_off) >> PAGE_SHIFT;
+    adv_pos = size / (100 / window->adv_thresh);
+    if (size && CHUNK(cep.offset) < CHUNK(window->end_off - adv_pos * PAGE_SIZE))
+        goto dont_advance;
 
-    pref_debug(debug, "Advancing %d pages for cep="cep_fmt_str" %s\n",
-            pages, cep2str(cep), c2_pref_window_to_str(window));
+    pref_debug(debug, "window=%p cep=%llu pages=%d size=%d end_off=%llu "
+            "start_off=%llu pref_pages=%u adv_thresh=%u\n",
+            window, cep.offset, pages, size, window->end_off,
+            window->start_off, window->pref_pages, window->adv_thresh);
     ret = 1;
 
     /* We're going to slide the window forward by pages. */
@@ -4471,7 +4475,7 @@ static int c2_pref_window_advance(c2_pref_window_t *window,
     c2_pref_window_falloff(start_cep, falloff_pages, window, debug);
     c2_pref_window_submit(window, submit_cep, pages, debug);
 
-insert_and_exit:
+dont_advance:
     BUG_ON(cep.ext_id != window->ext_id);
     if (c2_pref_window_insert(window) != EXIT_SUCCESS)
     {
