@@ -1192,6 +1192,7 @@ err_out:
             ioctl.state_query.state = castle_fs_state;
             /* This ioctl always succeeds. */
             ioctl.state_query.ret   = 0;
+            break;
         default:
             err = -EINVAL;
             goto err;
