@@ -9502,7 +9502,9 @@ err_out:
      * manage to allocate.  Splice them into a private list first. */
     write_lock(&da->lock);
     list_splice_init(&da->levels[0].trees, &list);
+    da->levels[0].nr_trees = 0;
     write_unlock(&da->lock);
+
     list_for_each_safe(l, p, &list)
     {
         struct castle_component_tree *ct;
