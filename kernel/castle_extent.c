@@ -5591,6 +5591,11 @@ int submit_async_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_chunks,
     cep.ext_id = ext->ext_id;
     cep.offset = chunkno*C_CHK_SIZE;
 
+    wi = get_free_work_item();
+    if (!wi)
+        // No free entries. Return error so caller can throttle
+        return -ENOENT;
+
     c2b = castle_cache_block_get(cep, BLKS_PER_CHK);
     write_lock_c2b(c2b);
 
@@ -5599,11 +5604,6 @@ int submit_async_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_chunks,
      * have clean c2bs with dirty pages.
     */
     set_c2b_remap(c2b);
-
-    wi = get_free_work_item();
-    if (!wi)
-        // No free entries. Return error so caller can throttle
-        return -ENOENT;
 
     atomic_inc(&wi_in_flight);
 
