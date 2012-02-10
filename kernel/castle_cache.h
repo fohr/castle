@@ -235,7 +235,6 @@ int         c2b_has_clean_pages       (c2_block_t *c2b);
 #define     castle_cache_page_block_reserve() \
             castle_cache_block_get    ((c_ext_pos_t){RESERVE_EXT_ID, 0}, 1)
 c2_block_t* castle_cache_block_get    (c_ext_pos_t  cep, int nr_pages);
-c2_block_t* castle_cache_block_get_for_merge    (c_ext_pos_t  cep, int nr_pages);
 void        castle_cache_block_hardpin  (c2_block_t *c2b);
 void        castle_cache_block_unhardpin(c2_block_t *c2b);
 void        castle_cache_block_softpin  (c2_block_t *c2b);

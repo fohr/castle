@@ -3351,8 +3351,7 @@ static inline void castle_cache_page_freelist_grow(int nr_pages)
 
 static c2_block_t* _castle_cache_block_get(c_ext_pos_t cep,
                                            int nr_pages,
-                                           int transient,
-                                           int merge_originated)
+                                           int transient)
 {
     int grown_block_freelist = 0, grown_page_freelist = 0;
 #ifdef CASTLE_PERF_DEBUG
@@ -3463,21 +3462,11 @@ out:
     {
         if (c2b_uptodate(c2b)) {
             atomic_add(c2b->nr_pages, &extent_stats[ext_type].hits);
-            if(merge_originated) {
-                atomic_add(c2b->nr_pages, &merge_hits);
-            }
-            else {
-                atomic_add(c2b->nr_pages, &non_merge_hits);
-            }
+            atomic_add(c2b->nr_pages, &non_merge_hits);
         }
         else {
             atomic_add(c2b->nr_pages, &extent_stats[ext_type].misses);
-            if(merge_originated) {
-                atomic_add(c2b->nr_pages, &merge_misses);
-            }
-            else {
-                atomic_add(c2b->nr_pages, &non_merge_misses);
-            }
+            atomic_add(c2b->nr_pages, &non_merge_misses);
         }
     }
 #endif
@@ -3492,19 +3481,7 @@ out:
  */
 c2_block_t* castle_cache_block_get(c_ext_pos_t cep, int nr_pages)
 {
-    return _castle_cache_block_get(cep, nr_pages, 0, 0);
-}
-
-
-/**
- * Get block starting at cep, size nr_pages, 
- * especially mark this as from a merge.
- *
- * @return  Block matching cep, nr_pages.
- */
-c2_block_t* castle_cache_block_get_for_merge(c_ext_pos_t cep, int nr_pages)
-{
-    return _castle_cache_block_get(cep, nr_pages, 0, 1);
+    return _castle_cache_block_get(cep, nr_pages, 0 /*transient*/);
 }
 
 /**
