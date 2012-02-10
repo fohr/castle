@@ -719,7 +719,7 @@ void castle_control_slave_evacuate(uint32_t uuid, uint32_t force, int *ret)
 
     /*
      * If this slave is not an SSD, make sure that we will preserve the minimum number of working
-     * disks.
+     * disks. Forced evacuation is not allowed if any extents in this fs are 1 RDA.
      */
     if (!(slave->cs_superblock.pub.flags & CASTLE_SLAVE_SSD))
     {
@@ -751,7 +751,8 @@ void castle_control_slave_evacuate(uint32_t uuid, uint32_t force, int *ret)
 
         BUG_ON(nr_live_slaves < MIN_LIVE_SLAVES);
 
-        if (nr_live_slaves == MIN_LIVE_SLAVES)
+        if (((castle_extent_min_rda_lvl_get() == RDA_1) && (force == 1)) ||
+             (nr_live_slaves == MIN_LIVE_SLAVES))
         {
             castle_printk(LOG_WARN, "Error: evacuation rejected to preserve minimum "
                           "number of working disks.\n");
