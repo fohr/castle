@@ -1918,7 +1918,7 @@ static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_ext_pos_t cep)
         return;
     }
 
-    c2b = castle_cache_page_block_get(cep);
+    c2b = castle_cache_block_get(cep, 1);
     castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2B_GOT);
 #ifdef CASTLE_DEBUG
     c_bvec->locking = c2b;

@@ -266,7 +266,7 @@ get_super_chunk:
     cons_off   = FREESPACE_OFFSET + freespace->cons * sizeof(c_chk_t);
     cep.ext_id = cs->sup_ext;
     cep.offset = MASK_BLK_OFFSET(cons_off);
-    c2b = castle_cache_page_block_get(cep);
+    c2b = castle_cache_block_get(cep, 1);
     write_lock_c2b(c2b);
 
     /* Get the uptodate buffer, If failed it should be due to disk failure. */
@@ -377,7 +377,7 @@ void castle_freespace_slave_superchunk_free(struct castle_slave *cs,
                 else
                     cep.offset += C_BLK_SIZE;
             }
-            c2b = castle_cache_page_block_get(cep);
+            c2b = castle_cache_block_get(cep, 1);
             write_lock_c2b(c2b);
             if (!c2b_uptodate(c2b) && submit_c2b_sync(READ, c2b))
             {
