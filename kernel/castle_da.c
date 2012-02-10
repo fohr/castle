@@ -665,7 +665,7 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter,
             put_c2b(c2b);
         /* Get cache block for the current c2b */
         castle_perf_debug_getnstimeofday(&ts_start);
-        c2b = castle_cache_block_get_for_merge(cep, node_size);
+        c2b = castle_cache_block_get(cep, node_size);
         castle_perf_debug_getnstimeofday(&ts_end);
         /* Update time spent obtaining c2bs. */
         castle_perf_debug_bump_ctr(iter->tree->get_c2b_ns, ts_end, ts_start);
@@ -4079,8 +4079,8 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
         total_blocks -= blocks;
 
         castle_perf_debug_getnstimeofday(&ts_start);
-        s_c2b = castle_cache_block_get_for_merge(old_cep, blocks);
-        c_c2b = castle_cache_block_get_for_merge(new_cep, blocks);
+        s_c2b = castle_cache_block_get(old_cep, blocks);
+        c_c2b = castle_cache_block_get(new_cep, blocks);
         castle_perf_debug_getnstimeofday(&ts_end);
         castle_perf_debug_bump_ctr(tree->get_c2b_ns, ts_end, ts_start);
         castle_cache_advise(s_c2b->cep, C2_ADV_PREFETCH|C2_ADV_SOFTPIN, -1, -1, 0);
@@ -4282,7 +4282,7 @@ static c_val_tup_t _castle_da_entry_add(struct castle_da_merge *merge,
                                         &new_cep) < 0);
         debug("Got "cep_fmt_str_nl, cep2str(new_cep));
         castle_perf_debug_getnstimeofday(&ts_start);
-        level->node_c2b = castle_cache_block_get_for_merge(new_cep, new_node_size);
+        level->node_c2b = castle_cache_block_get(new_cep, new_node_size);
         castle_perf_debug_getnstimeofday(&ts_end);
         castle_perf_debug_bump_ctr(merge->get_c2b_ns, ts_end, ts_start);
         debug("Locking the c2b, and setting it up to date.\n");
@@ -4721,7 +4721,7 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge, c_ext_pos
     BUG_ON(!merge->completing);
     /* Start with the root node. */
     node_size = ct->node_sizes[atomic_read(&merge->out_tree->tree_depth) - 1];
-    node_c2b = castle_cache_block_get_for_merge(root_cep, node_size);
+    node_c2b = castle_cache_block_get(root_cep, node_size);
     /* Lock and update the c2b. */
     write_lock_c2b(node_c2b);
     if(!c2b_uptodate(node_c2b))
@@ -4750,7 +4750,7 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge, c_ext_pos
         debug("Locking next node cep=" cep_fmt_str_nl,
               cep2str(cvt.cep));
         node_size = ct->node_sizes[atomic_read(&merge->out_tree->tree_depth) - level];
-        next_node_c2b = castle_cache_block_get_for_merge(cvt.cep, node_size);
+        next_node_c2b = castle_cache_block_get(cvt.cep, node_size);
         write_lock_c2b(next_node_c2b);
         /* We unlikely to need a blocking read, because we've just had these
            nodes in the cache. */
@@ -6375,7 +6375,7 @@ static void castle_da_merge_perf_stats_flush_reset(struct castle_double_array *d
                                units_cnt,
                                ns);
 
-    /* castle_cache_block_get_for_merge() time. */
+    /* castle_cache_block_get() time. */
     castle_trace_da_merge_unit(TRACE_VALUE,
                                TRACE_DA_MERGE_UNIT_GET_C2B_NS_ID,
                                da->id,
@@ -6839,7 +6839,7 @@ static c2_block_t* castle_da_merge_des_out_tree_c2b_write_fetch(struct castle_da
     node_size = castle_da_merge_node_size_get(merge, depth);
     BUG_ON(node_size == 0);
 
-    c2b = castle_cache_block_get_for_merge(cep, node_size);
+    c2b = castle_cache_block_get(cep, node_size);
     BUG_ON(!c2b);
 
     write_lock_c2b(c2b);
@@ -7700,7 +7700,7 @@ static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry 
                 node_size = merge_mstore->internals_on_ssds ?
                     SSD_RO_TREE_NODE_SIZE : HDD_RO_TREE_NODE_SIZE;
 
-            node_c2b = castle_cache_block_get_for_merge(merge_mstore->levels[i].node_c2b_cep, node_size);
+            node_c2b = castle_cache_block_get(merge_mstore->levels[i].node_c2b_cep, node_size);
             BUG_ON(!node_c2b);
             write_lock_c2b(node_c2b);
             if(!c2b_uptodate(node_c2b))
@@ -9736,7 +9736,7 @@ static int castle_da_merge_deser_mstore_outtree_recover(void)
                 BUG();
             }
             merge->redirection_partition.node_c2b =
-                castle_cache_block_get_for_merge(merge->serdes.mstore_entry->redirection_partition_node_cep, node_size);
+                castle_cache_block_get(merge->serdes.mstore_entry->redirection_partition_node_cep, node_size);
             merge->redirection_partition.node_size = node_size;
             write_lock_c2b(merge->redirection_partition.node_c2b);
             if(!c2b_uptodate(merge->redirection_partition.node_c2b))
