@@ -52,6 +52,7 @@ int                          castle_fs_inited = 0;
 int                          castle_fs_exiting = 0;
 c_fault_t                    castle_fault = NO_FAULT;
 uint32_t                     castle_fault_arg = 0;
+c_state_t                    castle_fs_state = CASTLE_STATE_LOADING;
 
 module_param(castle_checkpoint_period, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_checkpoint_period, "checkpoint_period,");
@@ -986,6 +987,8 @@ int castle_fs_init(void)
     }
 
     castle_extents_rebuild_startup_check(need_rebuild);
+
+    castle_fs_state = CASTLE_STATE_INITED;
 
     return 0;
 }
@@ -2522,7 +2525,7 @@ static int __init castle_init(void)
 {
     int ret;
 
-    printk("Castle FS init (build: %s).\n", CASTLE_COMPILE_CHANGESET);
+    printk("Castle FS load (build: %s).\n", CASTLE_COMPILE_CHANGESET);
 
     castle_fs_inited = 0;
     if((ret = castle_printk_init()))            goto err_out1;
@@ -2546,7 +2549,8 @@ static int __init castle_init(void)
     if((ret = castle_sysfs_init()))             goto err_out19;
     if((ret = castle_back_init()))              goto err_out20;
 
-    castle_printk(LOG_INIT, "Castle FS init done.\n");
+    castle_printk(LOG_INIT, "Castle FS load done.\n");
+    castle_fs_state = CASTLE_STATE_UNINITED;
 
     return 0;
 

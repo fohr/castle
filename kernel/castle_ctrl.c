@@ -1187,6 +1187,10 @@ err_out:
                             castle_da_read_rate_set(ioctl.read_rate_set.vertree_id,
                                                     ioctl.read_rate_set.read_rate);
             break;
+        case CASTLE_CTRL_STATE_QUERY:
+            ioctl.state_query.state = castle_fs_state;
+            /* This ioctl always succeeds. */
+            ioctl.state_query.ret   = 0;
         default:
             err = -EINVAL;
             goto err;
