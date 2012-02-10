@@ -232,8 +232,6 @@ int         submit_direct_io          (int rw, struct block_device *bdev, sector
 
 int         c2b_has_clean_pages       (c2_block_t *c2b);
 
-#define     castle_cache_page_block_get(_cep) \
-            castle_cache_block_get    (_cep, 1)
 #define     castle_cache_page_block_reserve() \
             castle_cache_block_get    ((c_ext_pos_t){RESERVE_EXT_ID, 0}, 1)
 c2_block_t* castle_cache_block_get    (c_ext_pos_t  cep, int nr_pages);
