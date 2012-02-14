@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 33 /* last updated by GM */
+#define CASTLE_PROTOCOL_VERSION 34 /* last updated by VV */
 
 #ifdef SWIG
 #define PACKED               //overide gcc intrinsics for SWIG
@@ -233,6 +233,7 @@ typedef enum {
 } c_rda_type_t;
 
 typedef struct castle_merge_config {
+    c_da_t                  vertree;            /**< DA to perform the merge on.                */
     uint32_t                nr_arrays;          /**< # of arrays to be merged.                  */
     c_array_id_t           *arrays;             /**< List of arrays.                            */
     uint32_t                nr_data_exts;       /**< Number of medium extents in this array.    */

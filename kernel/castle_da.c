@@ -12263,55 +12263,12 @@ static int castle_merge_thread_create(c_thread_id_t *thread_id, struct castle_do
     return 0;
 }
 
-static int castle_da_id_get_from_ct(tree_seq_t ct_seq, c_da_t *da_id)
-{
-    struct castle_component_tree *ct;
-
-    read_lock_irq(&castle_ct_hash_lock);
-
-    ct = __castle_ct_hash_get(ct_seq);
-    if (!ct)
-    {
-        castle_printk(LOG_USERINFO, "No active array with ID: 0x%llx\n", ct_seq);
-        read_unlock_irq(&castle_ct_hash_lock);
-
-        return C_ERR_MERGE_INVAL_ARRAY;
-    }
-
-    /* Note: It is safe to access da pointer. Yes, it is possible to race this with
-     * da_destroy_complete(). But, destroy_complete() makes sure that all CTs are
-     * gone before freeing DA structure. */
-    *da_id = ct->da->id;
-
-    read_unlock_irq(&castle_ct_hash_lock);
-
-    return 0;
-}
-
 static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_ids,
                                       struct castle_component_tree **in_trees,
-                                      struct castle_double_array **da_p)
+                                      struct castle_double_array *da)
 {
     int i, found, ret;
-    c_da_t da_id;
     struct list_head *lh;
-    struct castle_double_array *da;
-
-    /* Get the DA id that these arrays belong to. */
-    ret = castle_da_id_get_from_ct(array_ids[0], &da_id);
-    if (ret)
-    {
-        castle_printk(LOG_USERINFO, "Couldn't find DA associated with array: 0x%llx\n", array_ids[0]);
-        return ret;
-    }
-
-    /* Get a reference on DA with ID. */
-    da = castle_da_ptr_get(da_id, 0 /* don't increase the attachment count */);
-    if (!da)
-    {
-        castle_printk(LOG_USERINFO, "Associated DA is not valid anymore. DA_ID: 0x%x\n", da_id);
-        return C_ERR_MERGE_INVAL_ARRAY;
-    }
 
     /* Take read lock on DA, to make sure neither CTs nor DA would go away while looking at the
      * list. */
@@ -12380,8 +12337,6 @@ out:
         return C_ERR_MERGE_INVAL_ARRAY;
     }
 
-    *da_p = da;
-
     return 0;
 }
 
@@ -12411,12 +12366,20 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
         goto err_out;
     }
 
+    /* Get a reference on the DA. */
+    da = castle_da_ptr_get(merge_cfg->vertree,
+                           0 /* don't increase the attachment count */);
+    if (!da)
+    {
+        ret = C_ERR_MERGE_INVAL_DA;
+        castle_printk(LOG_USERINFO, "Couldn't find DA with ID: 0x%x\n", merge_cfg->vertree);
+        goto err_out;
+    }
+
     /* Get array objects from IDs. */
-    ret = castle_da_merge_fill_trees(merge_cfg->nr_arrays, merge_cfg->arrays, in_trees, &da);
+    ret = castle_da_merge_fill_trees(merge_cfg->nr_arrays, merge_cfg->arrays, in_trees, da);
     if (ret)
         goto err_out;
-
-    BUG_ON(!da);
 
     if (merge_cfg->nr_data_exts == MERGE_ALL_DATA_EXTS)
     {
