@@ -118,11 +118,11 @@ int castle_bloom_create(castle_bloom_t *bf,
     atomic_set(&bf->num_btree_nodes, 0);
 
     /* Calculate space required by the bloom filter extent. */
-    nodes_size = ceiling(ceiling(num_elements, BLOOM_ELEMENTS_PER_CHUNK),
-            btree->max_entries(BLOOM_INDEX_NODE_SIZE_PAGES)) * BLOOM_INDEX_NODE_SIZE;
-    chunks_size = bf->num_chunks * BLOOM_CHUNK_SIZE;
-    size = nodes_size + chunks_size;
-    BUG_ON(size % C_CHK_SIZE); /* should be a whole number of chunks */
+    nodes_size  = BLOOM_INDEX_NODE_SIZE * ceiling(bf->num_chunks,
+                            btree->max_entries(BLOOM_INDEX_NODE_SIZE_PAGES));
+    chunks_size = BLOOM_CHUNK_SIZE * bf->num_chunks;
+    size        = nodes_size + chunks_size;
+    /* size must be a whole number of chunks, see STATIC_BUG_ON()s below. */
 
     /* Allocate btree extent.  Try and use an SSD first, falling back on HDD. */
     bf->ext_id = castle_extent_alloc(SSD_ONLY_EXT,
@@ -167,7 +167,7 @@ int castle_bloom_create(castle_bloom_t *bf,
 #endif
 
 #ifdef DEBUG
-    bf_bp->elems_in_block       = castle_alloc(sizeof(uint32_t)
+    bf_bp->elems_in_block        = castle_alloc(sizeof(uint32_t)
             * BLOOM_BLOCKS_PER_CHUNK(bf)); /* safe if this fails */
 #endif
     bf_bp->max_num_elements      = num_elements;
@@ -190,11 +190,13 @@ alloc_fail:
     bf->private = NULL;
     return ret;
 }
+STATIC_BUG_ON(BLOOM_CHUNK_SIZE % C_CHK_SIZE);
+STATIC_BUG_ON(BLOOM_INDEX_NODE_SIZE % C_CHK_SIZE);
 
 /**
- * Called when a btree node is full
+ * Finalise current btree node when it becomes full.
  */
-static void castle_bloom_complete_btree_node(castle_bloom_t *bf)
+static void castle_bloom_btree_node_complete(castle_bloom_t *bf)
 {
     struct castle_bloom_build_params *bf_bp = bf->private;
 
@@ -226,7 +228,7 @@ static void castle_bloom_next_btree_node(castle_bloom_t *bf)
     struct castle_bloom_build_params *bf_bp = bf->private;
 
     if (bf_bp->cur_node != NULL)
-        castle_bloom_complete_btree_node(bf);
+        castle_bloom_btree_node_complete(bf);
 
     /* Since num_chunks is a max value that never increases (but could decrease at the end of bloom
        filter construction; see castle_bloom_complete()), we can use it to assert the max possible
@@ -253,7 +255,7 @@ static void castle_bloom_next_btree_node(castle_bloom_t *bf)
 /**
  * Called when a chunk is complete
  */
-static void castle_bloom_complete_chunk(castle_bloom_t *bf)
+static void castle_bloom_chunk_complete(castle_bloom_t *bf)
 {
     struct castle_bloom_build_params *bf_bp = bf->private;
 #ifdef DEBUG
@@ -307,7 +309,7 @@ static void castle_bloom_next_chunk(castle_bloom_t *bf)
     BUG_ON(bf->num_chunks == 1 && bf_bp->chunks_complete > 0);
 
     if (bf_bp->chunk_c2b != NULL)
-        castle_bloom_complete_chunk(bf);
+        castle_bloom_chunk_complete(bf);
 
     bf_bp->chunk_c2b = castle_cache_block_get(bf_bp->chunk_cep,
                                               BLOOM_BLOCKS_PER_CHUNK(bf)
@@ -375,7 +377,7 @@ static void castle_bloom_add_index_key(castle_bloom_t *bf, void *key, c_baik_typ
 }
 
 /**
- * Finish the bloom filter.
+ * Finalise the bloom filter.
  *
  * In the case of intersecting key sets during the merge the number of elements will be
  * less than the given.  This function ensures the bloom filter is completed correctly.
@@ -389,12 +391,19 @@ void castle_bloom_complete(castle_bloom_t *bf)
 
     if (bf_bp->elements_inserted == 0)
     {
+        /* No keys were added to the bloom filter so abort it now.
+         *
+         * The bloom extent will be cleaned up in castle_da_merge_cts_release()
+         * along with the other output CT extents. */
         castle_bloom_abort(bf);
+
         return;
     }
 
-    castle_bloom_complete_btree_node(bf);
-    castle_bloom_complete_chunk(bf);
+    /* Complete bloom filter should always include max_key. */
+    castle_bloom_add_index_key(bf, bf->btree->max_key, BAIK_REPLACE_LAST_KEY);
+    castle_bloom_btree_node_complete(bf);
+    castle_bloom_chunk_complete(bf);
 
 #ifdef DEBUG
     castle_check_free(bf_bp->elems_in_block);
@@ -409,9 +418,18 @@ void castle_bloom_complete(castle_bloom_t *bf)
 }
 
 /**
- * Abort the bloom filter.
+ * Abort a partially-built bloom filter.
  *
- * Free an incomplete bloom filter - needed for merge fail cases.
+ * Puts the current node and chunk c2bs and frees the bloom build params
+ * structure.  This function does not free the bloom extent itself.
+ *
+ * This function would be called for a number of circumstances, not just limited
+ * to merge failures and cases where the bloom filter is to be destroyed.
+ * e.g. we would call this function to interrupt a merge due to a shutdown with
+ * partial merges enabled, but equally we would call it prior to freeing a
+ * bloom extent in case of a failed merge.
+ *
+ * @also castle_da_merge_cts_put()
  */
 void castle_bloom_abort(castle_bloom_t *bf)
 {
@@ -769,8 +787,8 @@ static int castle_bloom_block_read(c_bloom_lookup_t *bl, int chunk_id)
                                            BLOOM_BLOCKS_PER_CHUNK(bf));
     cep.ext_id = bf->ext_id;
     cep.offset = bf->chunks_offset
-                    + chunk_id * BLOOM_CHUNK_SIZE
-                    + block_id * BLOOM_BLOCK_SIZE(bf);
+                    + (uint64_t)chunk_id * BLOOM_CHUNK_SIZE
+                    + (uint64_t)block_id * BLOOM_BLOCK_SIZE(bf);
 
     c2b = castle_cache_block_get(cep, bf->block_size_pages);
     bl->block_c2b = c2b;
@@ -1016,11 +1034,14 @@ int castle_bloom_key_exists(c_bloom_lookup_t *bl,
     chunk_id = castle_bloom_get_chunk_id(bf, &index, key);
     castle_bloom_index_put(&index);
 
-    if (chunk_id < 0)
-        /* Key does not exist within the bloom filter. */
-        return 0;
+    /* Complete bloom filters always have max key as the last entry in the
+     * index.  For incomplete bloom filters the merge partition key guarantees
+     * it will never field keys outside of the range of the maximum key in the
+     * index (which coincidentally will also be max key except where we have
+     * just completed the current chunk but not started the next). */
+    BUG_ON(chunk_id < 0);
 
-    else if (castle_bloom_block_read(bl, chunk_id) < 0)
+    if (castle_bloom_block_read(bl, chunk_id) < 0)
         /* Block read issued I/O and went asynchronous. */
         return -1;
 
@@ -1197,8 +1218,13 @@ void castle_bloom_build_param_unmarshall(castle_bloom_t *bf, struct castle_bbp_e
             drop_start = bbpm->node_used;
             drop_end   = bf_bp->cur_node->used - 1;
             bf->btree->entries_drop(bf_bp->cur_node, drop_start, drop_end);
+            write_unlock_c2b(bf_bp->node_c2b);
+            castle_bloom_add_index_key(bf, // acquires node_c2b write_lock()
+                                       bf->btree->max_key,
+                                       BAIK_REPLACE_LAST_KEY);
         }
-        write_unlock_c2b(bf_bp->node_c2b);
+        else
+            write_unlock_c2b(bf_bp->node_c2b);
     }
 
     /* recover chunk cep, c2b, and buffer */
