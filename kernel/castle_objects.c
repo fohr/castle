@@ -1061,7 +1061,7 @@ int castle_object_iter_init(struct castle_attachment *attachment,
             !(castle_object_btree_key_dim_flags_get(end_key, i) & KEY_DIMENSION_PLUS_INFINITY_FLAG))
             return -EINVAL;
 
-    iterator = castle_alloc(sizeof(castle_object_iterator_t));
+    iterator = castle_zalloc(sizeof(castle_object_iterator_t));
     if (!iterator)
         return -ENOMEM;
     *iter = iterator;
