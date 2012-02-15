@@ -8769,6 +8769,11 @@ static void __castle_da_level0_modified_promote(struct work_struct *work)
     while (castle_da_growing_rw_test_and_set(da) != EXIT_SUCCESS)
         msleep_interruptible(1);
 
+    /* Don't do promotion if we are in LFS. */
+    if (castle_da_no_disk_space(da))
+        goto out;
+    BUG_ON(da->levels[0].nr_trees != castle_double_array_request_cpus());
+
     create_failed = 0;
     for (cpu_index = 0; cpu_index < castle_double_array_request_cpus(); cpu_index++)
     {
