@@ -14,6 +14,10 @@ static unsigned int castle_fast_panic = 1;
 module_param(castle_fast_panic, uint, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_fast_panic, "Dumps Castle dmesg if unset");
 
+static int castle_printk_cons_level = LOG_PERF;
+module_param(castle_printk_cons_level, uint, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_printk_cons_level, "Minimum level before castle_printk()s hit the console");
+
 /*
  * WARNING: This has been moved here from castle.h because it's fairly complicated and
  * increases object code size a lot if it's inline. If we switch to a simpler
@@ -596,10 +600,12 @@ void castle_printk(c_printk_level_t level, const char *fmt, ...)
     // @TODO castle-trace output here
 
     /* Only print warnings, errors and testing messages to the console. */
-    if (level >= MIN_CONS_LEVEL)
+    if (level >= castle_printk_cons_level)
     {
         /* and then only printk() if we're within the ratelimit. */
-        if (!castle_fs_inited || castle_printk_ratelimit(level))
+        if (!castle_fs_inited
+                || level == LOG_UNLIMITED
+                || castle_printk_ratelimit(level))
             printk("%s", tmp_buf);
     }
 }
