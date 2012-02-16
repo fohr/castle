@@ -5228,7 +5228,7 @@ aggressive:
 
                 spin_unlock_irq(&castle_cache_block_lru_lock);
 
-                mask_id = castle_extent_get_all(dirtytree->ext_id);
+                mask_id = castle_extent_all_masks_get(dirtytree->ext_id);
                 /* Check if extent is already dead. This shouldn't happen as before we delete
                  * the extent, we get rid off all dirty pages. It could happen only if after last
                  * link is gone. */
@@ -5668,7 +5668,7 @@ int castle_cache_extent_flush_schedule(c_ext_id_t ext_id, uint64_t start,
 
     /* Get a reference on the complete extent space. Releases the reference after
      * completing the flush of the extent in castle_cache_extents_flush(). */
-    BUG_ON(MASK_ID_INVAL(entry->mask_id = castle_extent_get_all(ext_id)));
+    BUG_ON(MASK_ID_INVAL(entry->mask_id = castle_extent_all_masks_get(ext_id)));
 
     entry->ext_id = ext_id;
     entry->start  = start;

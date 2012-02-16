@@ -4032,7 +4032,7 @@ c_ext_mask_id_t castle_extent_get(c_ext_id_t ext_id)
  * @return  Pointer of extent, if SUCCESS
  *          NULL, if FAILURE
  */
-c_ext_mask_id_t castle_extent_get_all(c_ext_id_t ext_id)
+c_ext_mask_id_t castle_extent_all_masks_get(c_ext_id_t ext_id)
 {
     unsigned long flags;
     c_ext_mask_id_t mask_id;

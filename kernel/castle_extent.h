@@ -115,7 +115,7 @@ void                castle_extent_mask_put                  (c_ext_mask_id_t mas
 int                 castle_extent_free                      (c_ext_id_t     ext_id);
 c_ext_mask_id_t     castle_extent_get                       (c_ext_id_t     ext_id);
 void                castle_extent_put                       (c_ext_mask_id_t mask_id);
-c_ext_mask_id_t     castle_extent_get_all                   (c_ext_id_t     ext_id);
+c_ext_mask_id_t     castle_extent_all_masks_get             (c_ext_id_t     ext_id);
 void                castle_extent_put_all                   (c_ext_mask_id_t mask_id);
 #if 0
 void                castle_extent_current_mask              (c_ext_id_t     ext_id,
