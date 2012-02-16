@@ -8,6 +8,7 @@
 #include "castle_cache.h"
 #include "castle_btree.h"
 #include "castle_objects.h"
+#include "castle_systemtap.h"
 #include "castle.h"
 
 static unsigned int castle_fast_panic = 1;
@@ -545,8 +546,6 @@ static int castle_printk_ratelimit(c_printk_level_t level)
  * @also castle_printk_init()
  * @also castle_printk_fini()
  * @also castle_printk_ratelimit()
- *
- * @TODO castle-trace handler
  */
 void castle_printk(c_printk_level_t level, const char *fmt, ...)
 {
@@ -597,7 +596,8 @@ void castle_printk(c_printk_level_t level, const char *fmt, ...)
 
     spin_unlock_irqrestore(&printk_buf.lock, flags);
 
-    // @TODO castle-trace output here
+    /* Allow userspace code to hook in to printk messages. */
+    trace_CASTLE_PRINTK(level, tmp_buf);
 
     /* Only print warnings, errors and testing messages to the console. */
     if (level >= castle_printk_cons_level)
