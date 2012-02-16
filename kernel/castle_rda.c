@@ -39,7 +39,7 @@ typedef struct c_ssd_rda_state {
 static c_rda_spec_t castle_rda_1, castle_rda_2;
 
 /**
- * (Re)permute the array of castle_slave pointers, used to contruct the extent. Uses Fisher-Yates
+ * (Re)permute the array of castle_slave pointers, used to construct the extent. Uses Fisher-Yates
  * shuffle.
  *
  * Correctness experimentally validated as of 4c488c2459d8
@@ -64,7 +64,7 @@ static void castle_rda_slaves_shuffle(struct castle_slave **slaves_array, int nr
         slaves_array[i] = slaves_array[j];
         slaves_array[j] = tmp_slave;
     }
-    debug("Permuation:\n\t");
+    debug("Permutation:\n\t");
     for(i=0; i<nr_slaves; i++)
         debug("%u ", slaves_array[i]->uuid);
     debug("\n");
@@ -157,7 +157,7 @@ int castle_rda_space_reserve(c_rda_type_t            rda_type,
     int i;
 
     /* Space reserve can be done only for DEFAULT_RDA and SSD_ONLY_EXT. For SSD_RDA call
-     * this fucntion twice with both the RDA types. Before adding new RDA type verify this
+     * this function twice with both the RDA types. Before adding new RDA type verify this
      * function. */
     BUG_ON((rda_type != RDA_1) && (rda_type != RDA_2) && (rda_type != SSD_ONLY_EXT));
 
@@ -181,7 +181,7 @@ int castle_rda_space_reserve(c_rda_type_t            rda_type,
         return -EINVAL;
     }
 
-    /* We used to do the optimiztion "when allocating small extents, limit the number of disks, which
+    /* We used to do the optmisation "when allocating small extents, limit the number of disks, which
      * reduce the wasted space". Not doing this optimization for reservations anymore as it is fine to
      * over-reserve, as we reservations get destroyed after completing the task(ex: merge). */
 
@@ -270,7 +270,7 @@ void* castle_def_rda_extent_init(c_ext_t *ext,
     }
 
 #if 0
-    /* TODO: For the sake cleanness, implemented bruteforce. Improvize this code. */
+    /* TODO: For the sake cleanness, implemented brute-force. Improvise this code. */
     /* If we are not using all the slaves, then use the slaves for which we got reservations. */
     if (nr_slaves != state->nr_slaves && ext->pool)
     {
@@ -342,7 +342,7 @@ int castle_def_rda_next_slave_get(struct castle_slave **cs,
     BUG_ON(state->size <= chk_num);
     if (chk_num == state->prev_chk)
     {
-        /* Findout the victim slave and segregate it */
+        /* Find the victim slave and segregate it */
         castle_printk(LOG_ERROR, "Not yet ready for extent manager errors\n");
         BUG();
     }
@@ -362,7 +362,7 @@ int castle_def_rda_next_slave_get(struct castle_slave **cs,
     /* Advance the permutation index. */
     state->permut_idx++;
 
-    /* Remeber what chunk we've just dealt with. */
+    /* Remember what chunk we've just dealt with. */
     state->prev_chk = chk_num;
 
     return 0;

@@ -160,7 +160,7 @@ static void castle_mtree_entry_add(struct castle_btree_node *node,
                                                 MTREE_NODE_SIZE * C_BLK_SIZE);
     BUG_ON(BTREE_NODE_IS_LEAF(node) && CVT_NODE(cvt));
 
-    /* Make space for the new entry, noop if we are adding one at the end
+    /* Make space for the new entry, no-op if we are adding one at the end
        of the node */
     memmove(entry + 1, entry, sizeof(*entry) * (node->used - idx));
 

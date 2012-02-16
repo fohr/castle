@@ -149,7 +149,7 @@ static inline void _prefix##_hash_init(void)                                    
 
 /**
  * list_for_each_from - iterate over list of given type from the current point
- * @from:   curren point to start from
+ * @from:   current point to start from
  * @pos:    the &struct list_head to use as a loop cursor.
  * @head:   the head for your list.
  *
@@ -382,7 +382,7 @@ typedef struct castle_time_interval {
 } c_time_interval_t;
 
 /**
- * Reimplementation of a helper function for converting ns to timeval structure.
+ * Re-implementation of a helper function for converting ns to timeval structure.
  * Note that timeval is lower resolution than nsecs.
  */
 static inline struct timeval ns_to_timeval_private(const s64 nsec)
@@ -396,7 +396,7 @@ static inline struct timeval ns_to_timeval_private(const s64 nsec)
 }
 
 /**
- * Initialise timeval structure. Record NOW() as the start of the interval existance.
+ * Initialise timeval structure. Record NOW() as the start of the interval existence.
  */
 static inline void castle_time_interval_init(c_time_interval_t *interval)
 {
@@ -416,7 +416,7 @@ static inline void castle_time_interval_start(c_time_interval_t *interval)
 }
 
 /**
- * Finishes the activity period. Accouts the time delta (since start) into the total activity
+ * Finishes the activity period. Accounts the time delta (since start) into the total activity
  * period.
  */
 static inline void castle_time_interval_stop(c_time_interval_t *interval)
@@ -438,7 +438,7 @@ static inline void castle_time_interval_stop(c_time_interval_t *interval)
 }
 
 /**
- * Record the end of the interval existance. Note: no implicit @see castle_time_interval_stop().
+ * Record the end of the interval existence. Note: no implicit @see castle_time_interval_stop().
  */
 static inline void castle_time_interval_fini(c_time_interval_t *interval)
 {
@@ -475,7 +475,7 @@ static inline void castle_time_interval_print(c_printk_level_t printk_level,
 
 void        castle_counter_accumulating_reduce(c_val_tup_t *accumulator,
                                                c_val_tup_t delta_cvt,
-                                               int delta_ancestoral);
+                                               int delta_ancestral);
 int         castle_counter_simple_reduce(c_val_tup_t *accumulator, c_val_tup_t delta_cvt);
 
 void        castle_component_tree_prefetch(struct castle_component_tree *ct);

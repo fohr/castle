@@ -13,13 +13,13 @@ typedef struct castle_debug_watch {
 } cd_watch_t;
 
 struct castle_malloc_debug {
-    uint32_t cannary1;
+    uint32_t canary1;
     struct list_head list;
     uint32_t size;
     char *file;
     int vmalloced;
     int line;
-    uint32_t cannary2;
+    uint32_t canary2;
 };
 
 static spinlock_t           malloc_list_spinlock = SPIN_LOCK_UNLOCKED;
@@ -32,8 +32,8 @@ static cd_watch_t           watches[] = {{0x41, 0x3}};
 static int                  nr_watches = 0;
 static struct page        **watched_data;
 
-#define CANNARY1 0xabcd0123
-#define CANNARY2 0x456789ab
+#define CANARY1 0xabcd0123
+#define CANARY2 0x456789ab
 static void __castle_debug_dobj_add(struct castle_malloc_debug *dobj,
                                     size_t size,
                                     char *file,
@@ -42,12 +42,12 @@ static void __castle_debug_dobj_add(struct castle_malloc_debug *dobj,
 {
     /* Init all fields */
     INIT_LIST_HEAD(&dobj->list);
-    dobj->cannary1 = CANNARY1;
+    dobj->canary1 = CANARY1;
     dobj->file = file;
     dobj->line = line;
     dobj->size = size;
     dobj->vmalloced = vmalloced;
-    dobj->cannary2 = CANNARY2;
+    dobj->canary2 = CANARY2;
 
     /* Add ourselves to the list under lock */
     spin_lock_irq(&malloc_list_spinlock);
@@ -167,9 +167,9 @@ void castle_debug_free(void *obj)
     dobj = obj;
     dobj--;
 
-    if((dobj->cannary1 != CANNARY1) || (dobj->cannary2 != CANNARY2))
+    if((dobj->canary1 != CANARY1) || (dobj->canary2 != CANARY2))
     {
-        castle_printk(LOG_ERROR, "Cannaries dead, for %p, double free?\n", dobj);
+        castle_printk(LOG_ERROR, "Canaries dead, for %p, double free?\n", dobj);
         BUG();
     }
     /* Remove from list */
@@ -214,9 +214,9 @@ void castle_debug_vfree(void *obj)
 
     dobj = (struct castle_malloc_debug *)((char *)obj - PAGE_SIZE);
 
-    if((dobj->cannary1 != CANNARY1) || (dobj->cannary2 != CANNARY2))
+    if((dobj->canary1 != CANARY1) || (dobj->canary2 != CANARY2))
     {
-        castle_printk(LOG_ERROR, "Cannaries dead, for %p, double free?\n", dobj);
+        castle_printk(LOG_ERROR, "Canaries dead, for %p, double free?\n", dobj);
         BUG();
     }
      /* Remove from list */

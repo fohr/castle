@@ -94,7 +94,7 @@ static DECLARE_WAIT_QUEUE_HEAD (castle_da_promote_wq);  /**< castle_da_level0_mo
 module_param(castle_merges_abortable, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_merges_abortable, "Allow on-going merges to abort upon exit condition");
 
-/* We don't need to set upper/lower bounds for the promition frequency as values
+/* We don't need to set upper/lower bounds for the promotion frequency as values
  * < 2 will all results in RWCTs being promoted every checkpoint, while very
  * large values will result in RWCTs 'never' being promoted. */
 int                             castle_rwct_checkpoint_frequency = 10;  /**< Number of checkpoints
@@ -493,7 +493,7 @@ typedef struct castle_immut_iterator {
                                                    cached; if the call to iter_entry_find was moved
                                                    before the entry_get within immut_iter_next, it
                                                    will be unnecessary to save cached_idx         */
-    c2_block_t                   *next_c2b;   /**< node c2b to provide next entires               */
+    c2_block_t                   *next_c2b;   /**< node c2b to provide next entries               */
     int32_t                       next_idx;   /**< offset within next_c2b of first entry to return*/
     castle_immut_iter_node_start  node_start; /**< callback handler to fire whenever iterator moves
                                                    to a new node within the btree                 */
@@ -511,7 +511,7 @@ typedef struct castle_immut_iterator {
  * @param [in]  merge     merge structure pointer, which contains drain_exts list.
  *
  * @return >= 0 index
- *         -1   exent not found in drain_exts list
+ *         -1   extent not found in drain_exts list
  */
 static signed int castle_data_ext_should_drain(c_ext_id_t ext_id,
                                                struct castle_da_merge *merge)
@@ -536,7 +536,7 @@ static signed int castle_data_ext_should_drain(c_ext_id_t ext_id,
  *         -1   ct not found in in_trees list
  *
  * @note   Currently this function is only used by an iterator to identify the
- *         array index to use to propogate a valid extent boundary for the purpose
+ *         array index to use to propagate a valid extent boundary for the purpose
  *         of eventual shrinking. Though this resulted in less data structure sprawl,
  *         we could avoid calling this function by saving the index id somewhere because
  *         it would never change. Nevertheless, in practical terms, the cost of this
@@ -609,7 +609,7 @@ static int castle_ct_immut_iter_next_node_init(c_immut_iter_t *iter,
 
 /**
  * Returns the extent position of the next leaf node after the cep specified.
- * If one isn't avilable it returns the invalid position.
+ * If one isn't available it returns the invalid position.
  */
 static c_ext_pos_t castle_ct_immut_iter_next_node_cep_find(c_immut_iter_t *iter,
                                                            c_ext_pos_t cep,
@@ -761,7 +761,7 @@ static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
         BUG_ON(index < 0); /* Must have found the ct in the merge list */
         iter->merge->shrinkable_extent_boundaries.tree[index] = iter->curr_c2b->cep;
 
-        /* propogate latest MO ceps as valid extent boundaries */
+        /* propagate latest MO ceps as valid extent boundaries */
         memcpy(merge->shrinkable_extent_boundaries.data,
                merge->latest_mo_cep,
                sizeof(c_ext_pos_t) * merge->nr_drain_exts);
@@ -1519,7 +1519,7 @@ static void castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
     int nr_cmps = 0;
 
     /* Init the same_kv_head when the iterator is getting added to the tree.
-       This guaratees that its going to be read for use, when we detect (k,v) collision(s). */
+       This guarantees that its going to be read for use, when we detect (k,v) collision(s). */
     INIT_LIST_HEAD(&comp_iter->same_kv_head);
 
     /* Go until end of the tree. */
@@ -1553,7 +1553,7 @@ static void castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
             /* Both (key,version) pairs are equal. Here is how we deal with those:
              *
              * 1. Put the newest iterator (i.e. from the latest tree) in the rb_tree.
-             *    Older iterators with same (k,v) will _not_ be accesible in the tree directly.
+             *    Older iterators with same (k,v) will _not_ be accessible in the tree directly.
              * 2. Construct a list of iterators which cache same (k,v), rooted at the newest
              *    component iterator.same_kv_head. This list may contain both counter and
              *    non-counter CVTs.
@@ -1561,7 +1561,7 @@ static void castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
              *    one (i.e. from the latest tree).
              *
              * Component iterators are threaded onto a list headed by the newset iterator
-             * (same_kv list). This list is later used to construct responce for
+             * (same_kv list). This list is later used to construct response for
              * counters. Otherwise its thrown away.
              *
              * Component iterator pointers are used to determine the recency order.
@@ -1599,7 +1599,7 @@ static void castle_ct_merged_iter_rbtree_insert(c_merged_iter_t *iter,
 
     /* Link the node to tree. */
     rb_link_node(node, parent, p);
-    /* Set color and inturn balance the tree. */
+    /* Set color and in turn balance the tree. */
     rb_insert_color(node, root);
 }
 
@@ -1839,7 +1839,7 @@ static void castle_ct_merged_iter_consume(c_merged_iter_t *merged_iter,
     }
 
 drain_cached:
-    /* Drain the entires stored in 'cached_entry', by setting the cached flag to false.
+    /* Drain the entries stored in 'cached_entry', by setting the cached flag to false.
        If we are skipping, call skip on all component iterators. */
     list_for_each(l, &iter->same_kv_head)
     {
@@ -1923,7 +1923,7 @@ static c_val_tup_t castle_ct_merged_iter_counter_reduce(struct component_iterato
     if(castle_counter_simple_reduce(&accumulator, iter->cached_entry.cvt))
         return accumulator;
 
-    /* If the list same_kv list is emtpy, return too. */
+    /* If the list same_kv list is empty, return too. */
     if(list_empty(&iter->same_kv_head))
         return accumulator;
 
@@ -1932,7 +1932,7 @@ static c_val_tup_t castle_ct_merged_iter_counter_reduce(struct component_iterato
 
     /* Now accumulate the results one iterator at the time. */
     rb_entry = rb_first(&rb_root);
-    /* There was a check for emtpy same_kv list, so there should be something in the tree. */
+    /* There was a check for empty same_kv list, so there should be something in the tree. */
     BUG_ON(!rb_entry);
     do {
         iter = rb_entry(rb_entry, struct component_iterator, rb_node);
@@ -1970,7 +1970,7 @@ static c_val_tup_t castle_ct_merged_iter_timestamp_select(struct component_itera
        instead of this */
     BUG_ON(CVT_ANY_COUNTER(most_recent_object));
 
-    /* If the list same_kv list is emtpy, return now. */
+    /* If the list same_kv list is empty, return now. */
     if(list_empty(&iter->same_kv_head))
         return most_recent_object;
 
@@ -2534,7 +2534,7 @@ static inline int castle_da_rq_iter_ct_relevant(struct castle_da_cts_proxy_ct *p
  * be us at the bottom of this function, otherwise via the bloom filter lookup
  * callback, castle_da_rq_iter_relevant_ct_cb().
  *
- * @return  0       Succesfully allocated relevant_cts structure
+ * @return  0       Successfully allocated relevant_cts structure
  * @return -ENOMEM  Failed to allocate relevant_cts structure
  *
  * @also _castle_da_rq_iter_init()
@@ -2846,7 +2846,7 @@ static int castle_da_merge_cts_get(struct castle_double_array *da,
     if (i)
         return -EAGAIN;
 
-    /* Wait for RW refs to dissapear. Free the CT if it is empty after that. */
+    /* Wait for RW refs to disappear. Free the CT if it is empty after that. */
     for(i = 0; i < nr_trees; i++)
     {
         ct = cts[i];
@@ -3136,7 +3136,7 @@ static void castle_da_lfs_ct_init(struct castle_da_lfs_ct_t *lfs,
                                   c_chk_cnt_t data_size,
                                   int rwct)
 {
-    /* Setting up the strucuture, there shouldn't be any reserved space. */
+    /* Setting up the structure, there shouldn't be any reserved space. */
     BUG_ON(lfs->space_reserved);
 
     /* Save whether we are allocating RWCT. */
@@ -3196,7 +3196,7 @@ static int castle_da_lfs_ct_init_tree(struct castle_component_tree *ct,
                                        c_chk_cnt_t tree_size,
                                        c_chk_cnt_t data_size)
 {
-    /* We shouldnt be here, if the space is not already reserved. */
+    /* We shouldn't be here, if the space is not already reserved. */
     BUG_ON(!lfs->space_reserved);
 
     /* Space is already reserved, we should have had valid extents already. */
@@ -3208,7 +3208,7 @@ static int castle_da_lfs_ct_init_tree(struct castle_component_tree *ct,
         data_size > lfs->data_ext.size ||
         internal_tree_size > lfs->internal_ext.size)
     {
-        /* Reserved space is not enough. Free this space. And try to allcoate again.
+        /* Reserved space is not enough. Free this space. And try to allocate again.
          * Note: This can be made better by freeing only unmatched extents. */
         castle_extent_free(lfs->internal_ext.ext_id);
         castle_extent_free(lfs->tree_ext.ext_id);
@@ -3246,7 +3246,7 @@ static int castle_da_lfs_ct_init_tree(struct castle_component_tree *ct,
  * space is available.
  *
  * @param [inout] lfs           - Low Free Space structure.
- * @param [in]    is_realloc    - Is re-allocation (previoud allocation failed due to
+ * @param [in]    is_realloc    - Is re-allocation (previous allocation failed due to
  *                                low free space).
  * @param [in]    lfs_callback  - Callback to be used in case of low freespace.
  * @param [in]    lfs_data      - Data pointer to be used by callback.
@@ -3282,7 +3282,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
         return 0;
     }
 
-    /* Function shouldnt have been called, if space is already reserved. */
+    /* Function shouldn't have been called, if space is already reserved. */
     BUG_ON(lfs->space_reserved);
 
     debug("Allocating space for a ct for da: %u, and extents of size - %u, %u, %u\n",
@@ -3484,7 +3484,7 @@ no_space:
     /* End extent transaction. */
     castle_extent_transaction_end();
 
-    /* Incase of failure release free space. It is safe to call castle_extent_free as it doesnt
+    /* In case of failure release free space. It is safe to call castle_extent_free as it doesnt
      * try to get global extent lock again. */
     if (!EXT_ID_INVAL(internal_ext_id))
         castle_extent_free(internal_ext_id);
@@ -3603,7 +3603,7 @@ static void castle_da_lfs_merge_ct_growable_callback(void *data)
  *
  * @return  0       All extents allocated successfully
  * @return -ENOSPC  Failed to allocate all extents, LFS callback may have been
- *                  registered depdning on lfs_type
+ *                  registered depending on lfs_type
  *
  * @also castle_new_ext_freespace_init()
  */
@@ -3721,7 +3721,7 @@ static void castle_da_merge_res_pool_attach(struct castle_da_merge *merge)
     for (i=0; i<merge->nr_drain_exts; i++)
         castle_res_pool_extent_attach(merge->pool_id, merge->drain_exts[i]);
 
-    /* Attach output tree's tree extent and data extent to reservation pool, consume's space. */
+    /* Attach output tree's tree extent and data extent to reservation pool, consumes space. */
     castle_res_pool_extent_attach(merge->pool_id, merge->out_tree->tree_ext_free.ext_id);
     if (!EXT_ID_INVAL(merge->out_tree->data_ext_free.ext_id))
         castle_res_pool_extent_attach(merge->pool_id, merge->out_tree->data_ext_free.ext_id);
@@ -3907,7 +3907,7 @@ __again:
     merge->internals_on_ssds = lfs->internals_on_ssds;
     merge->leafs_on_ssds = lfs->leafs_on_ssds;
 
-    /* Done with lfs strcuture; reset it. */
+    /* Done with lfs structure; reset it. */
     castle_da_lfs_ct_reset(lfs);
 
     /* Allocate Bloom filters. */
@@ -3928,7 +3928,7 @@ __again:
 #define exit_cond (castle_da_exiting || castle_da_deleted(da))
 
 /**
- * Check if extent has enough space to accomodate the asked bytes. If not, grow the extent.
+ * Check if extent has enough space to accommodate the asked bytes. If not, grow the extent.
  * This function wouldn't increase the count of used bytes. If grow fails, just respond back
  * as failure. Doesn't block on low freespace.
  */
@@ -3973,7 +3973,7 @@ static int castle_da_merge_extent_grow(struct castle_da_merge *merge,
 }
 
 /**
- * Mark space as used. Extent should be big enough to accomodate the space. Somebody must
+ * Mark space as used. Extent should be big enough to accommodate the space. Somebody must
  * have already called the castle_da_merge_extent_grow(). BUG_ON if the space is not enough.
  */
 static void castle_da_merge_extent_space_consume(struct castle_da_merge  *merge,
@@ -4335,12 +4335,12 @@ static c_val_tup_t _castle_da_entry_add(struct castle_da_merge *merge,
 
     /* Compare the current key to the last key. Should never be smaller */
     /* key_compare() is a costly function. Trying to avoid duplicates. We already
-     * did comparision between last key added to the out_tree and current key in
+     * did comparison between last key added to the out_tree and current key in
      * snapshot_delete algorithm (in castle_da_entry_skip()). Reuse the result
      * of it here again. */
-    /* Note: In case of re-adds is_new_key doesnt represent comparision between key being
-     * added and last key added to the node. But, it repesents the comparision between last
-     * 2 keys added to the tree. Still, it is okay as in case of re-adds both the comparisions
+    /* Note: In case of re-adds is_new_key doesn't represent comparison between key being
+     * added and last key added to the node. But, it represents the comparison between last
+     * 2 keys added to the tree. Still, it is okay as in case of re-adds both the comparisons
      * yield same value. */
 
     key_cmp = (level->next_idx != 0) ?
@@ -4356,7 +4356,7 @@ static c_val_tup_t _castle_da_entry_add(struct castle_da_merge *merge,
         debug("Node valid_end_idx=%d, Case1.\n", level->next_idx);
         BUG_ON(level->valid_end_idx >= 0);
         /* Save last_key, version as a valid_version, and init valid_end_idx.
-           Note: last_key has to be taken from the node, bacuse current key pointer
+           Note: last_key has to be taken from the node, because current key pointer
                  may get invalidated on the iterator next() call.
          */
         level->valid_end_idx = 0;
@@ -4373,10 +4373,10 @@ static c_val_tup_t _castle_da_entry_add(struct castle_da_merge *merge,
         level->valid_version = 0;
     }
 #if 0
-    /* This is disabled now, because we don't want keys crossing the node boundries.
+    /* This is disabled now, because we don't want keys crossing the node boundaries.
        Otherwise counter accumulation may not work correctly on gets/rqs. */
     else
-    /* Case 3: Version is STRONGLY ancestoral to valid_version. */
+    /* Case 3: Version is STRONGLY ancestral to valid_version. */
     if(castle_version_is_ancestor(version, level->valid_version))
     {
         debug("Node valid_end_idx=%d, Case3.\n", level->next_idx);
@@ -4537,7 +4537,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
         /* If merge is completing, there shouldn't be any splits any more. */
         BUG_ON(merge->completing);
         btree->entry_get(node, node_idx,  &key, &version, &cvt);
-        debug("%s::[%p] spliting node at depth %d, cep "cep_fmt_str_nl,
+        debug("%s::[%p] splitting node at depth %d, cep "cep_fmt_str_nl,
                 __FUNCTION__, merge, depth, cep2str(node_c2b->cep));
         castle_da_entry_add(merge, depth, key, version, cvt, 1);
         node_idx++;
@@ -4561,7 +4561,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     if(merge->completing && (atomic_read(&merge->out_tree->tree_depth) == depth + 1))
     {
         /* Node c2b was set to NULL earlier in this function. When we are completing the merge
-           we should never have to create new nodes at the same lavel (i.e. there shouldn't be
+           we should never have to create new nodes at the same level (i.e. there shouldn't be
            any castle_da_entry_adds above). */
         BUG_ON(level->node_c2b);
         debug("Just completed the root node (depth=%d), at the end of the merge.\n",
@@ -4575,7 +4575,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     {
         c2_block_t *last_leaf_c2b = merge->last_leaf_node_c2b;
 
-        /* Release the refernece to the previous last node. */
+        /* Release the reference to the previous last node. */
         if (last_leaf_c2b)
         {
             /* The last_key pointer mustn't be pointing to the node any more. */
@@ -4776,13 +4776,13 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge, c_ext_pos
 /**
  * Complete merge process.
  *
- * Each level can have atmost one uncompleted node. Complete each node with the
+ * Each level can have at most one uncompleted node. Complete each node with the
  * entries we got now, and link the node to its parent. During this process, each
  * non-leaf node can get one extra entry in worst case. Mark valid_end_idx in each
  * level to used-1. And call castle_da_node_complete on every level, which would
  * complete the node and might add one entry in next higher level.
  *
- * @param merge [in, out] merge strucutre to be completed.
+ * @param merge [in, out] merge structure to be completed.
  *
  * @return ct Complete out tree
  *
@@ -4802,7 +4802,7 @@ static void castle_da_merge_complete(struct castle_da_merge *merge)
     /* Force the nodes to complete by setting next_idx negative. Valid node idx
        can be set to the last entry in the node safely, because it happens in
        conjunction with setting the version to 0. This guarantees that all
-       versions in the node are decendant of the node version. */
+       versions in the node are descendant of the node version. */
     for(i=0; i<MAX_BTREE_DEPTH; i++)
     {
         debug("Flushing at depth: %d\n", i);
@@ -4924,7 +4924,7 @@ static void castle_da_merge_cts_release(struct castle_da_merge *merge, int err)
     int i;
     struct castle_component_tree *out_tree = merge->out_tree;
 
-    /* Now, it is safe to release the last reference on unsuable trees. */
+    /* Now, it is safe to release the last reference on unusable trees. */
     /* Merge Succeeded. */
     if (!err)
     {
@@ -5292,20 +5292,20 @@ static void castle_da_counter_delete(struct castle_da_merge *merge,
         castle_printk(LOG_DEBUG, "Entry version is a direct child.\n");
         /* We reached a direct child (in this array) of the deleted version,
            do the accumulation, and update vars.
-           If the entry isn't a counter add, accumulation is a noop.
+           If the entry isn't a counter add, accumulation is a no-op.
          */
         child_version = entry_version;
         if(!CVT_ADD_COUNTER(entry_cvt))
             continue;
 
         castle_printk(LOG_DEBUG, "Entry cvt is an add.\n");
-        /* Accumulation is neccessary. Accumulate entry_cvt first. */
+        /* Accumulation is necessary. Accumulate entry_cvt first. */
         CVT_COUNTER_LOCAL_ADD_INIT(accumulator_cvt, 0);
         /* we don't support timestamped counters but let's explicitly set the timestamp field anyway */
         accumulator_cvt.user_timestamp = 0;
 
         ret = castle_counter_simple_reduce(&accumulator_cvt, entry_cvt);
-        /* We know that entry_cvt is an add, therefore accumulation musn't terminate. */
+        /* We know that entry_cvt is an add, therefore accumulation mustn't terminate. */
         BUG_ON(ret);
         /* Accumulate deleted cvt next. */
         castle_counter_simple_reduce(&accumulator_cvt, cvt);
@@ -5330,7 +5330,7 @@ static void castle_da_counter_delete(struct castle_da_merge *merge,
        valid extent boundaries into a single array of ceps. At this point we cannot drop
        the input tree extents because crash consistency is not yet guaranteed - for that
        we have to wait for...
-    4) castle_da_merge_serialise: when setting the merge state as checkpointable, propogate
+    4) castle_da_merge_serialise: when setting the merge state as checkpointable, propagate
        the extent boundary array into the serdes structure so that checkpoint can find them
        and call extent_shrink.
     5) merge_writeback: call extent_shrink.
@@ -5548,7 +5548,7 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
 
     /* No tv_resolver; rely on merge->is_new_key for serialisation control. */
     if(MERGE_CHECKPOINTABLE(merge) && !merge->tv_resolver)
-        castle_da_merge_serialise(merge, 0 /* not using tvr */, 69 /* wutever... */);
+        castle_da_merge_serialise(merge, 0 /* not using tvr */, 69 /* whatever... */);
 
     /* Make sure we got enough space for the entry_add() current cvt to be success. */
     while (castle_da_merge_space_reserve(merge, cvt))
@@ -5741,7 +5741,7 @@ static int castle_da_merge_unit_with_resolver_do(struct castle_da_merge *merge,
         /* We should always get a valid cvt. */
         BUG_ON(CVT_INVALID(cvt));
 
-        /* Flush the resolver on new key boundry. Then serialise. */
+        /* Flush the resolver on new key boundary. Then serialise. */
         if(castle_dfs_resolver_is_new_key_check(merge->tv_resolver, key))
         {
             int ret;
@@ -5752,7 +5752,7 @@ static int castle_da_merge_unit_with_resolver_do(struct castle_da_merge *merge,
                 return ret;
         }
 
-        /* Record the iterator state if neccessary. */
+        /* Record the iterator state if necessary. */
         if (MERGE_CHECKPOINTABLE(merge))
             castle_da_merge_serialise(merge, 1 /* using tvr */, 0 /* not a new key */);
 
@@ -5855,7 +5855,7 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
                                                    atomic64_read(&in_trees[i]->nr_bytes));
 
     /* Sanity checks. Now, we do allow merge on single tree for the sake of
-     * snaphsot delete and data extents compaction. */
+     * snapshot delete and data extents compaction. */
     BUG_ON(nr_trees < 1);
 
     /* Work out what type of trees are we going to be merging. Bug if in_trees don't match. */
@@ -5992,7 +5992,7 @@ deser_done:
      * error_out.
      */
 
-    /* This is very importnat to be write locked, as the requests need to see consistent view
+    /* This is very important to be write locked, as the requests need to see consistent view
      * mergable state of DA. */
     write_lock(&da->lock);
 
@@ -6482,7 +6482,7 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge, int using_t
         if( is_new_key )
         {
             /* Here we need something stronger than serdes mutex because we want to guarantee
-               synchronization btwn merge serdes state, version stats, ct stats etc. */
+               synchronization between merge serdes state, version stats, ct stats etc. */
             CASTLE_TRANSACTION_BEGIN;
             /* Take serdes lock for consistency too. */
             mutex_lock(&merge->serdes.mutex);
@@ -6570,7 +6570,7 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge, int using_t
     {
         /* state 2,1 -- this is usually the most common case. */
 
-        /* Noop: Wait for checkpoint to write existing serialisation point before updating it.
+        /* No-op: Wait for checkpoint to write existing serialisation point before updating it.
            This code branch is entered once per merge key... at the moment the cost is one atomic
            read, BUG_ONs aside.
         */
@@ -6646,7 +6646,7 @@ static void castle_da_merge_marshall(struct castle_dmserlist_entry *merge_mstore
         /* There are 'completed' flags for each immut iterator within c_immut_iter_t and also
            c_merged_iter_t. This seems like a duplicate so we serialise only 1 and restore the other
            on deserialisation. If the following BUGs, then the completed flags can have different
-           states at serialisation boundary, which means we have to handle both seperately. */
+           states at serialisation boundary, which means we have to handle both separately. */
         BUG_ON(curr_immut->completed != curr_comp->completed);
         in_tree_merge_mstore[i].iter.component_completed         = curr_comp->completed;
         in_tree_merge_mstore[i].iter.component_cached            = curr_comp->cached;
@@ -6855,7 +6855,7 @@ static c2_block_t* castle_da_merge_des_out_tree_c2b_write_fetch(struct castle_da
 /**
  * Deserialise merge structure
  *
- * @param merge [out] structure into which state is unpackeded, and if error set 'deserialising'
+ * @param merge [out] structure into which state is unpacked, and if error set 'deserialising'
  *        flag to 0
  * @param da [in] doubling array containing in-flight merge state
  * @param level [in] merge level in doubling array containing in-flight merge state
@@ -7156,7 +7156,7 @@ static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_bytes)
         return ret;
     }
 
-    /* If merge is terminating due to successfull completion, or an error
+    /* If merge is terminating due to successful completion, or an error
        do the remaining work under transaction lock in order not to race with checkpoint. */
     CASTLE_TRANSACTION_BEGIN;
 
@@ -7188,7 +7188,7 @@ static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_bytes)
  *  - DA is marked for compaction
  *  - There is a ongoing merge unit at a level above
  *
- * IMPORTANT: this function has side effect of increamenting ongoing merges counter,
+ * IMPORTANT: this function has side effect of incrementing ongoing merges counter,
  *            this happens iff the wait is supposed to terminate (non-zero return from
  *            this function).
  *
@@ -7581,11 +7581,11 @@ static void castle_da_merges_print(struct castle_double_array *da)
         if(!print && (da->levels[level].nr_trees == 0))
             continue;
         print = 1;
-        castle_printk(LOG_INFO, " level[%.2d]: nr_trees=%d, units_commited=%.3d,"
+        castle_printk(LOG_INFO, " level[%.2d]: nr_trees=%d, units_committed=%.3d,"
               " active_token_dl=%.2d, driver_token_dl=%.2d\n",
               level,
               da->levels[level].nr_trees,
-              da->levels[level].merge.units_commited,
+              da->levels[level].merge.units_committed,
               da->levels[level].merge.active_token ?
                 da->levels[level].merge.active_token->driver_level : 0,
               da->levels[level].merge.driver_token ?
@@ -7833,7 +7833,7 @@ void castle_da_write_rate_check(struct castle_double_array *da, uint32_t nr_byte
     if (da->levels[1].nr_trees >= 4 * castle_double_array_request_cpus())
     {
         set_bit(CASTLE_DA_INSERTS_BLOCKED_ON_MERGE, &da->flags);
-        /* Note: This could be starving ios, unncessary long time. Fix it. */
+        /* Note: This could be starving ios, unnecessary long time. Fix it. */
         throttle_time = 0; /* in micro seconds. */
         goto throttle_ios;
     }
@@ -8254,7 +8254,7 @@ static void castle_ct_large_objs_remove(struct list_head *lo_list_head)
 {
     struct list_head *lh, *tmp;
 
-    /* no need of lock. Called from castle_ct_put. There shouldnt be any parallel operations. */
+    /* no need of lock. Called from castle_ct_put. There shouldn't be any parallel operations. */
     list_for_each_safe(lh, tmp, lo_list_head)
         __castle_ct_large_obj_remove(lh);
 }
@@ -9001,7 +9001,7 @@ static int castle_da_ct_dealloc(struct castle_double_array *da,
 
 static int _castle_da_merge_dealloc(struct castle_da_merge *merge, void *unused)
 {
-    castle_da_merge_dealloc(merge, -ESHUTDOWN, 0/* Not in transction. */);
+    castle_da_merge_dealloc(merge, -ESHUTDOWN, 0/* Not in transaction. */);
 
     return 0;
 }
@@ -9078,7 +9078,7 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
 
     mstores = (struct castle_da_writeback_mstores *)mstores_p;
 
-    /* Partial merge output tree is being cehckpointed using merge serialisation. */
+    /* Partial merge output tree is being checkpointed using merge serialisation. */
     /* FIXME: Move that to here. */
     if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags))
         return 0;
@@ -9220,7 +9220,7 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge,
     /* Writeback data extents. */
     castle_ct_data_exts_writeback(ct, mstores->data_exts_maps_store);
 
-    /* flush and shrink extents if neccesary */
+    /* flush and shrink extents if necessary */
     if(current_state == VALID_AND_FRESH_DAM_SERDES)
     {
         c_merge_serdes_state_t new_state;
@@ -9311,7 +9311,7 @@ static int castle_da_writeback(struct castle_double_array *da, void *mstores_p)
 
     castle_da_marshall(&mstore_dentry, da);
 
-    /* Writeback is happening under CASTLE_TRANSACTION LOCK, which guarentees no
+    /* Writeback is happening under CASTLE_TRANSACTION LOCK, which guarantees no
      * addition/deletions to component tree list, no need of DA lock here. */
     __castle_da_foreach_tree(da, castle_da_tree_writeback, mstores);
 
@@ -9601,8 +9601,8 @@ static int _castle_sysfs_ct_add(struct castle_component_tree *ct, void *_unused)
     if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags))
         return 0;
 
-    /* Don't add T0s to sysfs. This is definetly not possible when DA is being created. As, the
-     * parent doesnt exist yet. */
+    /* Don't add T0s to sysfs. This is definitely not possible when DA is being created. As, the
+     * parent doesn't exist yet. */
     if (ct->level < 2)
         return 0;
 
@@ -9708,7 +9708,7 @@ static int castle_da_merge_deser_mstore_outtree_recover(void)
                                  "complete ct, seq %d\n",
                                  __FUNCTION__, da_id, level, merge->out_tree->seq);
         set_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &merge->out_tree->flags);
-        /* the difference btwn unmarshalling a partially complete in-merge ct and a "normal" ct is
+        /* the difference between unmarshalling a partially complete in-merge ct and a "normal" ct is
            unlike a normal ct, a partially complete in-merge ct does not get added to a DA through
            cct_add(da, ct, NULL, 1). */
 
@@ -10014,7 +10014,7 @@ int castle_double_array_read(void)
         ct = castle_component_tree_get(mstore_loentry.ct_seq);
         if (!ct)
         {
-            castle_printk(LOG_ERROR, "Found zombi Large Object(%llu, %u)\n",
+            castle_printk(LOG_ERROR, "Found zombie Large Object(%llu, %u)\n",
                     mstore_loentry.ext_id, mstore_loentry.ct_seq);
             BUG();
         }
@@ -11585,7 +11585,7 @@ void castle_double_array_submit(c_bvec_t *c_bvec)
 {
     struct castle_double_array *da = c_bvec->c_bio->attachment->col.da;
 
-    /* orig_complete should be null it is for our privte use */
+    /* orig_complete should be null it is for our private use */
     BUG_ON(c_bvec->orig_complete);
 
     if (c_bvec_data_dir(c_bvec) == READ)
@@ -11826,7 +11826,7 @@ void castle_double_array_merges_fini(void)
 {
     castle_da_exiting = 1;
 
-    /* Write memory barried to make sure all threads see castle_da_exiting. */
+    /* Write memory barrier to make sure all threads see castle_da_exiting. */
     wmb();
 
     castle_da_hash_iterate(castle_da_merge_restart, NULL);
@@ -11908,12 +11908,12 @@ void castle_da_destroy_complete(struct castle_double_array *da)
 
             ct = list_entry(l, struct castle_component_tree, da_list);
 
-            /* There should be no out-standing merges. */
+            /* There should be no outstanding merges. */
             BUG_ON(ct->merge || !MERGE_ID_INVAL(ct->merge_id));
 
             castle_sysfs_ct_del(ct);
 
-            /* No out-standing merges and active attachments. Componenet Tree
+            /* No outstanding merges and active attachments. Component Tree
              * shouldn't be referenced any-where. */
             BUG_ON(atomic_read(&ct->ref_count) != 1);
             BUG_ON(atomic_read(&ct->write_ref_count));
@@ -12414,7 +12414,7 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
         BUG_ON(k != merge_cfg->nr_data_exts);
 
         /* FIXME: There could be duplicate data extents in this list, if we allow multiple
-         * CTs refering same data extent. Review the code once. */
+         * CTs referring same data extent. Review the code once. */
     }
 
     /* Check if any of the data extents are not valid. */

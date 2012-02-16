@@ -1116,7 +1116,7 @@ void castle_bloom_unmarshall(castle_bloom_t *bf, struct castle_clist_entry *ctm)
 #endif
 }
 
-/* Marshalling/unmarshalling of bloom_build_params handled seperately because they are only needed
+/* Marshalling/unmarshalling of bloom_build_params handled separately because they are only needed
    for SERDES of in-flight DA merges (as part of the incomplete output tree) */
 
 void castle_bloom_build_param_marshall(struct castle_bbp_entry *bbpm,

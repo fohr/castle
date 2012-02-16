@@ -774,7 +774,7 @@ static int castle_back_stateful_op_prod(struct castle_back_stateful_op *stateful
     BUG_ON(stateful_op->cancel_on_op_complete);
     BUG_ON(!stateful_op->in_use);
 
-    /* If there is a ongoing operation, dont go further. */
+    /* If there is a ongoing operation, don't go further. */
     if (stateful_op->curr_op != NULL)
     {
         /* Should never expire with a ongoing operation. */
@@ -790,7 +790,7 @@ static int castle_back_stateful_op_prod(struct castle_back_stateful_op *stateful
         return 0;
     }
 
-    /* Queue is not empty. Few oustanding(no ongoing) ops. Shouldn't expire. */
+    /* Queue is not empty. Few outstanding(no ongoing) ops. Shouldn't expire. */
     castle_back_stateful_op_disable_expire(stateful_op);
 
     /* take an op off the queue and process it */
@@ -1012,7 +1012,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn,
 
     if (key_len != (bkey->length + 4))
     {
-        error("Buffer length(%u) doesnt match with key length(%u)\n", key_len, bkey->length+4);
+        error("Buffer length(%u) doesn't match with key length(%u)\n", key_len, bkey->length+4);
         err = -EINVAL;
         goto err1;
     }
@@ -1503,7 +1503,7 @@ static void castle_back_remove_complete(struct castle_object_replace *replace, i
     if (!err)
     {
         atomic64_inc(&op->attachment->put.ios);
-        /* Replacing with Tomb Stone. Dont increment bytes. */
+        /* Replacing with Tomb Stone. Don't increment bytes. */
     }
 
     castle_free(replace->key);

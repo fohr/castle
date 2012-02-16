@@ -67,7 +67,7 @@ int castle_vmap_fast_map_init(void)
         if (!castle_vmap_freelist)
         {
             debug("castle_vmap_fast_map_init freelist vmalloc/vmap failure\n");
-            /* Before we error out, delete the freelists sucessfully allocated so far, if any */
+            /* Before we error out, delete the freelists successfully allocated so far, if any */
             while (--freelist_bucket_idx)
             {
                 castle_vmap_freelist_t *freelist;
@@ -362,7 +362,7 @@ void castle_vmap_fast_unmap(void *vaddr, int nr_pages)
 }
 
 /**
- * Grow a vmap freelist, by insertinga new, larger freelist at the head of the bucket.
+ * Grow a vmap freelist, by inserting a new, larger freelist at the head of the bucket.
  *
  * @param castle_vmap_freelist  The old freelist to be re-checked under the bucket lock.
  * @param freelist_bucket_idx   The freelist bucket index to be grown.

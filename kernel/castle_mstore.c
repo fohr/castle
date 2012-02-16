@@ -87,7 +87,7 @@ again:
     c2b = NULL;
     debug("Advancing the iterator.\n");
 
-    /* Ignore attemts to advance completed iterator */
+    /* Ignore attempts to advance completed iterator */
     if(!iter->node_c2b)
         return;
 
@@ -390,7 +390,7 @@ struct castle_mstore* castle_mstore_init(c_mstore_id_t store_id)
 
     /* Initialise the first node. */
     debug("Initialising first list node.\n");
-    /* Lock (even though noone knows about this store yet), since node_add() checks. */
+    /* Lock (even though no-one knows about this store yet), since node_add() checks. */
     down(&store->mutex);
     castle_mstore_node_add(store);
     up(&store->mutex);

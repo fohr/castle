@@ -18,7 +18,7 @@ void castle_netlink_fini(void);
    to overlap with IOCTL command ids. */
 #define CASTLE_EVENT_SPINUP                 (128)
 #define CASTLE_EVENT_SPINDOWN               (129)
-#define CASTLE_EVENT_TRANFSER_FINISHED      (130)
+#define CASTLE_EVENT_TRANSFER_FINISHED      (130)
 
 #define CASTLE_EVENT_NEW_TREE_ADDED         (131)
 #define CASTLE_EVENT_MERGE_WORK_FINISHED    (132)

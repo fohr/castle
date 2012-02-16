@@ -17,7 +17,7 @@ extern "C" {
 #define CASTLE_PROTOCOL_VERSION 34 /* last updated by VV */
 
 #ifdef SWIG
-#define PACKED               //overide gcc intrinsics for SWIG
+#define PACKED               //override gcc intrinsics for SWIG
 #else
 #define PACKED               __attribute__((packed))
 #endif
@@ -238,7 +238,7 @@ typedef struct castle_merge_config {
     c_array_id_t           *arrays;             /**< List of arrays.                            */
     uint32_t                nr_data_exts;       /**< Number of medium extents in this array.    */
     c_data_ext_id_t        *data_exts;          /**< List of medium extents.                    */
-    c_rda_type_t            metadata_ext_type;  /**< Type of the extent that the output metdata *
+    c_rda_type_t            metadata_ext_type;  /**< Type of the extent that the output metadata *
                                                   *< to go. (SSD_RDA/DEFAULT_RDA/SSD_ONLY_EXT)  */
     c_rda_type_t            data_ext_type;      /**< Type of the extent that medium objects     *
                                                   *< to go. (SSD_RDA/DEFAULT_RDA/SSD_ONLY_EXT)  */
@@ -677,7 +677,7 @@ enum {
  * Castle B-Tree key. No pointers.
  *
  * Each dim_head(one per dimension) contains 8-bits for flags(lower bits) and remaining
- * 24 bits for offset of the payload. Payloads continue immediatly after dim_head array.
+ * 24 bits for offset of the payload. Payloads continue immediately after dim_head array.
  */
 typedef struct castle_var_length_btree_key {
     /* align:   4 */
@@ -999,7 +999,7 @@ struct castle_fs_superblock_public {
     /*         12 */ uint32_t uuid;
     /*         16 */ uint32_t version;   /* Super chunk format version */
     /*         20 */ uint32_t salt;
-    /*         24 */ uint32_t peper;
+    /*         24 */ uint32_t pepper;
     /*         28 */ uint32_t checksum;
     /*         32 */ uint8_t  _unused[96];
     /*        128 */
@@ -1064,7 +1064,7 @@ enum castle_error_codes
 #define CASTLE_SLAVE_GHOST_BIT           2 /* Slave is missing or invalid (on reboot) */
 #define CASTLE_SLAVE_REMAPPED_BIT        3 /* Slave has been remapped */
 #define CASTLE_SLAVE_CLAIMING_BIT        4 /* Slave is not yet available for use (in castle_claim) */
-#define CASTLE_SLAVE_BDCLAIMED_BIT       5 /* Slave has been bd_claim'ed. */
+#define CASTLE_SLAVE_BDCLAIMED_BIT       5 /* Slave has been bd_claimed. */
 #define CASTLE_SLAVE_ORDERED_SUPP_BIT    6 /* Slave supports ordered writes. */
 #define CASTLE_SLAVE_SYSFS_BIT           7 /* Slave has sysfs entry. */
 

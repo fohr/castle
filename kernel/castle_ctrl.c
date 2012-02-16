@@ -186,7 +186,7 @@ err_out:
  * @return -EUNATCH     Version is attached
  * @return -EFBIG       Global version limit reached
  * @return -E2BIG       Per-DA live version limit reached
- * @return -EEXIST      Non-existant parent
+ * @return -EEXIST      Non-existent parent
  * @return -ENOMEM      Allocation failure
  */
 void castle_control_clone(c_ver_t version, int *ret, c_ver_t *clone)
@@ -296,7 +296,7 @@ int castle_attachments_writeback(void)
         return -ENOMEM;
 
     /* Note: Shouldn't take attachments lock here. Writeback function can sleep.
-     * This function should be called in CASTLE_TRANSACTION and it guarentees
+     * This function should be called in CASTLE_TRANSACTION and it guarantees
      * no changes to attachments list. */
     /* Writeback attachments. */
     list_for_each(lh, &castle_attachments.attachments)
@@ -495,7 +495,7 @@ void castle_control_collection_reattach(c_collection_id_t  collection,
     /* Send an event to userspace. */
     castle_events_collection_reattach(ca->col.id, new_version);
 
-    /* Put the temparary attachment reference. */
+    /* Put the temporary attachment reference. */
     castle_attachment_put(ca);
 
     *ret = 0;
@@ -521,7 +521,7 @@ void castle_control_collection_detach(c_collection_id_t  collection,
     /* Release reference. */
     castle_attachment_put(ca);
 
-    /* Release transaction lock, we dont want to block on attachment delete with the lock. */
+    /* Release transaction lock, we don't want to block on attachment delete with the lock. */
     CASTLE_TRANSACTION_END;
 
     /* Complete free. This would block until attachment is removed. */
@@ -577,7 +577,7 @@ void castle_control_collection_snapshot(c_collection_id_t collection,
 
 /**
  * Marks a version for delete. Attached version couldn't be marked for deletion.
- * Data gets deleted during merges (or occassional compaction).
+ * Data gets deleted during merges (or occasional compaction).
  *
  * @param version [in] Version to delete.
  * @param ret [out] Returns non-zero on failure.
@@ -832,7 +832,7 @@ static void castle_thread_priority_set(struct work_struct *work)
 /**
  * Set nice value for all threads in a WQ to global nice value.
  *
- * This function just schedules the priority_set() whihc would change the
+ * This function just schedules the priority_set() which would change the
  * priority later.
  */
 void castle_wq_priority_set(struct workqueue_struct *wq)
@@ -888,7 +888,7 @@ void castle_control_thread_priority(int nice_value, int *ret)
     /* Change nice value for DA threads. */
     castle_da_threads_priority_set(nice_value);
 
-    /* Casatle back threads. */
+    /* Castle back threads. */
     castle_wq_priority_set(castle_back_wq);
 
     /* B-Tree work queues. */
@@ -1161,7 +1161,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
             ioctl.merge_start.ret = castle_merge_start(merge_cfg, &ioctl.merge_start.merge_id, -1);
 
-            /* Incase of SUCCESS don't free data_exts. */
+            /* In case of SUCCESS don't free data_exts. */
             merge_cfg->data_exts = NULL;
 err_out:
             castle_check_free(merge_cfg->data_exts);

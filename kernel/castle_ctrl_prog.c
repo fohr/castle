@@ -163,7 +163,7 @@ static void castle_ctrl_prog_work_do(void *unused)
         case CTRL_PROG_NOT_PRESENT:
             castle_printk(LOG_USERINFO, "Startup ctrl prog.\n");
             castle_ctrl_prog_touch();
-            /* If the nugget_disbaled parameter is set, don't send event to start nugget. */
+            /* If the nugget_disabled parameter is set, don't send event to start nugget. */
             if (!castle_nugget_disabled)
             {
                 do_gettimeofday(&tv);

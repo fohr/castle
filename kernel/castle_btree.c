@@ -247,7 +247,7 @@ void castle_btree_lub_find(struct castle_btree_node *node,
         one exists). Going this direction keys increase and versions go from newest to
         oldest.
         Set the insertion_index as soon as we find a key greater than what we are looking
-        for, or if equal keys, when the version is ancestoral (then insert_idx == lub_idx).
+        for, or if equal keys, when the version is ancestral (then insert_idx == lub_idx).
      */
     insert_idx = -1;
     for(lub_idx=high; lub_idx < node->used; lub_idx++)
@@ -466,8 +466,8 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
         int          need_move, disabled;
 
         disabled = btree->entry_get(node, i, &entry_key, &entry_version, &entry_cvt);
-        /* Check if slot->version is ancestoral to version. If not,
-           reject straigt away. */
+        /* Check if slot->version is ancestral to version. If not,
+           reject straight away. */
         if(!castle_version_is_ancestor(entry_version, version))
             continue;
 
@@ -612,13 +612,13 @@ static c2_block_t* castle_btree_node_key_split(c_bvec_t *c_bvec,
        * entries get inserted in version v', which is descendant of v
        * node becomes full, and a new node gets version split in version v',
          in the process all entries in v' get disabled in the original node
-       * v' gets snapshot deleted, and v becames writable again
+       * v' gets snapshot deleted, and v becomes writable again
        * a new write reaches the node, and since the version of the node is
          identical to the version of the insert, effective node is not created
-         (this is deamed to be pointless, which, in most circumstances it is)
+         (this is deemed to be pointless, which, in most circumstances it is)
        * key split is called on the node, but it turns out that all entries in [0, nr_moved-1]
          range are disabled. This produces empty sec node.
-       This could be handled, but since it is so unlikely to happen the distabilisation
+       This could be handled, but since it is so unlikely to happen the destabilisation
        due to such handlers is more risky.
        However, an explicit test to catch such case needs to be in place. */
     BUG_ON(j == 0);
@@ -676,9 +676,9 @@ static void castle_btree_slot_insert(c2_block_t  *c2b,
        (version == node->version))
     {
         /* In leaf nodes the element we are replacing MUST be a leaf pointer,
-           because lub_version is strictly ancestoral to the node version.
-           It implies that the key hasn't been insterted here, because
-           keys are only inserted to weakly ancestoral nodes */
+           because lub_version is strictly ancestral to the node version.
+           It implies that the key hasn't been inserted here, because
+           keys are only inserted to weakly ancestral nodes */
         /* Replace the slot */
         btree->entry_replace(node, index, key, version, cvt);
         dirty_c2b(c2b);
@@ -822,7 +822,7 @@ static int castle_btree_node_split(c_bvec_t *c_bvec)
         BUG_ON(split_node->version != c_bvec->version);
         /* Work out whether to take the split node for the further btree walk.
            Since in the effective & split node there is at most one version
-           for each key, and this version is ancestoral to what we are
+           for each key, and this version is ancestral to what we are
            looking for, it's enough to check if the last entry in the
            split node (that's the node that contains left hand side elements
            from the original effective node) is greater-or-equal to the block
@@ -830,7 +830,7 @@ static int castle_btree_node_split(c_bvec_t *c_bvec)
         btree->entry_get(split_node, split_node->used-1, &max_split_key, NULL, NULL);
         if(btree->key_compare(max_split_key, key) >= 0)
         {
-            debug("Retaing the split node.\n");
+            debug("Retaining the split node.\n");
             retain_c2b = split_c2b;
         }
     }
@@ -1683,7 +1683,7 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
                 return castle_btree_iter_version_leaf_process(c_iter);
 
              /* If we are enumerating all entries for a particular version,
-               fin the occurance of the next key. */
+               find the occurrence of the next key. */
             BUG_ON(VERSION_INVAL(c_iter->version));
             castle_btree_lub_find(node, c_iter->next_key.key, c_iter->version, &index, NULL);
             iter_debug("Node index=%d\n", index);
@@ -2104,7 +2104,7 @@ static int castle_rq_iter_node_start(c_iter_t *c_iter)
 }
 
 /**
- * Resets all counter accumulation variables stored in rq_iter struture to their default
+ * Resets all counter accumulation variables stored in rq_iter structure to their default
  * values (NULLs, -1s).
  */
 static void castle_rq_iter_counter_reset(c_rq_iter_t *rq_iter)
@@ -2116,10 +2116,10 @@ static void castle_rq_iter_counter_reset(c_rq_iter_t *rq_iter)
 }
 
 /**
- * Terminates counter accumulation, by updating the counter in the buffer and reserting
+ * Terminates counter accumulation, by updating the counter in the buffer and resetting
  * all the counter accumulation variables in rq_iter.
  *
- * If accumulation isn't being performed this function is a noop.
+ * If accumulation isn't being performed this function is a no-op.
  */
 static void castle_rq_iter_counter_accum_fini(c_rq_iter_t *rq_iter)
 {
@@ -2153,7 +2153,7 @@ static void castle_rq_iter_counter_accum_fini(c_rq_iter_t *rq_iter)
  * It terminates the accumulation if a counter set, or an non-counter is encountered.
  * It also terminates on accumulating counters (in the case of RW trees).
  *
- * If accumulation isn't being performed this function is a noop.
+ * If accumulation isn't being performed this function is a no-op.
  */
 static void castle_rq_iter_counter_accum_continue(c_rq_iter_t *rq_iter,
                                                   c_val_tup_t cvt)
@@ -2187,7 +2187,7 @@ static void castle_rq_iter_counter_accum_continue(c_rq_iter_t *rq_iter,
  * All accumulation variables are initialised on the basis of the current state of the
  * enumerator, and the cvt provided.
  *
- * If the accumulation is trivialy terminable (either on counter sets, or on
+ * If the accumulation is trivially terminable (either on counter sets, or on
  * accumulating counters), it terminates.
  */
 static void castle_rq_iter_counter_accum_init(c_rq_iter_t *rq_iter, c_val_tup_t cvt)
@@ -2452,7 +2452,7 @@ void castle_rq_iter_init(c_rq_iter_t *rq_iter, c_ver_t version,
     rq_debug("New Iterator - %p\n", iter);
 
     return;
-    /* @TODO: do we need to handle out of memory condidions better than with BUG_ON? */
+    /* @TODO: do we need to handle out of memory conditions better than with BUG_ON? */
 #if 0
 no_mem:
     rq_iter->err = -ENOMEM;

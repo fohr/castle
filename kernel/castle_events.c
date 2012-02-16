@@ -264,7 +264,7 @@ int castle_uevent(struct kobj_uevent_env *env)
         return -EINVAL;
     }
 
-    /* Send genetlink multicast message to notify appplications */
+    /* Send genetlink multicast message to notify applications */
     result = genlmsg_end(skb, msg_header);
 
     if (result < 0)

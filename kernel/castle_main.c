@@ -90,7 +90,7 @@ static void USED castle_fs_superblock_print(struct castle_fs_superblock *fs_sb)
            fs_sb->pub.uuid,
            fs_sb->pub.version,
            fs_sb->pub.salt,
-           fs_sb->pub.peper);
+           fs_sb->pub.pepper);
 }
 
 static int castle_fs_superblock_validate(struct castle_fs_superblock *fs_sb)
@@ -177,7 +177,7 @@ static void castle_fs_superblock_init(struct castle_fs_superblock *fs_sb)
     } while (fs_sb->pub.uuid == 0);
     fs_sb->pub.version = CASTLE_FS_VERSION;
     get_random_bytes(&fs_sb->pub.salt,  sizeof(fs_sb->pub.salt));
-    get_random_bytes(&fs_sb->pub.peper, sizeof(fs_sb->pub.peper));
+    get_random_bytes(&fs_sb->pub.pepper, sizeof(fs_sb->pub.pepper));
     for(i=0; i<sizeof(fs_sb->mstore) / sizeof(c_ext_pos_t ); i++)
         fs_sb->mstore[i] = INVAL_EXT_POS;
 
@@ -273,7 +273,7 @@ int castle_new_ext_freespace_init(c_ext_free_t           *ext_free,
     uint32_t nr_chunks;
     c_ext_id_t ext_id;
 
-    /* Calculate the number of chunks requried. */
+    /* Calculate the number of chunks required. */
     nr_chunks = ((size - 1) / C_CHK_SIZE) + 1;
     /* Try allocating the extent of the requested size. */
     ext_id = castle_extent_alloc(castle_get_rda_lvl(),
@@ -289,7 +289,7 @@ int castle_new_ext_freespace_init(c_ext_free_t           *ext_free,
     /* Initialise the freespace structure. */
     castle_ext_freespace_init(ext_free, ext_id);
 
-    /* Succees. */
+    /* Success. */
     return 0;
 }
 
@@ -593,7 +593,7 @@ int castle_fs_init(void)
 
     /*
      * Search for best common fs version. This is the greatest fs version that is supported
-     * by preferrably (1) all the slaves, or less preferrably (2) all bar one of the slaves.
+     * by preferably (1) all the slaves, or less preferably (2) all bar one of the slaves.
      */
     last = 0;
     while (!bcv)
@@ -1565,7 +1565,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     if (err)
     {
         castle_printk(LOG_WARN,
-                      "Block device %s dosen't support ordered writes. "
+                      "Block device %s doesn't support ordered writes. "
                       "Crash consistency cannot be guaranteed.\n",
                       __bdevname(dev, b));
     }
@@ -2606,11 +2606,11 @@ static void __exit castle_exit(void)
 {
     castle_printk(LOG_INIT, "Castle FS exit.\n");
 
-    /* Note: Doesnt seem like clean design. Revisit - BM.*/
+    /* Note: Doesn't seem like clean design. Revisit - BM.*/
     castle_double_array_inserts_enable();
 
     castle_fs_exiting = 1;
-    /* Remove externaly visible interfaces. Starting with the control file
+    /* Remove externally visible interfaces. Starting with the control file
        (so that no new connections can be created). */
     castle_ctrl_prog_fini();
     castle_netlink_fini();
@@ -2624,7 +2624,7 @@ static void __exit castle_exit(void)
     castle_checkpoint_fini();
     /* Note: Changes from here are not persistent. */
     castle_attachments_free();
-    /* Free-up gloabl tree first. */
+    /* Free-up global tree first. */
     castle_global_tree_free();
     /* Cleanup/writeout all metadata */
     castle_double_array_fini();

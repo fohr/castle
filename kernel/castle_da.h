@@ -49,7 +49,7 @@ struct castle_da_merge {
         c_ver_t                   valid_version;
     } levels[MAX_BTREE_DEPTH];
 
-    /* Deamortization variables */
+    /* Deamortisation variables */
     struct work_struct            work;
     int                           leafs_on_ssds;        /**< Are leaf btree nodes stored on SSD.*/
     int                           internals_on_ssds;    /**< Are internal nodes stored on SSD.  */
@@ -139,7 +139,7 @@ struct castle_da_merge {
            (This symmetry could also have been maintained by allowing the output cct
            to always hold it's "live" state (since at deserialisation time, serialised
            state == live state), but that would have then required maintenance of 3 lists:
-           a "live list", a "serialised list", and a "new list" which is the diff btwn
+           a "live list", a "serialised list", and a "new list" which is the diff between
            the live list and the serialised list. In practice we only need the serialised
            list and the new list, since the live list is worthless until the merge
            completes anyway.)
