@@ -5916,6 +5916,8 @@ static int castle_periodic_checkpoint(void *unused)
         {
             castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0, 0);
             ret = -2;
+            CASTLE_TRANSACTION_END;
+
             goto out;
         }
 
