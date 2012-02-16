@@ -12,8 +12,18 @@
 
 static void castle_dfs_resolver_reset(c_dfs_resolver *dfs_resolver);
 
+/* The constructor is spread over two functions:
+    castle_dfs_resolver_preconstruct():
+        This does malloc and some initialisation that does not rely on the merge_init sequence of
+        events. This function may return an error code, so can't be called from the "no fail zone".
+    castle_dfs_resolver_construct_complete():
+        This does rely on things happening in merge_init, but it does not fail, so it can be called
+        from the "no fail zone".
+*/
+
 /* should be called by merge_init */
-int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da_merge *merge)
+int castle_dfs_resolver_preconstruct(c_dfs_resolver *dfs_resolver, struct castle_da_merge *merge,
+                                     c_dfs_resolver_functions_t function_flags)
 {
     signed int ret = 0;
     uint32_t new_node_size;
@@ -23,13 +33,11 @@ int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da
     BUG_ON(!dfs_resolver);
 
     /* Set resolver functions */
-    dfs_resolver->functions = 0;
-    if( castle_da_user_timestamping_check(merge->da) )
-        dfs_resolver->functions |= DFS_RESOLVE_TIMESTAMPS;
-    if( merge->out_tree->data_age == 1)
-        dfs_resolver->functions |= DFS_RESOLVE_TOMBSTONES;
-    if(!dfs_resolver->functions)
+    dfs_resolver->functions = function_flags;
+    if(dfs_resolver->functions == DFS_RESOLVE_NOTHING)
     {
+        castle_printk(LOG_WARN, "%s::[%p] nothing to resolve!\n", __FUNCTION__, merge);
+        WARN_ON(1);
         ret = -EINVAL;
         goto error;
     }
@@ -72,17 +80,11 @@ int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da
         goto error;
 
     /* Init stuff */
-    dfs_resolver->_buffer_max      = max_entries;
-    dfs_resolver->top_index        = 0;
-    dfs_resolver->curr_index       = 0;
-    dfs_resolver->merge            = merge;
-    dfs_resolver->mode             = DFS_RESOLVER_NULL;
-    if( dfs_resolver->functions & DFS_RESOLVE_TOMBSTONES )
-    {
-        do_gettimeofday(&dfs_resolver->now);
-        dfs_resolver->min_u_ts_excluded_cts =
-            castle_da_min_ts_cts_exclude_this_merge_get(dfs_resolver->merge);
-    }
+    dfs_resolver->_buffer_max = max_entries;
+    dfs_resolver->top_index   = 0;
+    dfs_resolver->curr_index  = 0;
+    dfs_resolver->merge       = merge;
+    dfs_resolver->mode        = DFS_RESOLVER_CTOR_INCOMPLETE; /* wait for construct_complete */
 
 #ifdef DEBUG
     {
@@ -97,6 +99,8 @@ int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da
             __FUNCTION__, dfs_resolver->merge->id, dfs_resolver->functions, dfs_resolver->_buffer_max);
 
     BUG_ON(ret != 0);
+
+    /* Construction is only partly done - don't forget castle_dfs_resolver_construct_complete()! */
     return ret;
 
 error:
@@ -106,6 +110,25 @@ error:
         merge->id,
         merge);
     return ret;
+}
+
+/* Handle some aspects of resolver init that rely on merge_init having completed some operations;
+   this is seperated from preconstruct() because preconstruct() cannot be called from within the
+   "no fail zone" - OTOH, construct_complete() does not fail, so is safe to call from that region.
+*/
+void castle_dfs_resolver_construct_complete(c_dfs_resolver *dfs_resolver)
+{
+    BUG_ON(dfs_resolver->mode != DFS_RESOLVER_CTOR_INCOMPLETE);
+
+    if( dfs_resolver->functions & DFS_RESOLVE_TOMBSTONES )
+    {
+        castle_printk(LOG_DEBUG, "%s::[%p] resolving discardable tombstones\n",
+            __FUNCTION__, dfs_resolver->merge);
+        do_gettimeofday(&dfs_resolver->now);
+        dfs_resolver->min_u_ts_excluded_cts =
+            castle_da_min_ts_cts_exclude_this_merge_get(dfs_resolver->merge);
+    }
+    dfs_resolver->mode = DFS_RESOLVER_NEW_KEY;
 }
 
 /* should be called by merge_dealloc */
@@ -146,7 +169,7 @@ int castle_dfs_resolver_entry_add(c_dfs_resolver *dfs_resolver,
     btree = dfs_resolver->merge->out_btree;
     BUG_ON(!btree);
 
-    if(dfs_resolver->mode == DFS_RESOLVER_NULL)
+    if(dfs_resolver->mode == DFS_RESOLVER_NEW_KEY)
     {
         /* first insert */
         BUG_ON(dfs_resolver->top_index != 0);
@@ -207,7 +230,7 @@ int castle_dfs_resolver_entry_pop(c_dfs_resolver *dfs_resolver,
     btree = dfs_resolver->merge->out_btree;
     BUG_ON(!btree);
 
-    if(dfs_resolver->mode == DFS_RESOLVER_NULL)
+    if(dfs_resolver->mode == DFS_RESOLVER_NEW_KEY)
         return 0; /* nothing processed yet; just return nothing to pop */
 
     if(dfs_resolver->mode == DFS_RESOLVER_BUFFER_PROCESS)
@@ -372,7 +395,7 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
     btree = merge->out_btree;
     BUG_ON(!btree);
 
-    if(dfs_resolver->mode == DFS_RESOLVER_NULL)
+    if(dfs_resolver->mode == DFS_RESOLVER_NEW_KEY)
         return 0; /* nothing added yet; just return nothing to pop */
 
     /* at least one entry must have been added */
@@ -442,14 +465,16 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
               CVT_TOMBSTONE(stack_top_cvt) ) )   /*    OR the newest ancestor is a tombstone)... */
         {
             int discard_tombstone = 0;
+            debug("%s::[%p] may discard tombstone, pending timestamping requirements.\n",
+                    __FUNCTION__, merge);
 
             if( dfs_resolver->functions & DFS_RESOLVE_TIMESTAMPS )
             {
                 /* and it's satisfied the timestamping requirements... */
                 discard_tombstone =
                     castle_timestamped_tombstone_discardable_check(dfs_resolver,
-                                                                   entry_i_version,
-                                                                   entry_i_ts);
+                            entry_i_version,
+                            entry_i_ts);
             }
             else /* - OR - */
             {
@@ -460,8 +485,8 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
             if( discard_tombstone )
             {
                 atomic64_inc(&merge->da->stats.tombstone_discard.tombstone_discards);
-                debug("%s::merge id %u, tombstone discarded\n",
-                        __FUNCTION__, merge->id);
+                debug("%s::[%p] tombstone discarded\n",
+                        __FUNCTION__, merge);
                 entry_included = 0;                         /* ... so, we can discard it! */
             }
         }
@@ -519,7 +544,7 @@ int castle_dfs_resolver_is_new_key_check(c_dfs_resolver *dfs_resolver, void *key
 
     if(!dfs_resolver->buffer_node->used)
     {
-        BUG_ON(dfs_resolver->mode != DFS_RESOLVER_NULL);
+        BUG_ON(dfs_resolver->mode != DFS_RESOLVER_NEW_KEY);
         return 1;
     }
 
@@ -553,7 +578,7 @@ static void castle_dfs_resolver_reset(c_dfs_resolver *dfs_resolver)
 
     dfs_resolver->top_index  = 0;
     dfs_resolver->curr_index = 0;
-    dfs_resolver->mode = DFS_RESOLVER_NULL;
+    dfs_resolver->mode = DFS_RESOLVER_NEW_KEY;
 
     /* drop all entries in the buffer */
     BUG_ON(!dfs_resolver->buffer_node->used); /* there must have been at least 1 entry */

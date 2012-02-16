@@ -6,19 +6,6 @@
 #include "castle_public.h"
 #include "castle_da.h"
 
-typedef enum {
-    DFS_RESOLVER_NULL = 0,
-    DFS_RESOLVER_ENTRY_ADD,
-    DFS_RESOLVER_BUFFER_PROCESS,
-    DFS_RESOLVER_ENTRY_POP
-} c_dfs_resolver_mode_t;
-
-/* each entry must be a power of 2 */
-typedef enum {
-    DFS_RESOLVE_TOMBSTONES = 1,
-    DFS_RESOLVE_TIMESTAMPS = 2
-} c_dfs_resolver_functions_t;
-
 /**
  * Timestamp/tombstone-version key stream resolver.
  *
@@ -34,18 +21,31 @@ typedef enum {
  * Once the process method returns, the caller uses the entry_pop method to stream results out of
  * the dfs_resolver's buffer.
  *
- * There are 4 operation modes (see the enum c_dfs_resolver_mode_t):
- * 1) null: just inited, or just finished a pop cycle
+ * There are 5 operation modes (see the enum c_dfs_resolver_mode_t):
+ * 0) ctor_incomplete: only partially inited, construct_complete not called yet
+ * 1) new_key: just inited, or just finished a pop cycle
  * 2) entry add: fill up the buffer with same k entries
  * 3) buffer process: do the dfs walk, and mark the include flags
  * 4) entry pop: return included entries
- *
- * Mode flow is as follows: null->add->process->pop->null, and the user can make repeated calls
- * to add and pop.
  */
+
+typedef enum {
+    DFS_RESOLVER_CTOR_INCOMPLETE = 1,
+    DFS_RESOLVER_NEW_KEY,
+    DFS_RESOLVER_ENTRY_ADD,
+    DFS_RESOLVER_BUFFER_PROCESS,
+    DFS_RESOLVER_ENTRY_POP
+} c_dfs_resolver_mode_t;
+
+/* each entry must be a power of 2 */
+typedef enum {
+    DFS_RESOLVE_NOTHING =    (1<<0),
+    DFS_RESOLVE_TOMBSTONES = (1<<1),
+    DFS_RESOLVE_TIMESTAMPS = (1<<2),
+} c_dfs_resolver_functions_t;
+
 typedef struct castle_dfs_resolver
 {
-    //void                   *key;
     struct castle_da_merge *merge; /* for btree->key_copy */
 
     unsigned int    top_index;   /* where to add entries; only change during entry add stage (now
@@ -68,7 +68,9 @@ typedef struct castle_dfs_resolver
 
 } c_dfs_resolver;
 
-int castle_dfs_resolver_construct(c_dfs_resolver *dfs_resolver, struct castle_da_merge *merge);
+int castle_dfs_resolver_preconstruct(c_dfs_resolver *dfs_resolver, struct castle_da_merge *merge,
+                                     c_dfs_resolver_functions_t function_flags);
+void castle_dfs_resolver_construct_complete(c_dfs_resolver *dfs_resolver);
 void castle_dfs_resolver_destroy(c_dfs_resolver *dfs_resolver);
 int castle_dfs_resolver_entry_add(c_dfs_resolver *dfs_resolver,
                                   void *key,

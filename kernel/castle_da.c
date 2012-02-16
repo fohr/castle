@@ -5828,6 +5828,59 @@ int check_dext_list(c_ext_id_t ext_id, c_ext_id_t *list, uint32_t size)
 }
 
 /**
+ * Check if the merge involves the oldest tree in the DA.
+ *
+ * @param merge The merge to check
+ * @return 1    If the merge IS top-level
+ * @return 0    If the merge IS NOT top-level
+ * @note        The implementation of this is based on the da trees list, so any changes there
+ *              could break. Refer inline comments to see how this works.
+ * @note        Takes da->lock
+ */
+static unsigned int castle_da_merge_top_level_check(struct castle_da_merge *merge)
+{
+    int top_occupied_level;
+    struct castle_component_tree * merge_oldest_tree = merge->in_trees[merge->nr_trees - 1];
+    struct castle_component_tree * da_oldest_tree = NULL;
+    int i;
+
+    /* Assert that we really have the merge's oldest tree, according to data_age */
+    FOR_EACH_MERGE_TREE(i, merge)
+    {
+        castle_printk(LOG_DEBUG, "%s::[%p] intree %d data_age %d, oldest tree data_age %d\n",
+                __FUNCTION__, merge, i, merge->in_trees[i]->data_age, merge_oldest_tree->data_age);
+        BUG_ON( (i!=merge->nr_trees-1) &&
+                (merge->in_trees[i]->data_age <= merge_oldest_tree->data_age) );
+    }
+
+    read_lock(&merge->da->lock);
+    for(top_occupied_level = MAX_DA_LEVEL-1; top_occupied_level > 1; top_occupied_level--)
+        if (merge->da->levels[top_occupied_level].nr_trees > 0) break;
+
+    /* Below level 2 the concept of tree age is a bit wonky, so let's just give up. */
+    if (top_occupied_level < 2)
+    {
+        read_unlock(&merge->da->lock);
+        castle_printk(LOG_DEBUG, "%s::[%p] top occupied level %d\n",
+                __FUNCTION__, merge, top_occupied_level);
+        return 0;
+    }
+    /* top_occupied_level must be >=2, and there must be a tree on this level */
+    BUG_ON(list_empty(&merge->da->levels[top_occupied_level].trees));
+
+    /* If the merge's oldest CT is on the end of the da list for the top occupied level, then it is
+       the oldest tree in the DA, and this is the top-level merge. */
+
+    /* The oldest tree on a given level in a DA is the last tree on the circularly linked list */
+    da_oldest_tree = list_entry(merge->da->levels[top_occupied_level].trees.prev,
+            struct castle_component_tree,
+            da_list);
+
+    read_unlock(&merge->da->lock);
+    return (da_oldest_tree == merge_oldest_tree);
+}
+
+/**
  * Initialize merge process for multiple component trees.
  *
  * @param merge  [in]    merge to be initialised.
@@ -5846,6 +5899,7 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
     tree_seq_t out_tree_data_age;
     c_thread_id_t thread_id;
     uint64_t nr_rwcts;
+    c_dfs_resolver_functions_t dfs_resolver_functions = DFS_RESOLVE_NOTHING;
 
     BUG_ON(!CASTLE_IN_TRANSACTION);
 
@@ -5971,14 +6025,18 @@ deser_done:
         castle_da_get(da);
     }
 
-    /* We need a DFS resolver if we are timestamping, of if this is the top-level merge and we need
+    /* We need a DFS resolver if we are timestamping, or if this is the top-level merge and we need
        to discard non-queriable tombstones, or both. */
-    if( castle_da_user_timestamping_check(merge->da) || (merge->out_tree->data_age == 1) )
+    if (castle_da_user_timestamping_check(merge->da))
+        dfs_resolver_functions |= DFS_RESOLVE_TIMESTAMPS;
+    if (castle_da_merge_top_level_check(merge))
+        dfs_resolver_functions |= DFS_RESOLVE_TOMBSTONES;
+    if(dfs_resolver_functions != DFS_RESOLVE_NOTHING)
     {
         merge->tv_resolver = castle_zalloc(sizeof(c_dfs_resolver));
         if(!merge->tv_resolver)
             goto error_out;
-        if(castle_dfs_resolver_construct(merge->tv_resolver, merge))
+        if(castle_dfs_resolver_preconstruct(merge->tv_resolver, merge, dfs_resolver_functions))
             goto error_out;
         BUG_ON(!merge->tv_resolver);
     }
@@ -6055,6 +6113,9 @@ deser_done:
         castle_events_new_tree_added(merge->out_tree->seq, merge->out_tree->da->id);
 
     merge->serdes.des=0;
+
+    if (merge->tv_resolver)
+        castle_dfs_resolver_construct_complete(merge->tv_resolver);
 
     if (merge->level != 1)
     {
@@ -12634,26 +12695,28 @@ castle_user_timestamp_t castle_da_min_ts_cts_exclude_this_merge_get(struct castl
     int i;
     castle_user_timestamp_t min_ts = ULLONG_MAX;
 
-    struct castle_double_array *da;
-    c_merge_id_t this_merge_id;
     BUG_ON(!merge);
 
-    da = merge->da;
-    this_merge_id = merge->id;
+    /* Assert that the input trees of the merge have been sufficiently initialised */
+    FOR_EACH_MERGE_TREE(i, merge)
+    {
+        BUG_ON(merge->in_trees[i]->merge_id != merge->id);
+    }
+    BUG_ON(merge->out_tree->merge_id != merge->id);
 
     /* Take read lock on DA, to make sure neither CTs nor DA would go away while looking at the
      * list. */
-    read_lock(&da->lock);
+    read_lock(&merge->da->lock);
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
-        list_for_each(lh, &da->levels[i].trees)
+        list_for_each(lh, &merge->da->levels[i].trees)
         {
             ct = list_entry(lh, struct castle_component_tree, da_list);
-            if (ct->merge_id != this_merge_id)
+            if (ct->merge_id != merge->id)
                 min_ts = min(min_ts, (uint64_t)atomic64_read(&ct->min_user_timestamp));
         }
     }
-    read_unlock(&da->lock);
+    read_unlock(&merge->da->lock);
 
     return min_ts;
 }
