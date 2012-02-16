@@ -937,7 +937,8 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                                     (ioctl.cmd != CASTLE_CTRL_ENVIRONMENT_SET) &&
                                     (ioctl.cmd != CASTLE_CTRL_FAULT) &&
                                     (ioctl.cmd != CASTLE_CTRL_SLAVE_EVACUATE) &&
-                                    (ioctl.cmd != CASTLE_CTRL_SLAVE_SCAN))
+                                    (ioctl.cmd != CASTLE_CTRL_SLAVE_SCAN) &&
+                                    (ioctl.cmd != CASTLE_CTRL_STATE_QUERY))
     {
         castle_printk(LOG_WARN, "Disallowed ctrl op %d, before fs gets inited.\n", ioctl.cmd);
         return -EINVAL;
