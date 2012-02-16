@@ -56,6 +56,11 @@ static int castle_mtree_need_split(struct castle_btree_node *node, int ver_or_ke
     return -1;
 }
 
+static int castle_mtree_mid_entry(struct castle_btree_node *node)
+{
+    return (node->used / 2);
+}
+
 static int castle_mtree_key_compare(const void *key1, const void *key2)
 {
     block_t blk1 = (block_t)(unsigned long)key1;
@@ -274,6 +279,7 @@ struct castle_btree_type castle_mtree = {
     .inv_key        = (void *)MTREE_INVAL_BLK,
     .max_entries    = castle_mtree_max_entries,
     .need_split     = castle_mtree_need_split,
+    .mid_entry      = castle_mtree_mid_entry,
     .key_compare    = castle_mtree_key_compare,
     .key_size       = castle_mtree_key_size,
     .key_copy       = castle_mtree_key_copy,

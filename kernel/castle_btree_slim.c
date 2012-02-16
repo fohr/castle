@@ -576,6 +576,43 @@ inline static size_t castle_slim_entry_size(const struct castle_btree_node *node
     return BTREE_NODE_IS_LEAF(node) ? leaf_entry_size(entry) : intern_entry_size(entry);
 }
 
+/**
+ * Calculate index of an entry that splits the node in equal halfs (as much as possible),
+ * according to the definition in castle_btree_type.
+ *
+ * @param node  pointer to the node scheduled for splitting
+ */
+static int castle_slim_mid_entry(struct castle_btree_node *node)
+{
+    struct slim_header *header = SLIM_HEADER_PTR(node);
+    unsigned long half_size, entries_size;
+    int mid_entry_idx;
+
+    /* This mustn't be called on nodes not ready for key splitting. */
+    BUG_ON(!castle_slim_need_split(node, 1));
+
+    /* Calculate half of the # of bytes consumed by entries. */
+    half_size = NODE_SIZE(node);
+    half_size -= header->data_offset;
+    half_size -= header->free_bytes;
+    half_size -= header->dead_bytes;
+    half_size /= 2;
+
+    for(mid_entry_idx = 0, entries_size = 0; mid_entry_idx < node->used; mid_entry_idx++)
+    {
+        /* Work out the size of current entry. Add to the total. */
+        entries_size += castle_slim_entry_size(node, mid_entry_idx) + 4 /* for the index entry */;
+        if(entries_size > half_size)
+        {
+            /* The first entry alone cannot be bigger than half the occupied size. */
+            BUG_ON(mid_entry_idx == 0);
+
+            return mid_entry_idx;
+        }
+    }
+    BUG();
+}
+
 /*
  * Node modification function definitions.
  */
@@ -1109,6 +1146,7 @@ struct castle_btree_type castle_slim_tree = {
     .inv_key       = (void *) &SLIM_INVAL_KEY,
     .max_entries   = castle_slim_max_entries,
     .need_split    = castle_slim_need_split,
+    .mid_entry     = castle_slim_mid_entry,
     .key_pack      = castle_slim_key_pack,
     .key_unpack    = castle_slim_key_unpack,
     .key_compare   = castle_slim_key_compare,
