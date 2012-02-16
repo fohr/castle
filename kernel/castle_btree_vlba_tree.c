@@ -164,7 +164,7 @@ static void castle_vlba_tree_node_compact(struct castle_btree_node *node)
     uint32_t *a, *idx;
     uint32_t count;
 
-    /* Buffers to keep the minimum heap of entries offsets and corresponsding
+    /* Buffers to keep the minimum heap of entries offsets and corresponding
      * entry index */
     a = castle_alloc(sizeof(uint32_t) * node->used);
     idx = castle_alloc(sizeof(uint32_t) * node->used);

@@ -65,8 +65,8 @@ struct castle_version {
     /* Various tree links */
     c_ver_t                    version;     /**< Version ID, unique across all Doubling Arrays. */
     union {
-        c_ver_t                parent_v;    /**< Vaild if !initialised.                         */
-        struct castle_version *parent;      /**< Vaild if  initialised.                         */
+        c_ver_t                parent_v;    /**< Valid if !initialised.                         */
+        struct castle_version *parent;      /**< Valid if  initialised.                         */
     };
     struct castle_version     *first_child;
     struct castle_version     *next_sybling;
@@ -92,7 +92,7 @@ struct castle_version {
     union {                             /**< All lists in this union are protected by the
                                              ctrl mutex.                                        */
         struct list_head init_list;     /**< Used when the version is being initialised.        */
-        struct list_head free_list;     /**< Uesd when the version is being removed.            */
+        struct list_head free_list;     /**< Used when the version is being removed.            */
     };
     struct list_head del_list;
 
@@ -428,7 +428,7 @@ static int castle_version_needs_parent(struct castle_version *v, struct castle_v
  * Determines if any strictly descendant version depends on the current version (all,
  * for the particular key being processed at the moment). Assumption is that occupied
  * bit is valid for all versions. But, need_parent bit is valid only for deleted versions.
- * For other versions, need_parent doesnt represent any thing.
+ * For other versions, need_parent doesn't represent any thing.
  *
  * @param state [in] state of the snapshot delete for current key
  * @param version [in] version of the current entry
@@ -483,7 +483,7 @@ int castle_version_is_deletable(struct castle_version_delete_state *state,
     {
         struct castle_version *del_v = list_entry(list, struct castle_version, del_list);
 
-        /* dont look at versions created after merge started. */
+        /* don't look at versions created after merge started. */
         if (del_v->version >= state->last_version)
             continue;
 
@@ -506,7 +506,7 @@ int castle_version_is_deletable(struct castle_version_delete_state *state,
     }
     state->next_deleted = list;
 
-    /* Check the version required by childs. For undeleted childs, dont look
+    /* Check the version required by children. For undeleted children, don't look
      * at need_parent bit (its not calculated for them). */
     for (w=cur_v->first_child; w; w=w->next_sybling)
     {
@@ -699,7 +699,7 @@ int castle_version_delete(c_ver_t version)
             n = v->parent;
             BUG_ON(!n);
             BUG_ON(!test_bit(CV_DELETED_BIT, &n->flags));
-            /* Stop the walk from gowing down the tree, if we are going back to the parent. */
+            /* Stop the walk from going down the tree, if we are going back to the parent. */
             children_first = 0;
         }
         /* Next version must always exist, at the end of the walk we'll get back to 'd'. */
@@ -1241,10 +1241,10 @@ err_out:
  * Update version stats when an entry is replaced by another entry. (k,v) must be the same.
  * Update is made in the private version stats hash provided as an argument.
  *
- * @param version Version in which the replace is happenening
+ * @param version Version in which the replace is happening
  * @param old_tup CVT being replaced
  * @param new_tup New CVT
- * @param pravite Private stats hash
+ * @param private Private stats hash
  */
 void castle_version_stats_entry_replace(c_ver_t version,
                                         c_val_tup_t old_cvt,
@@ -1283,7 +1283,7 @@ void castle_version_stats_entry_replace(c_ver_t version,
 /**
  * Update private version stats when an entry is discarded.
  *
- * @param version Version in which the discard is happenening
+ * @param version Version in which the discard is happening
  * @param old_tup CVT being discarded
  * @param new_tup Reason for discarding the entry (version delete or timestamp ordering)
  * @param private Private stats hash
@@ -1442,7 +1442,7 @@ int castle_versions_writeback(int is_fini)
  *
  * @return -EFBIG       Global version limit reached
  * @return -E2BIG       Per-DA live version limit reached
- * @return -EEXIST      Non-existant parent
+ * @return -EEXIST      Non-existent parent
  */
 static int castle_version_new_create(int snap_or_clone,
                                      c_ver_t parent,
@@ -1476,7 +1476,7 @@ static int castle_version_new_create(int snap_or_clone,
     p = castle_versions_hash_get(parent);
     if(!p)
     {
-        castle_printk(LOG_WARN, "Asked to create a child of non-existant parent: %d\n",
+        castle_printk(LOG_WARN, "Asked to create a child of non-existent parent: %d\n",
             parent);
         *ver_out = NULL;
         return -EEXIST;
@@ -1765,7 +1765,7 @@ process_version:
        We assign two id's to each node. o_order is based on when is the node
        visited first time in DFS, r_order when the node is visited last.
        The code below implements non-recursive DFS (we don't have enough stack for
-       potentialy deep recursion */
+       potentially deep recursion */
     v = __castle_versions_hash_get(0);
     BUG_ON(!v);
     BUG_ON(!(v->flags & CV_INITED_MASK));
@@ -1797,7 +1797,7 @@ process_version:
             if(!n) v->r_order = v->o_order;
         } else
         {
-            /* Assign the r order first (the id of the last decendant) */
+            /* Assign the r order first (the id of the last descendant) */
             v->r_order = id;
             debug("Assigned version=%d r_order %d\n", v->version, v->r_order);
         }

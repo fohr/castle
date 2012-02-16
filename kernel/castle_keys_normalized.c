@@ -81,7 +81,7 @@ void *castle_dup_or_copy(const void *src, size_t src_len, void *dst, size_t *dst
  *
  * A couple of helper defines are also provided to reduce code duplication. Functions
  * which deal with markers should "call" STRIDE_INIT_VARS at the beginning of the
- * function, and then check if the stride needs to be increaded with
+ * function, and then check if the stride needs to be increased with
  * STRIDE_CHECK_BOUND(pos), where pos is the number of content bytes which have been seen
  * so far.
  *
@@ -614,7 +614,7 @@ static struct castle_norm_key *castle_norm_key_dim_inc(struct castle_norm_key *k
     --curr;
     BUG_ON(*curr == KEY_MARKER_MINUS_INFINITY || *curr == KEY_MARKER_PLUS_INFINITY ||
            (*curr - KEY_MARKER_END_BASE) % 2 == 1);
-    ++*((unsigned char *) curr); /* drop the constness here */
+    ++*((unsigned char *) curr); /* drop the constantness here */
 
     return key;
 }

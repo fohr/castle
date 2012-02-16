@@ -340,7 +340,7 @@ static inline uint8_t castle_counter_accumulating_type_get(int counter1_set, int
  */
 void castle_counter_accumulating_reduce(c_val_tup_t *accumulator,
                                         c_val_tup_t delta_cvt,
-                                        int delta_ancestoral)
+                                        int delta_ancestral)
 {
     int64_t delta_counter1, delta_counter2, accumulator_counter1, accumulator_counter2;
     int counter1_set, counter2_set;
@@ -379,14 +379,14 @@ void castle_counter_accumulating_reduce(c_val_tup_t *accumulator,
         return;
     }
 
-    /* Proper reduction neccessary. Work out what both of the subcounts of both counters are. */
+    /* Proper reduction necessary. Work out what both of the subcounts of both counters are. */
     memcpy(&delta_counter1, CVT_INLINE_VAL_PTR(delta_cvt),   8);
     memcpy(&delta_counter2, CVT_INLINE_VAL_PTR(delta_cvt)+8, 8);
     memcpy(&accumulator_counter1, CVT_INLINE_VAL_PTR(*accumulator)  , 8);
     memcpy(&accumulator_counter2, CVT_INLINE_VAL_PTR(*accumulator)+8, 8);
 
     /* Merge the first sub-counter only if the delta is precisely the same version. */
-    if(!delta_ancestoral)
+    if(!delta_ancestral)
     {
         /* First counter must be an add. */
         BUG_ON(counter1_set);
@@ -419,7 +419,7 @@ void castle_counter_accumulating_reduce(c_val_tup_t *accumulator,
  * - accumulator value is incremented by delta
  * - type of the accumulator is changed from add to a set if the delta is a set
  *
- * @return True if accumulator bacame a set (reduction terminated).
+ * @return True if accumulator became a set (reduction terminated).
  */
 int castle_counter_simple_reduce(c_val_tup_t *accumulator, c_val_tup_t delta_cvt)
 {
@@ -1162,7 +1162,7 @@ uint64_t murmur_hash_64(const void *key, int len, uint32_t seed)
     return temp[0];
 }
 
-/* Append list2 (with head2) to list1 (with head1). Doesnt add head2. */
+/* Append list2 (with head2) to list1 (with head1). Doesn't add head2. */
 void list_append(struct list_head *head1, struct list_head *head2)
 {
     head2->prev->next = head1;

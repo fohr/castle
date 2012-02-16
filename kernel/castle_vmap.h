@@ -1,7 +1,7 @@
 #ifndef __CASTLE_VMAP_H__
 #define __CASTLE_VMAP_H__
 
-/* The fast vmaper currently maps pages in the range 2 to 256, in powers of 2 (i.e. 2 to the power 1
+/* The fast vmapper currently maps pages in the range 2 to 256, in powers of 2 (i.e. 2 to the power 1
 through 2 to the power 8. */
 #define CASTLE_VMAP_MAX_ORDER           8
 #define CASTLE_VMAP_PGS                 (1 << CASTLE_VMAP_MAX_ORDER)

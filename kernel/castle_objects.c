@@ -175,7 +175,7 @@ struct castle_iterator_type castle_objects_rq_iter = {
  *
  * @param   private castle_object_iterator_t pointer
  *
- * Asynchronous callback from castle_da_rq_iter_init().  Propogate da_rq_iter
+ * Asynchronous callback from castle_da_rq_iter_init().  Propagate da_rq_iter
  * errors up the stack and asynchronously call caller via the init_cb.
  *
  * @also castle_objects_rq_iter_init()
@@ -898,7 +898,7 @@ err_out:
 
 /**
  * Starts object replace.
- * It allocates memory for the BIO and btree key, sets up the requsets, and submits the
+ * It allocates memory for the BIO and btree key, sets up the requests, and submits the
  * request to the queue. The request may go straight through and be handled on the
  * current thread, but otherwise will be queued up in the DA, and handled asynchronously later.
  */
@@ -917,7 +917,7 @@ int castle_object_replace(struct castle_object_replace *replace,
         debug("%s::user provided timestamp %llu\n", __FUNCTION__, replace->user_timestamp);
     else
     {
-        /* Further work: If we decide to use suspicioun tags, then here we need to infer the
+        /* Further work: If we decide to use suspicion tags, then here we need to infer the
                          implicit timestamp of this non-timestamped entry from user_timestamp
                          state that we would be maintaining on the version tree - to be precise,
                          instead of 0, we would use v->creation_user_ts. */
@@ -929,7 +929,7 @@ int castle_object_replace(struct castle_object_replace *replace,
     BUG_ON(!attachment);
 
     /*
-     * Make sure that the filesystem has been fully initialised before accepting any requsets.
+     * Make sure that the filesystem has been fully initialised before accepting any requests.
      * @TODO consider moving this check to castle_back_open().
      */
     if (!castle_fs_inited)

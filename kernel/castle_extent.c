@@ -19,7 +19,7 @@
 #include "castle_freespace.h"
 #include "castle_mstore.h"
 
-/* Extent manager - Every disk reserves few chunks in the begining of the disk to
+/* Extent manager - Every disk reserves few chunks in the beginning of the disk to
  * store meta data. Meta data for freespace management (for each disk) would be
  * stored only on specific disk. Meta data for extent management is stored
  * across multiple disks. This meta data is stored in terms of special extents.
@@ -31,8 +31,8 @@
  * Micro Extent - Contains mappings for meta extent. Replicated on all disks.
  *
  * Meta Extent - One extent for the complete system to store extent manager's
- * structures i.e. extent strcuture and chunk mappings. This extent is spread
- * and replicated across all disks to reduce the riscue of failure. Meta data of
+ * structures i.e. extent structure and chunk mappings. This extent is spread
+ * and replicated across all disks to reduce the risk of failure. Meta data of
  * this extent is stored on all disks (in Super extent).
  */
 
@@ -132,7 +132,7 @@ struct castle_extent;
  *
  * Rebuild makes extent space mapping un-predictable. We can't assume any layout for a
  * given superchunk. With extent resize operations, it is possible to delete parts of
- * extents seperately. So, we maintain outstadning partial superchunks in the extent.
+ * extents separately. So, we maintain outstanding partial superchunks in the extent.
  */
 typedef struct castle_partial_schk {
     uint32_t            slave_id;       /**< Slave ID, this superchunk belongs to.      */
@@ -229,7 +229,7 @@ uint8_t extent_init_done = 0;
 uint8_t extents_allocable = 0; /**< Stops non-logical extent allocation before
                                     the filesystem initialisation gets far enough
                                     (in particular that it completes a checkpoint
-                                     after meta extent compation). */
+                                     after meta extent compaction). */
 
 static LIST_HEAD            (castle_lfs_victim_list);
 
@@ -500,7 +500,7 @@ int castle_extent_space_reserve(c_rda_type_t       rda_type,
  * Creates a new reservation pool.
  *
  * Space allocation has to be done RDA specific and actual space allocation happens within
- * freespace. Freespace modules need reservation pool in hash before adding space. Seperating
+ * freespace. Freespace modules need reservation pool in hash before adding space. Separating
  * space allocation from pool_create().
  *
  * @also castle_da_merge_init()
@@ -686,8 +686,8 @@ static int castle_res_pool_writeback(c_res_pool_t *pool, void *store)
         if (pool->reserved_schks[id] + ((c_signed_chk_cnt_t)pool->freed_schks[id]) == 0)
             goto skip_slave;
 
-        /* We maintian freed superchunks only for the sake of not over using reserved space.
-         * If we already over-allocating space, it should compenstate freed space. Never
+        /* We maintain freed superchunks only for the sake of not over using reserved space.
+         * If we already over-allocating space, it should compensate freed space. Never
          * include overallocated chunks in freed_schks. */
         BUG_ON((pool->reserved_schks[id] < 0) && pool->freed_schks[id]);
 
@@ -729,7 +729,7 @@ static int castle_res_pools_writeback(void)
     if(!castle_res_pool_mstore)
         return -ENOMEM;
 
-    /* All reservation pool opertions are protected by extent lock. Doesn't need to run
+    /* All reservation pool operations are protected by extent lock. Doesn't need to run
      * with hash lock. */
     __castle_res_pool_hash_iterate(castle_res_pool_writeback, castle_res_pool_mstore);
 
@@ -976,7 +976,7 @@ static int castle_extent_part_schks_merge(c_part_schk_t  *part_schk,
                                           c_chk_t         first_chk,
                                           c_chk_cnt_t     count)
 {
-    /* If the super chuink belongs to different slave, skip. */
+    /* If the super chunk belongs to different slave, skip. */
     if (slave_id != part_schk->slave_id)
         return -1;
 
@@ -1029,7 +1029,7 @@ static void castle_extent_part_schk_free(c_part_schk_t *part_schk, c_res_pool_t 
  *                     However, because of rebuild, which can take partial superchunks
  * created by a shrink/truncate and could use them to rebuild any part of extent. So,
  * shouldn't have any assumptions on chunk ordering. And partial superchunk code has
- * no assumtions on ordering and can create multiple partial schks for a given superchunk
+ * no assumptions on ordering and can create multiple partial schks for a given superchunk
  * as long as they are not contiguous. */
 
 static void castle_extent_part_schk_save(c_ext_t       *ext,
@@ -1090,7 +1090,7 @@ static void castle_extent_part_schk_save(c_ext_t       *ext,
     list_add(&part_schk->list, &ext->schks_list);
 }
 
-/* TODO: Works not efficent. Re-check. */
+/* TODO: Works not efficient. Re-check. */
 static void castle_extent_part_schks_converge(c_ext_t *ext)
 {
     struct list_head *pos, *tmp, *pos1;
@@ -1482,7 +1482,7 @@ static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
     }
     __castle_extent_dirtytree_put(ext->dirtytree, 0 /*check_hash*/);
 
-    /* Free memory occupied by superchunk strcutures. */
+    /* Free memory occupied by superchunk structures. */
     list_for_each_safe(pos, tmp, &ext->schks_list)
     {
         c_part_schk_t *schk = list_entry(pos, c_part_schk_t, list);
@@ -1555,7 +1555,7 @@ int castle_extent_in_transaction(void)
 }
 
 /**
- * Get global extent superblock. Dont try to get mutex. Function is called with mutex.
+ * Get global extent superblock. Don't try to get mutex. Function is called with mutex.
  */
 struct castle_extents_superblock* _castle_extents_super_block_get(void)
 {
@@ -1791,7 +1791,7 @@ out:
 }
 
 /**
- * Inserts all extent stats into the stats mstore. At the moment just the rebulid progress counter.
+ * Inserts all extent stats into the stats mstore. At the moment just the rebuild progress counter.
  */
 void castle_extents_stats_writeback(c_mstore_t *stats_mstore)
 {
@@ -1829,7 +1829,7 @@ static int castle_extent_writeback(c_ext_t *ext, void *store)
     struct castle_elist_entry mstore_entry;
     c_mstore_t *castle_extents_mstore = store;
 
-    /* Shouldnt be any outstanding deletions before last checkpoint. */
+    /* Shouldn't be any outstanding deletions before last checkpoint. */
     if(castle_last_checkpoint_ongoing && (atomic_read(&ext->link_cnt) == 0))
         castle_printk(LOG_DEBUG, "%s::ext %p ext_id %d\n", __FUNCTION__, ext, ext->ext_id);
     BUG_ON(castle_last_checkpoint_ongoing && (atomic_read(&ext->link_cnt) == 0));
@@ -1859,7 +1859,7 @@ int castle_extents_writeback(void)
     if (!extent_init_done)
         return 0;
 
-    /* Don't exit with out-standing dead extents. They are scheduled to get freed on
+    /* Don't exit with outstanding dead extents. They are scheduled to get freed on
      * system work queue. */
     if (castle_last_checkpoint_ongoing)
         while (atomic_read(&castle_extents_gc_q_size) || atomic_read(&castle_extents_dead_count))
@@ -1951,7 +1951,7 @@ static int load_extent_from_mentry(struct castle_elist_entry *mstore_entry)
 
     castle_extents_hash_add(ext);
 
-    /* This would delete the previous mask, as it doesnt have any references. */
+    /* This would delete the previous mask, as it doesn't have any references. */
     BUG_ON(castle_extent_mask_create(ext,
                                      mstore_entry->cur_mask,
                                      GET_LATEST_MASK(ext)->mask_id) < 0);
@@ -2623,7 +2623,7 @@ void castle_extents_fini(void)
 
     /* Make sure cache flushed all dirty pages */
     /* Iterate over extents hash with exclusive access. Indeed, we don't need a
-     * lock here as this happenes in the module end. */
+     * lock here as this happens in the module end. */
     if (castle_extents_hash)
         castle_extents_hash_iterate_exclusive(castle_extent_hash_remove, NULL);
 
@@ -2674,7 +2674,7 @@ static void castle_extent_state_dealloc(c_ext_t *ext, struct castle_extent_state
         for(j=0; j<MAX_K_FACTOR; j++)
             if (!CHK_INVAL(ext_state->chunks[i][j]))
             {
-                debug_schks("Left with part_schk after exntent alloc: %u, (%u, %u)\n",
+                debug_schks("Left with part_schk after extent alloc: %u, (%u, %u)\n",
                             ext->ext_id, ext_state->chunks[i][j],
                             CHKS_PER_SLOT - (ext_state->chunks[i][j] % CHKS_PER_SLOT));
                 castle_extent_part_schk_save(ext,
@@ -2773,7 +2773,7 @@ static void castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t start, c_chk_cnt_
 /**
  * Allocates disk chunks for particular extent (specified by the extent state struct).
  * Allocates chunks from the specified slave, takes the copy id into account, to make sure
- * continous reads perform well. Gets superchunks from the freespace periodically, and
+ * continuous reads perform well. Gets superchunks from the freespace periodically, and
  * chops them up into individual chunks.
  *
  * @param da_id     Doubling array id for which the extent is to be allocated.
@@ -3018,7 +3018,7 @@ retry:
         }
         map_page_idx++;
     }
-    /* Succeeded alocating everything. */
+    /* Succeeded allocating everything. */
     err = 0;
 
 out:
@@ -3081,7 +3081,7 @@ c_ext_id_t castle_extent_alloc_sparse(c_rda_type_t             rda_type,
  * @param da_id         [in]    Double-Array that this extent belongs to.
  * @param ext_type      [in]    Type of data, that will be stored in extent.
  * @param ext_size      [in]    Size of extent (in chunks). Extent could occupy more space
- *                              than this, depends on RDA algorithm and freespace algos.
+ *                              than this, depends on RDA algorithm and freespace algorithms.
  * @param in_tran       [in]    Already in the extent transaction.
  * @param data          [in]    Data to be used in event handler.
  * @param callback      [in]    Extent Event handler. Current events are just low space events.
@@ -3125,7 +3125,7 @@ static void castle_extent_lfs_callback_add(c_ext_event_t *event_hdl)
  * @param da_id         [in]    Double-Array that this extent belongs to.
  * @param ext_type      [in]    Type of data, that will be stored in extent.
  * @param count         [in]    Size of extent (in chunks). Extent could occupy more space
- *                              than this, depends on RDA algorithm and freespace algos.
+ *                              than this, depends on RDA algorithm and freespace algorithms.
  * @param ext_id        [in]    Specify an extent ID, for logical extents. INVAL_EXT_ID for
  *                              normal extents.
  * @param event_hdl     [in]    Low space event handler structure.
@@ -3156,7 +3156,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     BUG_ON(!castle_extent_in_transaction());
     BUG_ON(!extent_init_done && !LOGICAL_EXTENT(ext_id));
 
-    /* ext_id would be passed only for logical extents and they musn't be in the hash. */
+    /* ext_id would be passed only for logical extents and they mustn't be in the hash. */
     BUG_ON(castle_extents_hash_get(ext_id));
 
     if (!LOGICAL_EXTENT(ext_id) && !extents_allocable)
@@ -3241,7 +3241,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     {
         if (castle_ext_freespace_get(&meta_ext_free, (nr_blocks * C_BLK_SIZE), 0, &ext->maps_cep))
         {
-            castle_printk(LOG_WARN, "Too big of an extent/crossing the boundry.\n");
+            castle_printk(LOG_WARN, "Too big of an extent/crossing the boundary.\n");
             goto __hell;
         }
         debug("Allocated extent map at: "cep_fmt_str_nl, cep2str(ext->maps_cep));
@@ -3469,7 +3469,7 @@ static void castle_extent_resource_release(void *data)
 
     /*
      * If this allocation used only 1 page of the meta extent, and the meta extent pool
-     * is not full, then add this page to the meta exetnt pool released list.
+     * is not full, then add this page to the meta extent pool released list.
      */
     nr_blocks = map_size(ext->size, ext->k_factor);
     if (nr_blocks == 1)
@@ -3622,7 +3622,7 @@ static void __castle_extent_map_get(c_ext_t *ext, c_chk_t chk_idx, c_disk_chk_t 
         /* Make the map_page_cep offset block aligned. */
         memcpy(&map_page_cep, &map_cep, sizeof(c_ext_pos_t));
         map_page_cep.offset = MASK_BLK_OFFSET(map_page_cep.offset);
-        /* Get the c2b coresponding to map_page_cep. */
+        /* Get the c2b corresponding to map_page_cep. */
         map_c2b = castle_cache_block_get(map_page_cep, 1);
         if (!c2b_uptodate(map_c2b))
         {
@@ -3850,7 +3850,7 @@ void castle_extent_sup_ext_close(struct castle_slave *cs)
  * Transient references are taken on extents to preserve them while doing some task(mostly io).
  * It is not possible to get a reference on an extent with no active links. After deleting last
  * reference, schedule the free function and also add the extent to a deleted extents list.
- * Last checkpoint of extent code should wait on this list to get exmpty to make sure there are
+ * Last checkpoint of extent code should wait on this list to get empty to make sure there are
  * no outstanding deletes.
  *
  * Synchronization for Reference Counting:
@@ -3878,7 +3878,7 @@ c_ext_mask_id_t castle_extent_mask_get(c_ext_id_t ext_id)
     c_ext_t *ext = __castle_extents_hash_get(ext_id);
     uint32_t val;
 
-    /* Expected to hold atleast read_lock. */
+    /* Expected to hold at least read_lock. */
     BUG_ON(write_can_lock(&castle_extents_hash_lock));
 
     /* Don't give reference if extent is not alive. */
@@ -3918,7 +3918,7 @@ void castle_extent_mask_put(c_ext_mask_id_t mask_id)
     c_ext_mask_t *mask = castle_extent_mask_hash_get(mask_id);
     uint32_t val;
 
-    /* Expected to hold atleast read_lock. */
+    /* Expected to hold at least read_lock. */
     BUG_ON(write_can_lock(&castle_extents_hash_lock));
 
     /* Mask should be alive. */
@@ -3933,7 +3933,7 @@ void castle_extent_mask_put(c_ext_mask_id_t mask_id)
 
     val = atomic_dec_return(&mask->ref_count);
     //castle_printk(LOG_DEVEL, "PUT: %u "cemr_cstr"%u\n", mask->mask_id, cemr2str(mask->range), val);
-    /* Release reference and also check if this is the last referece; if so, schedule mask
+    /* Release reference and also check if this is the last reference; if so, schedule mask
      * for deletion. */
     if (val == 0)
     {
@@ -4252,12 +4252,12 @@ int castle_extent_unlink(c_ext_id_t ext_id)
          * There shouldn't be any free()/unlink() after that. */
         BUG_ON(castle_last_checkpoint_ongoing);
 
-        /* Increment the count of scheduled extents for deletion. Last checkpoint, conseqeuntly,
+        /* Increment the count of scheduled extents for deletion. Last checkpoint, consequently,
          * castle_exit waits for all outstanding dead extents to get destroyed. */
         atomic_inc(&castle_extents_dead_count);
     }
 
-    /* There should be atleast one mask. */
+    /* There should be at least one mask. */
     BUG_ON(list_empty(&ext->mask_list));
 
     /* This link has a reference on current latest mask. */
@@ -4730,7 +4730,7 @@ static int castle_extent_remap_superchunks_alloc(c_ext_t *ext, int slave_idx)
 
     castle_extent_transaction_start();
 
-    /* Get partial superchunks from exntent, if any available. */
+    /* Get partial superchunks from extent, if any available. */
     /* Note: Rebuild can happen after shrink and truncate, so no assumptions can be made
      * on chunk sequence it can start some where in the middle and end in the middle. */
     chk_seq = castle_extent_part_schk_get(ext, cs);
@@ -5642,7 +5642,7 @@ int submit_async_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_chunks,
 /*
  * Finish processing extent
  * @param ext           The extent.
- * @param update_seqno  The rebuild seqence number to update the extent to.
+ * @param update_seqno  The rebuild sequence number to update the extent to.
  */
 void cleanup_extent(c_ext_t *ext, int update_seqno)
 {
@@ -5801,7 +5801,7 @@ static void writeback_rebuild_chunk(writeback_info_t *writeback_info)
 static int rebuild_exit_check(void)
 {
     /* The only reason that a rebuild run should halt processing is:
-     * If another slave has gone out-of-serice or evacuated.
+     * If another slave has gone out-of-service or evacuated.
      */
     if (rebuild_required())
         return 1;
@@ -6740,7 +6740,7 @@ static int castle_extent_mask_create(c_ext_t            *ext,
  * 1. If the extent has older masks than this mask, then just delete this mask from list,
  * nothing more to do.
  * 2. If this is the oldest mask, commit the mask operation
- *      a. Shrink - Free the space in shrinked range.
+ *      a. Shrink - Free the space in shrink range.
  *      b. Grow - Nothing to do, space is already allocated and being used.
  *      c. Truncate - Free the space in truncated range.
  *
@@ -6815,7 +6815,7 @@ static int castle_extents_garbage_collector(void *unused)
                                             atomic_read(&castle_extents_gc_q_size)),
                                    ignore);
 
-        /* If the file sytem is exiting break the loop. */
+        /* If the file system is exiting break the loop. */
         if (kthread_should_stop())
         {
             /* By this time, it shouldn't have any more extents to free. Should have
@@ -6826,7 +6826,7 @@ static int castle_extents_garbage_collector(void *unused)
             break;
         }
 
-        /* Start an extent transaction, to make sure no checkpoint happening in parellel. */
+        /* Start an extent transaction, to make sure no checkpoint happening in parallel. */
         castle_extent_transaction_start();
 
         /* Don't want any parallel additions to the list. */
@@ -7023,7 +7023,7 @@ int castle_extent_shrink(c_ext_id_t ext_id, c_chk_cnt_t chunk)
     /* Get the current latest mask. */
     mask = GET_LATEST_MASK(ext);
 
-    /* Can't shrink if the latest mask doesnt cover that range. */
+    /* Can't shrink if the latest mask doesn't cover that range. */
     BUG_ON(mask->range.start > chunk);
 
     /* Create new mask for the extent and set as latest. */
@@ -7074,7 +7074,7 @@ int castle_extent_truncate(c_ext_id_t ext_id, c_chk_cnt_t chunk)
     castle_printk(LOG_DEBUG, "%s::ext %lld; latest mask range: %lld -> %lld; truncate chunk %d\n",
             __FUNCTION__, ext_id, mask->range.start, mask->range.end, chunk);
 
-    /* Can't shrink if the latest mask doesnt cover that range. */
+    /* Can't shrink if the latest mask doesn't cover that range. */
     BUG_ON(mask->range.end <= chunk);
 
     /* Create new mask for the extent and set as latest. */

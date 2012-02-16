@@ -58,7 +58,7 @@ struct castle_sysfs_version {
 #endif
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
-/* Helper function which mimicks newer sysfs interfaces */
+/* Helper function which mimics newer sysfs interfaces */
 #define kobject_tree_add(_kobj, _parent, _ktype, _fmt, _a...)                    \
 ({                                                                               \
     int _ret = 0;                                                                \
@@ -310,7 +310,7 @@ static ssize_t da_size_show(struct kobject *kobj,
     int i;
     uint32_t size = 0;
 
-    /* Get READ lock on DA, to make sure DA doesnt disappear while printing stats. */
+    /* Get READ lock on DA, to make sure DA doesn't disappear while printing stats. */
     read_lock(&da->lock);
 
     for(i=0; i<=da->top_level; i++)
@@ -354,7 +354,7 @@ static ssize_t da_tree_list_show(struct kobject *kobj,
     int i;
     int ret = 0;
 
-    /* Get READ lock on DA, to make sure DA doesnt disappear while printing stats. */
+    /* Get READ lock on DA, to make sure DA doesn't disappear while printing stats. */
     read_lock(&da->lock);
 
     /* Total number of trees. */
@@ -367,7 +367,7 @@ static ssize_t da_tree_list_show(struct kobject *kobj,
 
         /* Number of trees in each level. */
         ret = snprintf(buf, PAGE_SIZE, "%s%u ", buf, da->levels[i].nr_trees);
-        /* Buffer is of size one PAGE. MAke sure we are not overflowing buffer. */
+        /* Buffer is of size one PAGE. Make sure we are not overflowing buffer. */
         if (ret >= PAGE_SIZE)
             goto err;
 
@@ -418,7 +418,7 @@ static ssize_t da_array_list_show(struct kobject *kobj,
     struct castle_component_tree *ct;
     struct list_head *lh;
 
-    /* Get READ lock on DA, to make sure DA doesnt disappear while printing stats. */
+    /* Get READ lock on DA, to make sure DA doesn't disappear while printing stats. */
     read_lock(&da->lock);
 
     /* Number of trees in each level. */
@@ -920,7 +920,7 @@ err1:
 void castle_sysfs_da_del(struct castle_double_array *da)
 {
     /* It is possible that some one could try to add to sysfs after da_del has happened.
-     * Sepcially merges, they take a reference on DA and try to add merges and arrays to
+     * Specially merges, they take a reference on DA and try to add merges and arrays to
      * to sysfs and parallely there could be a double_array_destroy(). So, just delete
      * the top level and remain other directories for the sake last minute additions. We
      * clean them up properly, anyway. */
@@ -1071,7 +1071,7 @@ int castle_sysfs_ct_add(struct castle_component_tree *ct)
 {
     int ret, i = 0;
 
-    /* It is definetly, not recomended, when DA is just getting created as the parent is not
+    /* It is definitely, not recommended, when DA is just getting created as the parent is not
      * yet created. */
     BUG_ON(ct->level < 2);
 

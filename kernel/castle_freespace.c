@@ -136,7 +136,7 @@ static void _castle_freespace_slave_superchunks_unreserve(struct castle_slave  *
         /* Unreserve shouldn't be called when we are overallocated. */
         BUG_ON(nr_schks < 0);
 
-        /* We dont use this function to reduce count on over used reservations. */
+        /* We don't use this function to reduce count on over used reservations. */
         BUG_ON(((c_signed_chk_cnt_t)schks_to_free) > nr_schks);
 
         pool->reserved_schks[cs->id] -= ((c_signed_chk_cnt_t)schks_to_free);
@@ -183,7 +183,7 @@ static void castle_freespace_slave_superchunk_over_usage(struct castle_slave  *c
     /* Should be part of a extent transaction, to avoid race with checkpoints. */
     BUG_ON(!castle_extent_in_transaction());
 
-    /* There shouldnt be any reserved supechunks. */
+    /* There shouldn't be any reserved superchunk. */
     BUG_ON(pool->reserved_schks[cs->id] > 0);
 
     castle_res_pool_counter_check(pool, cs->id);
@@ -288,7 +288,7 @@ get_super_chunk:
     cons_chk = (c_chk_t *)(((uint8_t *)c2b_buffer(c2b)) + BLOCK_OFFSET(cons_off));
     BUG_ON((*cons_chk == -1) || (*cons_chk % CHKS_PER_SLOT));
 
-    /* Make the superchunk to return (respresented as chk_seq. */
+    /* Make the superchunk to return (represented as chk_seq. */
     chk_seq.first_chk        = *cons_chk;
     chk_seq.count            = CHKS_PER_SLOT;
     /* Update bookkeeping information in various structures. */
@@ -297,7 +297,7 @@ get_super_chunk:
     freespace->cons          = (freespace->cons + 1) % freespace->max_entries;
     freespace->nr_entries--;
 
-    /* Is the space is grabbed from freespace wihtout any reservation for a pool, then update
+    /* Is the space is grabbed from freespace without any reservation for a pool, then update
      * over usage count. */
     if (pool && reserved_here)
     {

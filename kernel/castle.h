@@ -179,7 +179,7 @@ typedef uint32_t block_t;
  *
  * 100 + (META_SPACE_SIZE * MAX_NR_SLAVES / # of slaves) + (MSTORE_SPACE_SIZE * 2) + (global tree size * 2 / nr of slaves)
  *
- * Note: gloabl tree size could be found in castle_global_tree, all other definitions should be
+ * Note: global tree size could be found in castle_global_tree, all other definitions should be
  * found in castle.h
  */
 
@@ -202,7 +202,7 @@ typedef uint32_t block_t;
 #define sup_ext_to_slave_id(_id)       ((_id) - SUP_EXT_ID)
 #define slave_id_to_sup_ext(_id)       ((_id) + SUP_EXT_ID)
 
-/* Logical extent structures are stored seperatly from normal extents. They are
+/* Logical extent structures are stored separately from normal extents. They are
  * stored in extent superblock itself. */
 #define LOGICAL_EXTENT(_ext_id)        ((_ext_id) < EXT_SEQ_START && !EXT_ID_INVAL(_ext_id))
 #define SUPER_EXTENT(_ext_id)          (((_ext_id) >= SUP_EXT_ID) && ((_ext_id) < slave_id_to_sup_ext(MAX_NR_SLAVES)))
@@ -238,7 +238,7 @@ typedef struct castle_reservation_pool {
 } c_res_pool_t;
 
 /* Extent mask represents the view of an extent. We always make changes to extents to ends.
- * Any point of time, extent view corresponds to one contigous range. */
+ * Any point of time, extent view corresponds to one contiguous range. */
 typedef struct castle_extent_mask_range {
     c_chk_cnt_t         start;
     c_chk_cnt_t         end;
@@ -624,7 +624,7 @@ STATIC_BUG_ON(sizeof(struct castle_value_tuple) != 32);
 #define CVT_COUNTER_ACCUM_ADD_ADD(_cvt)  ((_cvt).type == CVT_TYPE_COUNTER_ACCUM_ADD_ADD)
 
 
-/* Derevative types. */
+/* Derivative types. */
 #define CVT_ONE_BLK(_cvt)           (CVT_ON_DISK(_cvt) && ((_cvt).length == C_BLK_SIZE))
 #define CVT_LOCAL_COUNTER(_cvt)     (CVT_COUNTER_LOCAL_SET(_cvt) ||            \
                                      CVT_COUNTER_LOCAL_ADD(_cvt))
@@ -1034,7 +1034,7 @@ STATIC_BUG_ON(sizeof(struct castle_bbp_entry) != 70);
 #define CASTLE_CT_BLOOM_EXISTS_BIT      2   /* CT has bloom filter.                             */
 #define CASTLE_CT_MERGE_OUTPUT_BIT      3   /* CT is being created by a merge.                  */
 #define CASTLE_CT_MERGE_INPUT_BIT       4   /* CT is being merged.                              */
-#define CASTLE_CT_PARTIAL_TREE_BIT      5   /* CT tree is partial could be intree/outree.       */
+#define CASTLE_CT_PARTIAL_TREE_BIT      5   /* CT tree is partial could be intree/outtree.       */
 
 /**
  * Is CT queriable.
@@ -1064,7 +1064,7 @@ struct castle_component_tree {
                                                 way to report B-Tree size that GN cares.        */
     uint64_t            nr_drained_bytes;  /**< Number of bytes drained from the tree, during
                                                 merge. Measurement units are same as nr_bytes.
-                                                This counter is accessed in serialised fasion
+                                                This counter is accessed in serialised fashion
                                                 by a single merge thread, atomic not needed.    */
     uint64_t            chkpt_nr_bytes;
     uint64_t            chkpt_nr_drained_bytes;
@@ -1255,7 +1255,7 @@ struct castle_dmserlist_entry {
     /*        937 */ int8_t                           is_new_key;
     /*        938 */ uint32_t                         skipped_count;
                      /* Although the redirection partition is contained by the castle_double_array
-                        struct, SERDES is left to merge because the partition is tighly linked to
+                        struct, SERDES is left to merge because the partition is tightly linked to
                         merge SERDES state. */
     /*        942 */ c_ext_pos_t                      redirection_partition_node_cep;
     /*        958 */ int32_t                          redirection_partition_node_size;
@@ -1521,7 +1521,7 @@ typedef struct castle_bio_vec {
  *          call upper level iterator's callback. */
 typedef void (*castle_iterator_end_io_t)(void *iter,
                                          int err);
-/* register_cb - sets the calback function to be called after preparing buffer */
+/* register_cb - sets the callback function to be called after preparing buffer */
 typedef void (*castle_iterator_register_cb_t)(void *iter,
                                               castle_iterator_end_io_t cb,
                                               void *data);
@@ -1574,7 +1574,7 @@ struct castle_indirect_node {
             struct castle_cache_block *c2b;      /* Cache page for an 'indirect' node */
         };
     };
-    /* Will form array indexed by the entry # from the orginal node. Used to find
+    /* Will form array indexed by the entry # from the original node. Used to find
        the right indirect node/entry in the array above. Again spans at most
        node->used entries. */
     struct {
@@ -1618,7 +1618,7 @@ typedef struct castle_iterator {
     void                         *parent_key; /* The key we followed to get to the block
                                                  on the top of the path/stack */
     union {
-        /* Used by C_ITER_MATCHING_VERSIONS & C_ITER_ANCESTORAL_VERSIONS */
+        /* Used by C_ITER_MATCHING_VERSIONS & C_ITER_ANCESTRAL_VERSIONS */
         struct {
             void                 *key;          /* The next key to look for in the iteration
                                                    (typically parent_key + 1 when at leafs) */
@@ -1650,7 +1650,7 @@ struct node_buf_t {
 
 /**
  * Non-atomic statistics specific to a given version.
- * This structure is used to store the stats, but also to do adjustements. This is why
+ * This structure is used to store the stats, but also to do adjustments. This is why
  * signed integers are used.
  *
  * @also castle_version_stats
@@ -2026,7 +2026,7 @@ struct castle_object_replace {
                                                          up to data_c2b_offset has already been
                                                          used up).                              */
     uint64_t                      data_length;      /**< Amount of data still to be written out
-                                                         initialy equals value_len.             */
+                                                         initially equals value_len.             */
 
     /* Call on completion of big_put. */
     void        (*complete)        (struct castle_object_replace *op,
@@ -2354,7 +2354,7 @@ struct castle_double_array {
     int                         top_level;          /**< Levels in the doubling array.          */
 
     /* General purpose structure for placing DA on a workqueue.
-     * @TODO Currently used only by castle_da_levle0_modified_promote(), hence
+     * @TODO Currently used only by castle_da_level0_modified_promote(), hence
      * there is no locking. */
     struct work_struct          work;               /**< General purpose work structure.        */
     void                       *private;            /**< Work private data.                     */
@@ -2444,7 +2444,7 @@ typedef struct castle_version_stats {
     atomic64_t  version_deletes;    /**< Number of entries deleted due to version delete.   */
     atomic64_t  key_replaces;       /**< Number of keys replaced by newer keys (excludes
                                          tombstones).                                       */
-    atomic64_t  timestamp_rejects;  /**< Number of keys discraded due to out of timestamp
+    atomic64_t  timestamp_rejects;  /**< Number of keys discarded due to out of timestamp
                                          order writes.                                      */
 } cv_stats_t;
 

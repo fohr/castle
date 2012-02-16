@@ -149,7 +149,7 @@ struct castle_cache_flush_entry {
 
 typedef struct castle_extent_inflight {
     atomic_t           *in_flight;      /**< Global inflight counter.                           */
-    atomic_t            ext_in_flight;  /**< Extent specfic inflight counter.                   */
+    atomic_t            ext_in_flight;  /**< Extent specific inflight counter.                   */
     c_ext_mask_id_t     mask_id;        /**< Reference ID on extent.                            */
 } c_ext_inflight_t;
 
@@ -212,8 +212,8 @@ static inline int castle_cache_c2b_to_pages(c2_block_t *c2b)
             $(block of code)
         }
         c2b_for_each_c2p_end(c2p, cep, c2b_to_iterate_over)
-    Similarily for iterating over pages.
-    NOTE: continue in $(block of code) musn't use continue, because this
+    Similarly for iterating over pages.
+    NOTE: continue in $(block of code) mustn't use continue, because this
           would skip the block of code in c2b_for_each_c2p_end().
  */
 #define c2b_for_each_c2p_start(_c2p, _cep, _c2b, _start)                 \
@@ -1092,7 +1092,7 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
 
 /**
  * Demote tree of dirty blocks (dirtytree) when the extent is being deleted.
- * This priotises flushing the blocks of this extent out of the cache.
+ * This prioritises flushing the blocks of this extent out of the cache.
  *
  * @param c2b   Dirtytree to demote.
  *
@@ -1820,7 +1820,7 @@ retry:
         if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
         {
             found = 1;
-            /* Slave is not out-of-sevice - submit the IO */
+            /* Slave is not out-of-service - submit the IO */
             atomic_add(nr_pages, &castle_cache_write_stats);
             atomic_add(nr_pages, &c2b->remaining);
             nr_pages_remaining = submit_c2b_io(WRITE, c2b, array->start_cep, chunks[i],
@@ -2038,7 +2038,7 @@ out:
  *
  * Iterates over passed c2b's c2ps (ignoring those that are clean/uptodate for WRITEs/READs)
  * Populates array of pages from c2ps
- * Dispatches array once it reaches the a chunk boundry
+ * Dispatches array once it reaches a chunk boundary
  * Continues until whole c2b has been dispatched
  *
  * @see c_io_array_init()
@@ -2279,7 +2279,7 @@ int submit_c2b_sync_barrier(int rw, c2_block_t *c2b)
     /* Submit the c2b as per usual. */
     ret = submit_c2b_sync(rw, c2b);
 
-    /* Clear the bit, since c2b is write locked, noone else will see it. */
+    /* Clear the bit, since c2b is write locked, no-one else will see it. */
     clear_c2b_barrier(c2b);
 
     return ret;
@@ -2910,7 +2910,7 @@ static void castle_cache_block_init(c2_block_t *c2b,
     BUG_ON(c2b->state.softpin_cnt != 0);
 #endif
     /* Init the page array (note: this may substitute some c2ps,
-       if they aleady exist in the hash. */
+       if they already exist in the hash. */
     uptodate = castle_cache_pages_get(cep, c2ps, castle_cache_pages_to_c2ps(nr_pages));
     /* Initialise c2b. */
     atomic_set(&c2b->remaining, 0);
@@ -3120,7 +3120,7 @@ static int castle_cache_block_hash_clean(void)
              * (2) Softpin blocks are prioritised (see comment above).
              * (3) Are marked as blocks that sit at the beginning of a prefetch window for an extent
              *     that no longer exists.  This allows us to correctly evict softpinned blocks from
-             *     extents that have now been removed - by targetting the start of window block we
+             *     extents that have now been removed - by targeting the start of window block we
              *     unpin and demote those other blocks from the window.
              * (4) Must be transient or from an evictable extent (i.e. not from the super, micro or
              *     mstore extents).  @TODO longer term solution: pools. */
@@ -3192,7 +3192,7 @@ static int castle_cache_block_hash_clean(void)
 }
 
 /**
- * Frees up the c2b specified. Only succeeds if the c2b there is preciesly one
+ * Frees up the c2b specified. Only succeeds if the c2b there is precisely one
  * outstanding reference to the c2b (held by the caller), it is not dirty, and
  * it is not locked.
  * This function will put the reference to the c2b regardless of whether is
@@ -3381,7 +3381,7 @@ static c2_block_t* _castle_cache_block_get(c_ext_pos_t cep,
 
         /* If we couldn't find in the hash, try allocating from the freelists. Get c2b first. */
         /* @TODO: Return NULL if extent doesn't exist any more. Make sure this
-         * doesnt break any of the clients. */
+         * doesn't break any of the clients. */
 #ifdef CASTLE_DEBUG
         {
             uint64_t ext_size;
@@ -3563,7 +3563,7 @@ void castle_cache_page_block_unreserve(c2_block_t *c2b)
  *    the window are deprecated in the LRU cache if their softpin count reaches 0.
  *
  * Debug:
- *    Many prefetcher functions take a debug argument that is propogated to the
+ *    Many prefetcher functions take a debug argument that is propagated to the
  *    functions they call.  This should make it straightforward to debug
  *    individual prefetch requests or specific sections of code by setting the
  *    debug flag in the correct place.  PREF_DEBUG needs to be defined.
@@ -4379,7 +4379,7 @@ static void c2_pref_window_submit(c2_pref_window_t *window, c_ext_pos_t cep, int
  *
  * @param window    Window to advance
  * @param cep       User-requested offset
- * @param advise    User-specified prefetch paramaters
+ * @param advise    User-specified prefetch parameters
  * @param chunks    Unused
  * @param priority  Unused
  *
@@ -5007,7 +5007,7 @@ void castle_cache_extent_evict(c_ext_dirtytree_t *dirtytree, c_chk_cnt_t start, 
  *       expected to return.  This is to ensure that the dirtylist is sorted
  *       in descending order.
  *
- * @return <0   l1 is greated than l2
+ * @return <0   l1 is greater than l2
  * @return  0   l1 is the same size as l2
  * @return >0   l2 is smaller than l1
  */
@@ -5175,9 +5175,9 @@ static int castle_cache_flush(void *unused)
 
         /* Iterate over all dirty extents trying to find pages to flush.
            Try flushing extents from high priority (i.e. low value) dirtylists first.
-           Start with 'non-aggresive' flush (i.e. when only extents that are deemed
+           Start with 'non-aggressive' flush (i.e. when only extents that are deemed
            to be worth-while flushing are flushed), if to_flush pages aren't found,
-           switch to aggresive.
+           switch to aggressive.
          */
         aggressive = 0;
 aggressive:
@@ -5243,7 +5243,7 @@ aggressive:
                     goto err_out;
 
                 /* We need to pass two reference counts to __castle_cache_extent_flush() one
-                 * for global counting (for rate limiting) and another per extent cound to
+                 * for global counting (for rate limiting) and another per extent count to
                  * release references. */
                 data = kmem_cache_alloc(castle_flush_cache, GFP_KERNEL);
                 if (!data)
@@ -5274,7 +5274,7 @@ aggressive:
                 to_flush -= flushed;
 
                 /* If per extent inflight count reached 0, time to release the reference. All
-                 * io's completed or failed, or nothing scheudled for flush. */
+                 * io's completed or failed, or nothing scheduled for flush. */
                 if (!atomic_dec_return(&data->ext_in_flight))
                     goto err_out;
 
@@ -5427,7 +5427,7 @@ static int castle_cache_c2p_init(c2_page_t *c2p)
         /* Add page to the c2p */
         c2p->pages[j] = page;
 #ifdef CASTLE_DEBUG
-        /* For debugging, save the c2p pointer in usude lru list. */
+        /* For debugging, save the c2p pointer in used lru list. */
         page->lru.next = (void *)c2p;
 #endif
     }
@@ -5569,7 +5569,7 @@ int castle_checkpoint_version_inc(void)
     uint32_t fs_version;
 
     /* Done with previous checkpoint. Update freespace counters now. Safe to
-     * resue them now. */
+     * reuse them now. */
     castle_freespace_post_checkpoint();
 
     /* Goto next version. */

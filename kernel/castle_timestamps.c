@@ -391,7 +391,7 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
         if(stack empty) || e.ts > stack.top.ts
             include e and push it onto the stack
 
-        (does not include tombstone discardation magic)
+        (does not include tombstone discard magic)
     */
 
     BUG_ON(dfs_resolver->top_index != dfs_resolver->buffer_node->used);
@@ -434,7 +434,7 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
         else /* No timestamping, so entries cannot be timestamp deprecated */
             entry_included = 1;
 
-        /* Handle tombstone discardation */
+        /* Handle tombstone discard */
         if( ( dfs_resolver->functions & DFS_RESOLVE_TOMBSTONES ) && /* Discarding tombstones... */
             ( entry_included ) && /* AND this entry not already discarded because of timestamp... */
             ( CVT_TOMBSTONE(entry_i_cvt) ) &&    /* AND this is a tombstone... */

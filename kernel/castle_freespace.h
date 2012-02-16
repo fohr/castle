@@ -4,7 +4,7 @@
 #include "castle.h"
 
 /**
- * Freespace: Maintains free space for every disk seperatly. On-disk structure
+ * Freespace: Maintains free space for every disk separately. On-disk structure
  *            for every disk contains log of events happened since last
  * reboot(init) and list of free chunks at last reboot. Allocator uses
  * buddy-list allocation.

@@ -44,7 +44,7 @@ void *castle_dup_or_copy(const void *src, size_t src_len, void *dst, size_t *dst
  * never take all dimensions from k1 (n should less than k1->nr_dims).
  *
  * @param k1                [in]    B-Tree key to copy first dimensions.
- * @param k2                [in]    B-Tree key to copy remianing dimensions from.
+ * @param k2                [in]    B-Tree key to copy remaining dimensions from.
  * @param nr_dims_from_k1   [in]    Copy these many number of dimensions from k1 and remaining
  *                                  from k2. Could be zero.
  *
@@ -73,7 +73,7 @@ static c_vl_bkey_t* castle_object_btree_key_construct(const c_vl_bkey_t *k1,
     /* If k1 exists, k1 & k2 should contain same number of dimensions. */
     BUG_ON(k1 && (k1->nr_dims != k2->nr_dims));
 
-    /* Number of dimensions to copy shouldn't exceed the nr_dims(k1)-1. We expect atleast one
+    /* Number of dimensions to copy shouldn't exceed the nr_dims(k1)-1. We expect at least one
      * dimension to go from k2. */
     BUG_ON(nr_dims_from_k1 && (nr_dims_from_k1 > (k1->nr_dims - 1)));
 
@@ -244,7 +244,7 @@ c_vl_bkey_t *castle_object_btree_key_next(const c_vl_bkey_t *src,
 /* Checks if the btree key is within the bounds imposed by start/end object keys.
    Returns 1 if the most significant dimension is greater than the end, -1 if it is
    less then start, or 0 if the key is within bounds. Optionally, the function can
-   be queried about which dimension offeneded */
+   be queried about which dimension offended */
 static int castle_object_btree_key_bounds_check(const c_vl_bkey_t *key,
                                                 const c_vl_bkey_t *start,
                                                 const c_vl_bkey_t *end,
