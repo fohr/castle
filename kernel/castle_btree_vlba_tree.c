@@ -264,6 +264,41 @@ static int castle_vlba_tree_need_split(struct castle_btree_node *node,
     return -1;
 }
 
+static int castle_vlba_tree_mid_entry(struct castle_btree_node *node)
+{
+    struct castle_vlba_tree_node *vlba_node =
+        (struct castle_vlba_tree_node*) BTREE_NODE_PAYLOAD(node);
+    struct castle_vlba_tree_entry *entry;
+    unsigned long half_size, entries_size;
+    int mid_entry_idx;
+
+    /* This mustn't be called on nodes not ready for key spliting. */
+    BUG_ON(!castle_vlba_tree_need_split(node, 1));
+
+    /* Calculate half of the # of bytes consumed by entries. */
+    half_size = VLBA_TREE_NODE_LENGTH(node);
+    half_size -= vlba_node->free_bytes;
+    half_size -= vlba_node->dead_bytes;
+    half_size -= sizeof(struct castle_btree_node);
+    half_size -= sizeof(struct castle_vlba_tree_node);
+    half_size /= 2;
+
+    for(mid_entry_idx = 0, entries_size = 0; mid_entry_idx < node->used; mid_entry_idx++)
+    {
+        /* Work out the size of current entry. Add to the total. */
+        entry = (struct castle_vlba_tree_entry *)VLBA_ENTRY_PTR(node, vlba_node, mid_entry_idx);
+        entries_size += VLBA_ENTRY_LENGTH(entry) + sizeof(uint32_t);
+        if(entries_size > half_size)
+        {
+            /* The first entry alone cannot be bigger than half the occupied size. */
+            BUG_ON(mid_entry_idx == 0);
+
+            return mid_entry_idx;
+        }
+    }
+    BUG();
+}
+
 static int castle_vlba_tree_key_compare(const void *keyv1, const void *keyv2)
 {
     const vlba_key_t *key1 = keyv1;
@@ -933,6 +968,7 @@ struct castle_btree_type castle_vlba_tree = {
     .inv_key        = (void *)&VLBA_TREE_INVAL_KEY,
     .max_entries    = castle_vlba_tree_max_entries,
     .need_split     = castle_vlba_tree_need_split,
+    .mid_entry      = castle_vlba_tree_mid_entry,
     .key_pack       = castle_vlba_tree_key_pack,
     .key_unpack     = castle_vlba_tree_key_unpack,
     .key_compare    = castle_vlba_tree_key_compare,

@@ -590,7 +590,7 @@ static c2_block_t* castle_btree_node_key_split(c_bvec_t *c_bvec,
        because otherwise the key in its parent would have to change. We want
        to avoid that */
     BUG_ON(sec_node->used != 0);
-    nr_moved = node->used / 2;
+    nr_moved = btree->mid_entry(node);
     for(i=0, j=0; i<nr_moved; i++)
     {
         int disabled;

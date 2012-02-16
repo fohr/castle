@@ -913,6 +913,14 @@ struct castle_btree_type {
     int      (*need_split)    (struct castle_btree_node *node,
                                int                       version_or_key);
                               /* 0 - version split, 1 - key split       */
+    int      (*mid_entry)     (struct castle_btree_node *node);
+                              /* Returns index of an entry which splits the
+                                 node into equal halfs (as much as possible)
+                                 taking the variable length of keys & values
+                                 into account.
+                                 The halfs are entries [0 - (mid_entry-1)] &
+                                 [mid_entry - (nr_entries-1)].
+                               */
     void    *(*key_pack)      (const c_vl_bkey_t *src, void *dst, size_t *dst_len);
                               /* Packs a standard backend key into the
                                  tree's native key format. Uses its
