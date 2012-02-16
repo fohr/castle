@@ -12,7 +12,6 @@ typedef struct {
     uint64_t    ext_avail_bytes;      /* byets available from extent_grow calls */
 } growth_control_state_t;
 
-
 struct castle_dfs_resolver;
 
 struct castle_da_merge {
