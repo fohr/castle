@@ -2353,9 +2353,9 @@ struct castle_double_array {
     /* Compaction (Big-merge) */
     int                         top_level;          /**< Levels in the doubling array.          */
 
-    /* General purpose structure for placing DA on a workqueue.
-     * @TODO Currently used only by castle_da_level0_modified_promote(), hence
-     * there is no locking. */
+    /* General purpose work structure for placing DA on a workqueue.
+     * Currently used by just castle_da_level0_modified_promote() so no locking
+     * is done.  If this changes in the future, this will need to be revisited. */
     struct work_struct          work;               /**< General purpose work structure.        */
     void                       *private;            /**< Work private data.                     */
 
