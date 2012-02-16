@@ -106,6 +106,89 @@ static void castle_sysfs_kobj_release_wait(struct kobject *kobj)
     wait_event(castle_sysfs_kobj_release_wq, atomic_read(&kobj->kref.refcount) == 0);
 }
 
+static char print_once_filter[64] = {[0 ... 63] = 0x00};
+static void print_once(char *buffer)
+{
+    int len = strlen(buffer);
+    uint32_t hash1, hash2, hash3, hash4;
+
+    /* Not expecting to print v. short strings. */
+    if(len < 4)
+        return;
+    hash1 = murmur_hash_32(buffer, len, 1) % (64 * 8);
+    hash2 = murmur_hash_32(buffer, len, 2) % (64 * 8);
+    hash3 = murmur_hash_32(buffer, len, 3) % (64 * 8);
+    hash4 = murmur_hash_32(buffer, len, 4) % (64 * 8);
+
+    if(test_bit(hash1, print_once_filter) &&
+       test_bit(hash2, print_once_filter) &&
+       test_bit(hash3, print_once_filter) &&
+       test_bit(hash4, print_once_filter))
+        return;
+
+    set_bit(hash1, print_once_filter);
+    set_bit(hash2, print_once_filter);
+    set_bit(hash3, print_once_filter);
+    set_bit(hash4, print_once_filter);
+
+    printk("Versions sysfs access by: %s\n.", buffer);
+}
+
+static void print_cmd(void)
+{
+    int res = 0;
+    unsigned int len;
+    struct task_struct *task = current;
+#define BUFFER_LENGTH 128
+    char buffer[BUFFER_LENGTH];
+    struct mm_struct *mm;
+
+next_task:
+    mm = get_task_mm(task);
+	if (!mm)
+        return;
+	if (!mm->arg_end)
+    {
+        mmput(mm);
+        return;
+    }
+
+ 	len = mm->arg_end - mm->arg_start;
+
+	if (len > BUFFER_LENGTH)
+		len = BUFFER_LENGTH;
+
+	res = access_process_vm(task, mm->arg_start, buffer, len, 0);
+
+	if (res > 0 && buffer[res-1] != '\0' && len < BUFFER_LENGTH) {
+		len = strnlen(buffer, res);
+		if (len < res) {
+		    res = len;
+		} else {
+			len = mm->env_end - mm->env_start;
+			if (len > BUFFER_LENGTH - res)
+				len = BUFFER_LENGTH - res;
+			res += access_process_vm(task, mm->env_start, buffer+res, len, 0);
+			res = strnlen(buffer, res);
+		}
+	}
+
+	mmput(mm);
+
+    res--;
+    while(--res >= 0)
+        if(buffer[res] == '\0')
+            buffer[res] = ' ';
+    buffer[BUFFER_LENGTH-1] = '\0';
+    print_once(buffer);
+
+    if((task->parent != NULL) && (task != task->parent))
+    {
+        task = task->parent;
+        goto next_task;
+    }
+}
+
 static ssize_t versions_list_show(struct kobject *kobj, struct attribute *attr, char *buf)
 {
     struct castle_sysfs_entry *csys_entry =
@@ -118,6 +201,8 @@ static ssize_t versions_list_show(struct kobject *kobj, struct attribute *attr, 
     int leaf;
     int ret;
     c_da_t da_id;
+
+    print_cmd();
 
     ret = castle_version_read(v->version, &da_id, NULL, &live_parent, &size, &leaf);
     if(ret == 0)
