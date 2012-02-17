@@ -55,11 +55,15 @@ LIST_HEAD(castle_versions_deleted);
 #define CV_LEAF_BIT               (3)
 #define CV_LEAF_MASK              (1 << CV_LEAF_BIT)
 
-#define V_IMMUTABLE_INIT(_v)                   \
-{                                              \
-    clear_bit(CV_LEAF_BIT, &(_v)->flags);       \
-    do_gettimeofday(&(_v)->immute_timestamp);   \
-}                                              \
+#define V_IMMUTABLE_INIT(_v)                       \
+{                                                  \
+    if (test_bit(CV_LEAF_BIT, &(_v)->flags))      \
+    {                                              \
+        do_gettimeofday(&(_v)->immute_timestamp);  \
+        barrier();                                 \
+        clear_bit(CV_LEAF_BIT, &(_v)->flags);      \
+    }                                              \
+}                                                  \
 
 struct castle_version {
     /* Various tree links */
@@ -1515,7 +1519,6 @@ static int castle_version_new_create(int snap_or_clone,
 
     /* Set is_leaf bit for the the child and clear for parent. */
     set_bit(CV_LEAF_BIT, &v->flags);
-    //clear_bit(CV_LEAF_BIT, &p->flags);
     V_IMMUTABLE_INIT(p);
 
     castle_events_version_create(version);
