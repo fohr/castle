@@ -639,7 +639,6 @@ void castle_res_pool_extent_detach(c_ext_id_t ext_id)
  * Checkpoint is anyway serialised process. Just use this global buffer. */
 struct castle_rlist_entry global_rentry_buffer;
 
-/* Should be called with extent lock held. Keeps freespace and extents in sync. */
 static int castle_res_pool_writeback(c_res_pool_t *pool, void *store)
 {
     c_mstore_t *mstore = store;
@@ -3859,7 +3858,7 @@ void castle_extent_sup_ext_close(struct castle_slave *cs)
  * these variables won't race. Four operations we need for this are get(), put(), link() and
  * unlink(). It is okay to run get() and link() to run together. They just get references. Only
  * races that are possible are when the last link and last reference are released, link() and get()
- * should see it in consistent way. So, run unulink() and put() under write lock and get() and
+ * should see it in consistent way. So, run unlink() and put() under write lock and get() and
  * link() under read lock.
  */
 

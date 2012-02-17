@@ -1387,6 +1387,8 @@ static int castle_version_writeback(struct castle_version *v, void *_data)
     struct castle_version_writeback_state *writeback_state =
                             (struct castle_version_writeback_state *)_data;
 
+    BUG_ON(!CASTLE_IN_TRANSACTION);
+
     debug("Writing back version %d\n", v->version);
 
     BUG_ON(writeback_state->is_fini &&
@@ -1418,10 +1420,11 @@ static int castle_version_writeback(struct castle_version *v, void *_data)
     return 0;
 }
 
-/* Should be called in CASTLE_TRANSACTION. */
 int castle_versions_writeback(int is_fini)
 {
     struct castle_version_writeback_state writeback_state;
+
+    BUG_ON(!CASTLE_IN_TRANSACTION);
 
     writeback_state.mstore = castle_mstore_init(MSTORE_VERSIONS_ID);
     if(!writeback_state.mstore)

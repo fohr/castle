@@ -8686,8 +8686,6 @@ static int castle_data_exts_read(void)
  * @param   refs    *    => Pre-allocated array of extent references.
  *                  NULL => Don't take extent references.
  *
- * NOTE: Caller should hold castle_da_lock.
- *
  * NOTE: Extent references must be taken on all CTs which might be involved in
  *       partial merges, i.e. those that are the result of a merge.
  *
@@ -8696,6 +8694,9 @@ static int castle_data_exts_read(void)
 void castle_ct_get(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *refs)
 {
     int i, nr_refs = 0;
+
+    /* NOTE: Caller should hold castle_da_lock. */
+    BUG_ON(write_can_lock(&ct->da->lock));
 
     /* Take read reference. */
     atomic_inc(&ct->ref_count);
