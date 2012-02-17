@@ -2198,9 +2198,6 @@ void castle_attachment_put(struct castle_attachment *ca)
     {
         c_ver_t version = ca->version;
 
-        castle_events_collection_detach(ca->col.id);
-        castle_sysfs_collection_del(ca);
-
         castle_version_detach(version);
         castle_double_array_put(ca->col.da);
         castle_printk(LOG_USERINFO, "Attachment %u is completely removed\n", ca->col.id);
@@ -2217,6 +2214,8 @@ void castle_attachment_free(struct castle_attachment *ca)
     spin_lock(&castle_attachments.lock);
     list_del(&ca->list);
     spin_unlock(&castle_attachments.lock);
+
+    castle_sysfs_collection_del(ca);
 
     /* Release the reference taken at init. */
     castle_attachment_put(ca);
@@ -2477,7 +2476,6 @@ static int castle_slaves_init(void)
     BUG_ON(sizeof(struct castle_fs_superblock) % 2);
 
     /* Init the slaves structures */
-    memset(&castle_slaves, 0, sizeof(struct castle_slaves));
     INIT_LIST_HEAD(&castle_slaves.slaves);
 
     return 0;
@@ -2487,7 +2485,6 @@ static int castle_attachments_init(void)
 {
     int major;
 
-    memset(&castle_attachments, 0, sizeof(struct castle_attachments));
     INIT_LIST_HEAD(&castle_attachments.attachments);
 
     /* Allocate a major for this device */
@@ -2531,6 +2528,7 @@ static int __init castle_init(void)
     printk("Castle FS load (build: %s).\n", CASTLE_COMPILE_CHANGESET);
 
     castle_fs_inited = 0;
+    if((ret = castle_sysfs_init()))             goto err_out0;
     if((ret = castle_printk_init()))            goto err_out1;
     if((ret = castle_debug_init()))             goto err_out2;
     if((ret = castle_time_init()))              goto err_out3;
@@ -2549,8 +2547,7 @@ static int __init castle_init(void)
     if((ret = castle_control_init()))           goto err_out16;
     if((ret = castle_netlink_init()))           goto err_out17;
     if((ret = castle_ctrl_prog_init()))         goto err_out18;
-    if((ret = castle_sysfs_init()))             goto err_out19;
-    if((ret = castle_back_init()))              goto err_out20;
+    if((ret = castle_back_init()))              goto err_out19;
 
     castle_printk(LOG_INIT, "Castle FS load done.\n");
     castle_fs_state = CASTLE_STATE_UNINITED;
@@ -2558,8 +2555,6 @@ static int __init castle_init(void)
     return 0;
 
     castle_back_fini(); /* Unreachable */
-err_out20:
-    castle_sysfs_fini();
 err_out19:
     castle_ctrl_prog_fini();
 err_out18:
@@ -2599,6 +2594,8 @@ err_out3:
 err_out2:
     castle_printk_fini();
 err_out1:
+    castle_sysfs_fini();
+err_out0:
 
     return ret;
 }
@@ -2623,7 +2620,6 @@ static void __exit castle_exit(void)
     /* Now, make sure no more IO can be made, internally or externally generated */
     castle_double_array_merges_fini();  /* Completes all internal i/o - merges. */
     castle_extents_process_fini();
-    castle_sysfs_fini();
     castle_checkpoint_fini();
     /* Note: Changes from here are not persistent. */
     castle_attachments_free();
@@ -2646,7 +2642,7 @@ static void __exit castle_exit(void)
     castle_debug_fini();
     castle_printk_fini();
 
-    castle_sysfs_fini_check();
+    castle_sysfs_fini();
 
     printk("Castle FS exit done.\n");
 }

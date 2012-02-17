@@ -515,6 +515,8 @@ void castle_control_collection_detach(c_collection_id_t  collection,
     /* Matk attachment as deleted. */
     castle_attachment_free(ca);
 
+    castle_events_collection_detach(ca->col.id);
+
     castle_printk(LOG_USERINFO, "Deleting Collection Attachment %u (%s, %u)/%u\n",
             collection, ca->col.name, ca->version, ca->ref_cnt);
 
