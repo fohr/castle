@@ -128,6 +128,7 @@ int         castle_version_is_deletable             (struct castle_version_delet
                                                      c_ver_t version,
                                                      int is_new_key);
 int         castle_version_is_leaf                  (c_ver_t version);
+int         castle_version_is_mutable               (c_ver_t version);
 
 int         castle_versions_read                    (void);
 int         castle_versions_init                    (void);

@@ -339,7 +339,7 @@ static int castle_timestamped_tombstone_discardable_check(c_dfs_resolver *dfs_re
     /* Sub-requirement: cannot discard tombstone in leaf version */
     debug("%s::merge id %u, checking if version %u is leaf\n",
             __FUNCTION__, dfs_resolver->merge->id, ver);
-    ret = castle_version_is_leaf(ver);
+    ret = castle_version_is_mutable(ver);
     BUG_ON(ret == -EINVAL);
     if(ret)
     {
