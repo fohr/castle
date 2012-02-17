@@ -24,11 +24,7 @@ static struct kobject    double_arrays_kobj;
 static struct kobject    data_extents_kobj;
 static struct kobject    filesystem_kobj;
 static struct kobject    devel_kobj;
-struct castle_sysfs_versions {
-    struct kobject kobj;
-    struct list_head version_list;
-};
-static struct castle_sysfs_versions castle_sysfs_versions;
+static struct kobject    versions_kobj;
 
 static uint32_t castle_data_extents_count = 0;
 
@@ -37,16 +33,6 @@ struct castle_sysfs_entry {
     ssize_t (*show) (struct kobject *kobj, struct attribute *attr, char *buf);
     ssize_t (*store)(struct kobject *kobj, struct attribute *attr, const char *buf, size_t count);
     void *private;
-};
-
-/* We assume that version can be printed in 10 chars (in hex, without 0x). That's true
-   for as long as 32 bit ints are used. */
-STATIC_BUG_ON(sizeof(c_ver_t) > 4);
-struct castle_sysfs_version {
-    c_ver_t version;
-    char name[10];
-    struct castle_sysfs_entry csys_entry;
-    struct list_head list;
 };
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
@@ -96,6 +82,39 @@ struct castle_sysfs_version {
 
 #endif
 
+static ssize_t castle_attr_show(struct kobject *kobj,
+                                struct attribute *attr,
+                                char *page)
+{
+    struct castle_sysfs_entry *entry =
+                container_of(attr, struct castle_sysfs_entry, attr);
+
+    if (!entry->show)
+        return -EIO;
+
+    return entry->show(kobj, attr, page);
+}
+
+static ssize_t castle_attr_store(struct kobject *kobj,
+                                 struct attribute *attr,
+                                 const char *page,
+                                 size_t length)
+{
+    struct castle_sysfs_entry *entry =
+                container_of(attr, struct castle_sysfs_entry, attr);
+
+    if (!entry->store)
+        return -EIO;
+    if (!capable(CAP_SYS_ADMIN))
+        return -EACCES;
+    return entry->store(kobj, attr, page, length);
+}
+
+static struct sysfs_ops castle_sysfs_ops = {
+    .show   = castle_attr_show,
+    .store  = castle_attr_store,
+};
+
 static void castle_sysfs_kobj_release(struct kobject *kobj)
 {
     wake_up(&castle_sysfs_kobj_release_wq);
@@ -106,145 +125,93 @@ static void castle_sysfs_kobj_release_wait(struct kobject *kobj)
     wait_event(castle_sysfs_kobj_release_wq, atomic_read(&kobj->kref.refcount) == 0);
 }
 
-static ssize_t versions_list_show(struct kobject *kobj, struct attribute *attr, char *buf)
+static ssize_t version_info_show(struct kobject *kobj,
+                                 struct attribute *attr,
+                                 char *buf)
 {
-    struct castle_sysfs_entry *csys_entry =
-                container_of(attr, struct castle_sysfs_entry, attr);
-    struct castle_sysfs_version *v =
-                container_of(csys_entry, struct castle_sysfs_version, csys_entry);
+    struct castle_version *v = container_of(kobj, struct castle_version, kobj);
+    cv_nonatomic_stats_t stats;
+    struct timeval creation_timestamp;
     c_ver_t live_parent;
-    c_byte_off_t size;
-    ssize_t len;
-    int leaf;
-    int ret;
-    c_da_t da_id;
+    int leaf, ret;
 
-    ret = castle_version_read(v->version, &da_id, NULL, &live_parent, &size, &leaf);
-    if(ret == 0)
-    {
-        cv_nonatomic_stats_t stats;
-        struct timeval creation_timestamp;
+    ret = castle_version_read(v->version, NULL, NULL, &live_parent, NULL, &leaf);
+    if (ret)
+        return sprintf(buf, "Could not read the version, err %d\n", ret);
 
-        stats = castle_version_consistent_stats_get(v->version);
-        creation_timestamp = castle_version_creation_timestamp_get(v->version);
-        len = sprintf(buf,
-                "Id: 0x%x\n"
-                "VertreeId: 0x%x\n"
-                "ParentId: 0x%x\n"
-                "LogicalSize: %llu\n"
-                "IsLeaf: %d\n"
-                "Keys: %ld\n"
-                "Tombstones: %ld\n"
-                "TombstoneDeletes: %ld\n"
-                "VersionDeletes: %ld\n"
-                "KeyReplaces: %ld\n"
-                "TimestampRejects: %ld\n"
-                "CreationTimestamp: %ld.%.6ld\n",
-                 v->version,
-                 castle_version_da_id_get(v->version),
-                 live_parent,
-                 size,
-                 leaf,
-                 stats.keys,
-                 stats.tombstones,
-                 stats.tombstone_deletes,
-                 stats.version_deletes,
-                 stats.key_replaces,
-                 stats.timestamp_rejects,
-                 creation_timestamp.tv_sec,
-                 creation_timestamp.tv_usec);
+    stats = castle_version_consistent_stats_get(v->version);
+    creation_timestamp = castle_version_creation_timestamp_get(v->version);
 
-        return len;
-    }
-
-    return sprintf(buf, "Could not read the version, err %d\n", ret);
+    return sprintf(buf,
+                  "Id: 0x%x\n"
+                  "VertreeId: 0x%x\n"
+                  "ParentId: 0x%x\n"
+                  "LogicalSize: %llu\n"
+                  "IsLeaf: %d\n"
+                  "Keys: %ld\n"
+                  "Tombstones: %ld\n"
+                  "TombstoneDeletes: %ld\n"
+                  "VersionDeletes: %ld\n"
+                  "KeyReplaces: %ld\n"
+                  "TimestampRejects: %ld\n"
+                  "CreationTimestamp: %ld.%.6ld\n",
+                   v->version,
+                   v->da_id,
+                   live_parent,
+                   v->size,
+                   leaf,
+                   stats.keys,
+                   stats.tombstones,
+                   stats.tombstone_deletes,
+                   stats.version_deletes,
+                   stats.key_replaces,
+                   stats.timestamp_rejects,
+                   creation_timestamp.tv_sec,
+                   creation_timestamp.tv_usec);
 }
 
-static ssize_t versions_list_store(struct kobject *kobj,
-                                   struct attribute *attr,
-                                   const char *buf,
-                                   size_t count)
+static struct castle_sysfs_entry version_info =
+__ATTR(info, S_IRUGO|S_IWUSR, version_info_show, NULL);
+
+static struct attribute *castle_version_attrs[] = {
+    &version_info.attr,
+    NULL,
+};
+
+static struct kobj_type castle_version_ktype = {
+    .release        = castle_sysfs_kobj_release,
+    .sysfs_ops      = &castle_sysfs_ops,
+    .default_attrs  = castle_version_attrs,
+};
+
+int castle_sysfs_version_add(struct castle_version *v)
 {
-    castle_printk(LOG_INFO, "Got write to volumes: %s\n", buf);
-    return count;
-}
-
-static void castle_sysfs_versions_fini(void)
-{
-    struct castle_sysfs_version *v;
-    struct list_head *l, *t;
-
-    /* Remove all sysfs files, which in turn releases references on castle_sysfs_versions.kobj. */
-    list_for_each_safe(l, t, &castle_sysfs_versions.version_list)
-    {
-        v = list_entry(l, struct castle_sysfs_version, list);
-        sysfs_remove_file(&castle_sysfs_versions.kobj, &v->csys_entry.attr);
-    }
-
-    /* Remove parent directory for versions sysfs and wait for it to complete. By this time we
-     * should have released all references from fs code. There could be references due to file
-     * opens from userspace. Wait for them to complete. */
-    kobject_remove_wait(&castle_sysfs_versions.kobj);
-
-    list_for_each_safe(l, t, &castle_sysfs_versions.version_list)
-    {
-        list_del(l);
-        v = list_entry(l, struct castle_sysfs_version, list);
-        castle_free(v);
-    }
-}
-
-int castle_sysfs_version_add(c_ver_t version)
-{
-    struct castle_sysfs_version *v;
     int ret;
 
-    v = castle_alloc(sizeof(struct castle_sysfs_version));
-    if(!v) return -ENOMEM;
+    memset(&v->kobj, 0, sizeof(struct kobject));
+    ret = kobject_tree_add(&v->kobj,
+                           &versions_kobj,
+                           &castle_version_ktype,
+                           "%x",
+                           v->version);
+    if(ret < 0)
+        return ret;
 
-    v->version = version;
-    sprintf(v->name, "%x", version);
-    v->csys_entry.attr.name  = v->name;
-    v->csys_entry.attr.mode  = S_IRUGO|S_IWUSR;
-    v->csys_entry.attr.owner = THIS_MODULE;
-    v->csys_entry.show  = versions_list_show;
-    v->csys_entry.store = versions_list_store;
-
-    ret = sysfs_create_file(&castle_sysfs_versions.kobj, &v->csys_entry.attr);
-    if(ret)
-    {
-        castle_printk(LOG_WARN, "Warning: could not create a version file in sysfs.\n");
-        castle_free(v);
-    } else
-    {
-        /* Succeeded at adding the version, add it to the list, so that it gets cleaned up */
-        INIT_LIST_HEAD(&v->list);
-        list_add(&v->list, &castle_sysfs_versions.version_list);
-    }
-
-    return ret;
-}
-
-int castle_sysfs_version_del(c_ver_t version)
-{
-    struct castle_sysfs_version *v = NULL, *k;
-    struct list_head *pos, *tmp;
-
-    list_for_each_safe(pos, tmp, &castle_sysfs_versions.version_list)
-    {
-        k = list_entry(pos, struct castle_sysfs_version, list);
-        if (k->version == version)
-        {
-            v = k;
-            break;
-        }
-    }
-    if (!v)
-        return -1;
-
-    sysfs_remove_file(&castle_sysfs_versions.kobj, &v->csys_entry.attr);
+    set_bit(CV_IN_SYSFS_BIT, &v->flags);
 
     return 0;
+}
+
+void castle_sysfs_version_del(struct castle_version *v)
+{
+    if (!test_bit(CV_IN_SYSFS_BIT, &v->flags))
+    {
+        /* If it's not in sysfs, it should be already marked deletion. */
+        BUG_ON(!test_bit(CV_DELETED_BIT, &v->flags));
+        return;
+    }
+    kobject_remove_wait(&v->kobj);
+    clear_bit(CV_IN_SYSFS_BIT, &v->flags);
 }
 
 /* Double Array functions could race with DA deletion. */
@@ -755,39 +722,6 @@ static ssize_t collection_name_show(struct kobject *kobj,
 
     return sprintf(buf, "%s\n", collection->col.name);
 }
-
-static ssize_t castle_attr_show(struct kobject *kobj,
-                                struct attribute *attr,
-                                char *page)
-{
-    struct castle_sysfs_entry *entry =
-                container_of(attr, struct castle_sysfs_entry, attr);
-
-    if (!entry->show)
-        return -EIO;
-
-    return entry->show(kobj, attr, page);
-}
-
-static ssize_t castle_attr_store(struct kobject *kobj,
-                                 struct attribute *attr,
-                                 const char *page,
-                                 size_t length)
-{
-    struct castle_sysfs_entry *entry =
-                container_of(attr, struct castle_sysfs_entry, attr);
-
-    if (!entry->store)
-        return -EIO;
-    if (!capable(CAP_SYS_ADMIN))
-        return -EACCES;
-    return entry->store(kobj, attr, page, length);
-}
-
-static struct sysfs_ops castle_sysfs_ops = {
-    .show   = castle_attr_show,
-    .store  = castle_attr_store,
-};
 
 static struct attribute *castle_root_attrs[] = {
     NULL,
@@ -1627,9 +1561,8 @@ int castle_sysfs_init(void)
                            "%s", "castle-fs");
     if(ret < 0) goto out1;
 
-    memset(&castle_sysfs_versions.kobj, 0, sizeof(struct kobject));
-    INIT_LIST_HEAD(&castle_sysfs_versions.version_list);
-    ret = kobject_tree_add(&castle_sysfs_versions.kobj,
+    memset(&versions_kobj, 0, sizeof(struct kobject));
+    ret = kobject_tree_add(&versions_kobj,
                            &castle.kobj,
                            &castle_versions_ktype,
                            "%s", "versions");
@@ -1705,7 +1638,7 @@ out5:
 out4:
     kobject_remove_wait(&castle_slaves.kobj);
 out3:
-    kobject_remove_wait(&castle_sysfs_versions.kobj);
+    kobject_remove_wait(&versions_kobj);
 out2:
     kobject_remove_wait(&castle.kobj);
 out1:
@@ -1726,7 +1659,7 @@ void castle_sysfs_fini(void)
     kobject_remove(&castle_attachments.collections_kobj);
     kobject_remove(&castle_attachments.devices_kobj);
     kobject_remove(&castle_slaves.kobj);
-    castle_sysfs_versions_fini();
+    kobject_remove(&versions_kobj);
     kobject_remove(&castle.kobj);
 }
 
@@ -1750,6 +1683,8 @@ void castle_sysfs_fini_check(void)
     castle_sysfs_kobj_release_wait(&castle_attachments.devices_kobj);
     printk("Waiting on castle_slaves.kobj ...\n");
     castle_sysfs_kobj_release_wait(&castle_slaves.kobj);
+    printk("Waiting on version_kobj ...\n");
+    castle_sysfs_kobj_release_wait(&versions_kobj);
     printk("Waiting on castle.kobj ...\n");
     castle_sysfs_kobj_release_wait(&castle.kobj);
     printk("Released all castle kobjects\n");

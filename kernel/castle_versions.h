@@ -1,6 +1,60 @@
 #ifndef __CASTLE_VERSIONS_H__
 #define __CASTLE_VERSIONS_H__
 
+#define CV_INITED_BIT             (0)
+#define CV_INITED_MASK            (1 << CV_INITED_BIT)
+#define CV_ATTACHED_BIT           (1)
+#define CV_ATTACHED_MASK          (1 << CV_ATTACHED_BIT)
+#define CV_DELETED_BIT            (2)
+#define CV_DELETED_MASK           (1 << CV_DELETED_BIT)
+/* If a version has no children or if all children are marked as deleted, then
+ * it is marked as leaf. */
+#define CV_LEAF_BIT               (3)
+#define CV_LEAF_MASK              (1 << CV_LEAF_BIT)
+#define CV_IN_SYSFS_BIT           (4)
+#define CV_IN_SYSFS_MASK          (1 << CV_IN_SYSFS_BIT)
+
+struct castle_version {
+    /* Various tree links */
+    c_ver_t                    version;     /**< Version ID, unique across all Doubling Arrays. */
+    struct kobject             kobj;        /**< Kobject for sysfs directory.                   */
+    union {
+        c_ver_t                parent_v;    /**< Valid if !initialised.                         */
+        struct castle_version *parent;      /**< Valid if  initialised.                         */
+    };
+    struct castle_version     *first_child;
+    struct castle_version     *next_sybling;
+
+    /* Aux data */
+    c_ver_t          o_order;
+    c_ver_t          r_order;
+    c_da_t           da_id;             /**< Doubling Array ID this version exists within.      */
+    c_byte_off_t     size;
+
+    /* We keep two sets of version stats: live and delayed.
+     *
+     * The live stats are updated during inserts, merges, deletes and provide
+     * an insight into the current state of the DA.  These live stats are
+     * exposed to userland consumers via sysfs.
+     *
+     * The delayed stats are updated in a crash-consistent manner as merges
+     * get 'snapshotted', see castle_da_merge_serialise(). */
+    struct castle_version_stats stats;  /**< Stats associated with version (crash consistent).  */
+
+    struct list_head hash_list;         /**< List for hash table, protected by hash lock.       */
+    unsigned long    flags;
+    union {                             /**< All lists in this union are protected by the
+                                             ctrl mutex.                                        */
+        struct list_head init_list;     /**< Used when the version is being initialised.        */
+        struct list_head free_list;     /**< Used when the version is being removed.            */
+    };
+    struct list_head del_list;
+
+    /* Misc info about the version. */
+    struct timeval creation_timestamp;
+    struct timeval immute_timestamp; /* the time the version was made immutable */
+};
+
 int         castle_version_is_ancestor              (c_ver_t candidate, c_ver_t version);
 int         castle_version_compare                  (c_ver_t version1,  c_ver_t version2);
 void        castle_version_is_ancestor_and_compare  (c_ver_t version1,
