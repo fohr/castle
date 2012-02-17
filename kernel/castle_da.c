@@ -1705,13 +1705,17 @@ static int castle_ct_merged_iter_prep_next(c_merged_iter_t *iter)
         if(!comp_iter->completed && !comp_iter->cached)
         {
             debug("Reading next entry for iterator: %d.\n", i);
+            /* #4324: Mark iter as running before calling prep_next() to prevent
+             * any possibility of racing with castle_ct_merged_iter_end_io(). */
+            iter->iter_running = 1;
             if (!comp_iter->iterator_type->prep_next(comp_iter->iterator))
             {
                 /* Component iterator went asynchronous (due to I/O). */
                 debug_iter("%s:%p:%p:%d - schedule\n", __FUNCTION__, iter, comp_iter->iterator, i);
-                iter->iter_running = 1;
                 return 0;
             }
+            else
+                iter->iter_running = 0;
             if (comp_iter->iterator_type->has_next(comp_iter->iterator))
             {
                 comp_iter->iterator_type->next(comp_iter->iterator,
