@@ -7394,10 +7394,25 @@ static int castle_da_l1_merge_run(void *da_p)
         BUG_ON(!data_exts);
 
         k = 0;
-        for (i=0; i<nr_trees; i++)
-            for (j=0; j<in_trees[i]->nr_data_exts; j++)
-                data_exts[k++] = in_trees[i]->data_exts[j];
+        for (i = 0; i < nr_trees; i++)
+        {
+            /* Truncate extents so during merge we don't over-prefetch. */
+            castle_printk(LOG_DEBUG, "%s: Truncating T0 seq_id=%lu extents to %d %d %d\n",
+                    __FUNCTION__,
+                    in_trees[i]->seq,
+                    CHUNK(atomic64_read(&in_trees[i]->internal_ext_free.used)),
+                    CHUNK(atomic64_read(&in_trees[i]->tree_ext_free.used)),
+                    CHUNK(atomic64_read(&in_trees[i]->data_ext_free.used)));
+            castle_extent_truncate(in_trees[i]->internal_ext_free.ext_id,
+                                   CHUNK(atomic64_read(&in_trees[i]->internal_ext_free.used)));
+            castle_extent_truncate(in_trees[i]->tree_ext_free.ext_id,
+                                   CHUNK(atomic64_read(&in_trees[i]->tree_ext_free.used)));
+            castle_extent_truncate(in_trees[i]->data_ext_free.ext_id,
+                                   CHUNK(atomic64_read(&in_trees[i]->data_ext_free.used)));
 
+            for (j = 0; j < in_trees[i]->nr_data_exts; j++)
+                data_exts[k++] = in_trees[i]->data_exts[j];
+        }
         BUG_ON(k != nr_data_exts);
 
         merge = castle_da_merge_alloc(nr_trees, level, da, INVAL_MERGE_ID, in_trees,
