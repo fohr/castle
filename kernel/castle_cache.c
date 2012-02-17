@@ -5851,7 +5851,6 @@ static int castle_periodic_checkpoint(void *unused)
     struct castle_extents_superblock    *castle_extents_sb;
 
     int      ret, i;
-    int      exit_loop = 0;
     struct   list_head flush_list;
 
     do {
@@ -5866,7 +5865,7 @@ static int castle_periodic_checkpoint(void *unused)
                 msleep_interruptible(1000);
             else
             {
-                exit_loop = 1;
+                castle_last_checkpoint_ongoing = 1;
                 castle_last_checkpoint_ongoing = 1;
             }
         }
@@ -5912,7 +5911,7 @@ static int castle_periodic_checkpoint(void *unused)
             wait_event_interruptible(process_syncpoint_waitq, atomic_read(&castle_extents_presyncvar) == 0);
         }
 
-        if (castle_mstores_writeback(version, exit_loop))
+        if (castle_mstores_writeback(version, castle_last_checkpoint_ongoing))
         {
             castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0, 0);
             ret = -2;
@@ -5928,7 +5927,7 @@ static int castle_periodic_checkpoint(void *unused)
 
         /* Flush all marked extents from cache. */
         castle_cache_extents_flush(&flush_list,
-                                   exit_loop ? 0 :
+                                   castle_last_checkpoint_ongoing ? 0 :
                                    max_t(unsigned int,
                                          castle_checkpoint_ratelimit,
                                          CASTLE_MIN_CHECKPOINT_RATELIMIT));
@@ -5965,7 +5964,7 @@ static int castle_periodic_checkpoint(void *unused)
 
         castle_printk(LOG_DEVEL, "***** Completed checkpoint of version: %u *****\n", version);
         castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0, 0);
-    } while (!exit_loop);
+    } while (!castle_last_checkpoint_ongoing);
     /* Clean exit, return success. */
     ret = 0;
 out:
