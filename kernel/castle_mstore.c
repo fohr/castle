@@ -483,6 +483,8 @@ int castle_mstores_writeback(uint32_t version, int is_fini)
     if (!castle_fs_inited)
         return 0;
 
+    BUG_ON(!CASTLE_IN_TRANSACTION);
+
     BUG_ON(atomic_read(&mstores_ref_cnt));
 
     /* Setup mstore for writeback. */

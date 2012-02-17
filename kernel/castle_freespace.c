@@ -529,8 +529,11 @@ static void castle_freespace_foreach_slave(int (*fn)(struct castle_slave *cs, vo
 }
 
 static int castle_freespace_slave_writeback(struct castle_slave *cs, void *unused)
-{/* Should be called with extent lock held. Keeps freespace and extents in sync. */
+{
     struct castle_slave_superblock *sblk;
+
+    /* Should be in of the extent transaction. */
+    BUG_ON(!castle_extent_in_transaction());
 
     sblk = castle_slave_superblock_get(cs);
 
