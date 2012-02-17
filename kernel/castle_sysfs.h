@@ -1,6 +1,8 @@
 #ifndef __CASTLE_SYSFS_H__
 #define __CASTLE_SYSFS_H__
 
+#include "castle_versions.h"
+
 #define kobject_poison(_kobj)                                                   \
 do {                                                                            \
     (_kobj)->ktype = NULL;                                                      \
@@ -9,8 +11,8 @@ do {                                                                            
 int  castle_sysfs_init           (void);
 void castle_sysfs_fini           (void);
 void castle_sysfs_fini_check     (void);
-int  castle_sysfs_version_add    (c_ver_t version);
-int  castle_sysfs_version_del    (c_ver_t version);
+int  castle_sysfs_version_add    (struct castle_version *v);
+void castle_sysfs_version_del    (struct castle_version *v);
 int  castle_sysfs_slave_add      (struct castle_slave *slave);
 void castle_sysfs_slave_del      (struct castle_slave *slave);
 int  castle_sysfs_da_add         (struct castle_double_array *da);

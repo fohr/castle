@@ -44,17 +44,6 @@ MODULE_PARM_DESC(castle_versions_deleted_sysfs_hide, "Hide deleted versions from
 
 LIST_HEAD(castle_versions_deleted);
 
-#define CV_INITED_BIT             (0)
-#define CV_INITED_MASK            (1 << CV_INITED_BIT)
-#define CV_ATTACHED_BIT           (1)
-#define CV_ATTACHED_MASK          (1 << CV_ATTACHED_BIT)
-#define CV_DELETED_BIT            (2)
-#define CV_DELETED_MASK           (1 << CV_DELETED_BIT)
-/* If a version has no children or if all children are marked as deleted, then
- * it is marked as leaf. */
-#define CV_LEAF_BIT               (3)
-#define CV_LEAF_MASK              (1 << CV_LEAF_BIT)
-
 #define V_IMMUTABLE_INIT(_v)                       \
 {                                                  \
     if (test_bit(CV_LEAF_BIT, &(_v)->flags))      \
@@ -64,46 +53,6 @@ LIST_HEAD(castle_versions_deleted);
         clear_bit(CV_LEAF_BIT, &(_v)->flags);      \
     }                                              \
 }                                                  \
-
-struct castle_version {
-    /* Various tree links */
-    c_ver_t                    version;     /**< Version ID, unique across all Doubling Arrays. */
-    union {
-        c_ver_t                parent_v;    /**< Valid if !initialised.                         */
-        struct castle_version *parent;      /**< Valid if  initialised.                         */
-    };
-    struct castle_version     *first_child;
-    struct castle_version     *next_sybling;
-
-    /* Aux data */
-    c_ver_t          o_order;
-    c_ver_t          r_order;
-    c_da_t           da_id;             /**< Doubling Array ID this version exists within.      */
-    c_byte_off_t     size;
-
-    /* We keep two sets of version stats: live and delayed.
-     *
-     * The live stats are updated during inserts, merges, deletes and provide
-     * an insight into the current state of the DA.  These live stats are
-     * exposed to userland consumers via sysfs.
-     *
-     * The delayed stats are updated in a crash-consistent manner as merges
-     * get 'snapshotted', see castle_da_merge_serialise(). */
-    struct castle_version_stats stats;  /**< Stats associated with version (crash consistent).  */
-
-    struct list_head hash_list;         /**< List for hash table, protected by hash lock.       */
-    unsigned long    flags;
-    union {                             /**< All lists in this union are protected by the
-                                             ctrl mutex.                                        */
-        struct list_head init_list;     /**< Used when the version is being initialised.        */
-        struct list_head free_list;     /**< Used when the version is being removed.            */
-    };
-    struct list_head del_list;
-
-    /* Misc info about the version. */
-    struct timeval creation_timestamp;
-    struct timeval immute_timestamp; /* the time the version was made immutable */
-};
 
 /**
  * Describes the number of versions per DA.
@@ -315,6 +264,8 @@ int castle_versions_count_get(c_da_t da_id, cv_health_t health)
  */
 static int castle_version_hash_remove(struct castle_version *v, void *unused)
 {
+    castle_sysfs_version_del(v);
+
     atomic_dec(&castle_versions_count);
     list_del(&v->hash_list);
     kmem_cache_free(castle_versions_cache, v);
@@ -327,7 +278,7 @@ static int castle_version_hash_remove(struct castle_version *v, void *unused)
  */
 static void castle_versions_hash_destroy(void)
 {
-    castle_versions_hash_iterate(castle_version_hash_remove, NULL);
+    __castle_versions_hash_iterate(castle_version_hash_remove, NULL);
     castle_check_free(castle_versions_hash);
 }
 
@@ -583,6 +534,8 @@ int castle_version_delete(c_ver_t version)
     int children_first, event_vs_idx;
     c_ver_t *event_vs;
 
+    BUG_ON(!CASTLE_IN_TRANSACTION);
+
     /* Allocate memory for event notifications before taking the spinlock. */
     event_vs = castle_alloc(sizeof(c_ver_t) * CASTLE_VERSIONS_MAX);
     if(!event_vs)
@@ -723,7 +676,15 @@ int castle_version_delete(c_ver_t version)
     write_unlock_irq(&castle_versions_hash_lock);
 
     if (castle_versions_deleted_sysfs_hide)
-        BUG_ON(castle_sysfs_version_del(version));
+    {
+        /* Get the version pointer. Happening under transaction lock, can't race with
+         * vertree_delete. */
+        v = castle_versions_hash_get(version);
+
+        /* It is just getting deleted, should be in sysfs. */
+        BUG_ON(!test_bit(CV_IN_SYSFS_BIT, &v->flags));
+        castle_sysfs_version_del(v);
+    }
     for(event_vs_idx--; event_vs_idx >= 0; event_vs_idx--)
         castle_events_version_changed(event_vs[event_vs_idx]);
     castle_check_free(event_vs);
@@ -838,7 +799,10 @@ int castle_version_tree_delete(c_ver_t version)
     {
         struct castle_version *del_v = list_entry(pos, struct castle_version, free_list);
 
-        BUG_ON(castle_sysfs_version_del(del_v->version));
+        /* Note: If the sysfs read is racing with this function, it could fail to find
+         *       version in hash table, as it has been already removed above. And, this
+         *       case is properly handled in sysfs. */
+        castle_sysfs_version_del(del_v);
         castle_events_version_delete_version(del_v->version);
         list_del(pos);
         kmem_cache_free(castle_versions_cache, del_v);
@@ -885,10 +849,11 @@ int castle_version_free(c_ver_t version)
     if (v == NULL)
         return -EINVAL;
 
+    castle_sysfs_version_del(v);
+    castle_events_version_delete_version(version);
+
     BUG_ON(castle_version_delete_from_tree(v, NULL) == NULL);
 
-    BUG_ON(castle_sysfs_version_del(version));
-    castle_events_version_delete_version(version);
     kmem_cache_free(castle_versions_cache, v);
 
     return 0;
@@ -970,7 +935,7 @@ static int castle_version_add(c_ver_t version,
        putting it on the init list. */
     if (v->version == 0)
     {
-        if(castle_sysfs_version_add(v->version))
+        if(castle_sysfs_version_add(v))
             goto out_dealloc;
 
         v->parent       = NULL;
@@ -1827,7 +1792,7 @@ process_version:
                               init_list);
         list_del(&v->init_list);
         /* Now that we are done setting the version up, try to add it to sysfs. */
-        ret = castle_sysfs_version_add(v->version);
+        ret = castle_sysfs_version_add(v);
         if(ret)
         {
             castle_printk(LOG_WARN, "Could not add version %d to sysfs. Errno=%d.\n",
