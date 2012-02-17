@@ -4243,8 +4243,8 @@ void castle_cache_prefetch_pin(c_ext_pos_t cep, int chunks, c2_advise_t advise)
             write_lock_c2b(c2b);
             c2b->end_io = c2_pref_io_end;
 
-            BUG_ON(submit_c2b(READ, c2b));
             atomic_inc(&castle_cache_prefetch_in_flight);
+            BUG_ON(submit_c2b(READ, c2b));
         }
 
         if (advise & C2_ADV_SOFTPIN)
@@ -4364,8 +4364,8 @@ static void c2_pref_window_submit(c2_pref_window_t *window, c_ext_pos_t cep, int
             write_lock_c2b(c2b);
             c2b->end_io = c2_pref_io_end;
 
-            BUG_ON(submit_c2b(READ, c2b));
             atomic_inc(&castle_cache_prefetch_in_flight);
+            BUG_ON(submit_c2b(READ, c2b));
         }
 
         pages -= BLKS_PER_CHK;
