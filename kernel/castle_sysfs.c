@@ -553,14 +553,12 @@ static ssize_t slave_size_show(struct kobject *kobj,
                                char *buf)
 {
     struct castle_slave *slave = container_of(kobj, struct castle_slave, kobj);
-    uint64_t size;
+    c_chk_cnt_t size = 0;
 
     if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
-        size = slave->freespace.disk_size * C_CHK_SIZE;
-    else
-        size = 0;
+        castle_freespace_summary_get(slave, NULL, &size);
 
-    return sprintf(buf, "%lld\n", size);
+    return sprintf(buf, "%lld\n", size * C_CHK_SIZE);
 }
 
 static ssize_t slave_used_show(struct kobject *kobj,
