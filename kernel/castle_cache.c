@@ -5972,6 +5972,12 @@ out:
     while(!kthread_should_stop())
         msleep_interruptible(1000);
 
+    if (ret)
+        castle_printk(LOG_ERROR,
+                "Checkpoint thread exiting with ret=%d.  Forcing panic.\n",
+                __FUNCTION__, ret);
+    BUG_ON(ret);
+
     return ret;
 }
 
