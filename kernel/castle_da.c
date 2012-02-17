@@ -4311,8 +4311,41 @@ static c_val_tup_t _castle_da_entry_add(struct castle_da_merge *merge,
         level->next_idx, depth, node, merge->da->id, merge->level);
     debug("Adding an idx=%d, key=%p, *key=%d, version=%d\n",
             level->next_idx, key, *((uint32_t *)key), version);
+
+    /*
+     * Compare the current key to the last key. Should never be smaller.
+     *
+     * key_compare() is a costly function. Trying to avoid duplicates. We already
+     * did comparision between last key added to the out_tree and current key in
+     * snapshot_delete algorithm (in castle_da_entry_skip()). Reuse the result
+     * of it here again.
+     *
+     * Note: In case of re-adds is_new_key doesn't represent comparision between key being
+     * added and last key added to the node. But, it repesents the comparision between last
+     * 2 keys added to the tree. Still, it is okay as in case of re-adds both the comparisions
+     * yield same value.
+     *
+     * Note: In rare circumstances entry_add() executed below can cause the node
+     * to get compacted. This invalidates the last_key ptr, and could cause bugs (if the
+     * space pointed to by last_key gets reused). We last_key reset unconditionally in order
+     * to avoid any such issues.
+     */
+    key_cmp = (level->next_idx != 0) ?
+               ((depth == 0)? merge->is_new_key: btree->key_compare(key, level->last_key)) :
+               0;
+    debug("Key cmp=%d\n", key_cmp);
+    BUG_ON(key_cmp < 0);
+
     /* Add the entry to the node (this may get dropped later, but leave it here for now */
     btree->entry_add(node, level->next_idx, key, version, cvt);
+
+    /* Unsafe to access last_key here, since the node may have got compacted. Reset it.
+       Save this last key as the last merge key as well if level is the leaf level. */
+    btree->entry_get(node, level->next_idx, &level->last_key, NULL, NULL);
+    if (depth == 0)
+        merge->last_key = level->last_key;
+
+    /* Dirty the node, and unlock if non-leaf node. */
     dirty_c2b(level->node_c2b);
     if (depth > 0)
         write_unlock_c2b(level->node_c2b);
@@ -4330,42 +4363,20 @@ static c_val_tup_t _castle_da_entry_add(struct castle_da_merge *merge,
         write_unlock(&merge->da->lock);
     }
 
-
-    /* Compare the current key to the last key. Should never be smaller */
-    /* key_compare() is a costly function. Trying to avoid duplicates. We already
-     * did comparison between last key added to the out_tree and current key in
-     * snapshot_delete algorithm (in castle_da_entry_skip()). Reuse the result
-     * of it here again. */
-    /* Note: In case of re-adds is_new_key doesn't represent comparison between key being
-     * added and last key added to the node. But, it represents the comparison between last
-     * 2 keys added to the tree. Still, it is okay as in case of re-adds both the comparisons
-     * yield same value. */
-
-    key_cmp = (level->next_idx != 0) ?
-               ((depth == 0)? merge->is_new_key: btree->key_compare(key, level->last_key)) :
-               0;
-    debug("Key cmp=%d\n", key_cmp);
-    BUG_ON(key_cmp < 0);
-
     /* Work out if the current/previous entry could be a valid node end.
        Case 1: We've just started a new node (node_idx == 0) => current must be a valid node entry */
     if(level->next_idx == 0)
     {
         debug("Node valid_end_idx=%d, Case1.\n", level->next_idx);
         BUG_ON(level->valid_end_idx >= 0);
-        /* Save last_key, version as a valid_version, and init valid_end_idx.
-           Note: last_key has to be taken from the node, because current key pointer
-                 may get invalidated on the iterator next() call.
-         */
+        /* Save version as a valid_version, and init valid_end_idx. */
         level->valid_end_idx = 0;
-        btree->entry_get(node, level->next_idx, &level->last_key, NULL, NULL);
         level->valid_version = version;
     } else
     /* Case 2: We've moved on to a new key. Previous entry is a valid node end. */
     if(key_cmp > 0)
     {
         debug("Node valid_end_idx=%d, Case2.\n", level->next_idx);
-        btree->entry_get(node, level->next_idx, &level->last_key, NULL, NULL);
         BUG_ON(level->next_idx <= 0);
         level->valid_end_idx = level->next_idx - 1;
         level->valid_version = 0;
@@ -4393,13 +4404,6 @@ static c_val_tup_t _castle_da_entry_add(struct castle_da_merge *merge,
     else
         /* Go to the next node_idx */
         level->next_idx++;
-
-    /* Get the last_key stored in leaf nodes. */
-    if (depth == 0)
-    {
-        merge->last_key = level->last_key;
-        BUG_ON(merge->last_key == NULL);
-    }
 
     return preadoption_cvt;
 }
