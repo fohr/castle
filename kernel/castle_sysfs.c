@@ -1646,46 +1646,48 @@ out1:
     return ret;
 }
 
+/**
+ * castle_sysfs_fini() happens at the end of system unload after all sub-modules.
+ *
+ * Each sub-module (ex: DA, devices, collections, versions etc) is responsible for deleting it's
+ * own sysfs entries between castle_sysfs_fini() and castle_sysfs_fini_check().
+ *
+ * By this time, all the sysfs entries that belongs to FS objects must have been deleted,
+ * except the top level directories. Get-rid of them and this should be non-blocking operation
+ * as the reference count should be zero by now.
+ */
 void castle_sysfs_fini(void)
 {
-    kobject_remove(&data_extents_kobj);
-    if (castle_devel_enabled)
-    {
-        castle_devel_enabled = 0;
-        kobject_remove(&devel_kobj);
-    }
-    kobject_remove(&filesystem_kobj);
-    kobject_remove(&double_arrays_kobj);
-    kobject_remove(&castle_attachments.collections_kobj);
-    kobject_remove(&castle_attachments.devices_kobj);
-    kobject_remove(&castle_slaves.kobj);
-    kobject_remove(&versions_kobj);
-    kobject_remove(&castle.kobj);
-}
-
-void castle_sysfs_fini_check(void)
-{
     printk("Waiting on data_extents_kobj ...\n");
-    castle_sysfs_kobj_release_wait(&data_extents_kobj);
+    kobject_remove_wait(&data_extents_kobj);
+
     if (castle_devel_enabled)
     {
         castle_devel_enabled = 0;
         printk("Waiting on devel_kobj ...\n");
-        castle_sysfs_kobj_release_wait(&devel_kobj);
+        kobject_remove_wait(&devel_kobj);
     }
+
     printk("Waiting on filesystem_kobj ...\n");
-    castle_sysfs_kobj_release_wait(&filesystem_kobj);
+    kobject_remove_wait(&filesystem_kobj);
+
     printk("Waiting on double_arrays_kobj ...\n");
-    castle_sysfs_kobj_release_wait(&double_arrays_kobj);
+    kobject_remove_wait(&double_arrays_kobj);
+
     printk("Waiting on castle_attachments.collections_kobj ...\n");
-    castle_sysfs_kobj_release_wait(&castle_attachments.collections_kobj);
+    kobject_remove_wait(&castle_attachments.collections_kobj);
+
     printk("Waiting on castle_attachments.devices_kobj ...\n");
-    castle_sysfs_kobj_release_wait(&castle_attachments.devices_kobj);
+    kobject_remove_wait(&castle_attachments.devices_kobj);
+
     printk("Waiting on castle_slaves.kobj ...\n");
-    castle_sysfs_kobj_release_wait(&castle_slaves.kobj);
-    printk("Waiting on version_kobj ...\n");
-    castle_sysfs_kobj_release_wait(&versions_kobj);
+    kobject_remove_wait(&castle_slaves.kobj);
+
+    printk("Waiting on versions kobject ...\n");
+    kobject_remove_wait(&versions_kobj);
+
     printk("Waiting on castle.kobj ...\n");
-    castle_sysfs_kobj_release_wait(&castle.kobj);
+    kobject_remove_wait(&castle.kobj);
+
     printk("Released all castle kobjects\n");
 }
