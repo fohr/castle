@@ -395,7 +395,7 @@ void castle_control_collection_attach(c_ver_t            version,
     /* Check if the read-only flag can be set. */
     /* Note: If an attachment is marked as RD_ONLY it can't be changed back to writable,
      * even when the version becomes writable (all children got deleted). */
-    if (!castle_version_is_leaf(version))
+    if (!castle_version_is_mutable(version))
         __set_bit(CASTLE_ATTACH_RDONLY, &flags);
 
     ca = castle_collection_init(version, flags, name);
@@ -485,7 +485,7 @@ void castle_control_collection_reattach(c_collection_id_t  collection,
     down_write(&ca->lock);
     ca->version = new_version;
     /* Set read-only bit if the version is not leaf. */
-    if (!castle_version_is_leaf(new_version))
+    if (!castle_version_is_mutable(new_version))
         __set_bit(CASTLE_ATTACH_RDONLY, &ca->col.flags);
     up_write(&ca->lock);
 

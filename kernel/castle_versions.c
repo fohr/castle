@@ -319,6 +319,14 @@ int castle_version_deleted(c_ver_t version)
     return test_bit(CV_DELETED_BIT, &v->flags);
 }
 
+/**
+ * Returns whether the version is logically leaf.
+ * True if either:
+ * a) leaf
+ * b) all descendants are deleted
+ *
+ * @param version   version number to test
+ */
 int castle_version_is_leaf(c_ver_t version)
 {
     struct castle_version *v;
@@ -328,6 +336,25 @@ int castle_version_is_leaf(c_ver_t version)
         return -EINVAL;
 
     return test_bit(CV_LEAF_BIT, &v->flags);
+}
+
+/**
+ * Determines whether version is mutable, i.e. whether new inserts can be attempted in it.
+ * This is true iff the version is leaf.
+ *
+ * @param version   version number to test
+ */
+int castle_version_is_mutable(c_ver_t version)
+{
+    struct castle_version *v;
+
+    /* Only leaf versions are mutable. And that's talking about true leafs,
+       and not logical leafs, as per @see castle_version_is_leaf(). */
+    v = castle_versions_hash_get(version);
+    if(!v)
+        return -EINVAL;
+
+    return (v->first_child == NULL);
 }
 
 /**
