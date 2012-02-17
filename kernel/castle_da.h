@@ -14,6 +14,20 @@ typedef struct {
 
 struct castle_dfs_resolver;
 
+/* A package of all the material needed to checkpoint a merge; i.e. merge_state packed structure
+   that contains the state of the castle_da_merge struct and the output tree, and an array of
+   packed structures for each of the input trees. */
+struct castle_da_merge_mstore_package {
+    struct castle_dmserlist_entry           *merge_state;
+    struct castle_in_tree_merge_state_entry *in_tree_state_arr;
+    atomic_t                                state;
+};
+void castle_da_merge_mstore_package_deep_copy(struct castle_da_merge_mstore_package *dest,
+                                              struct castle_da_merge_mstore_package *source);
+void castle_da_merge_mstore_package_check_free(struct castle_da_merge_mstore_package *m);
+int castle_da_merge_mstore_package_alloc(struct castle_da_merge_mstore_package *m,
+                                         unsigned int nr_in_trees);
+
 struct castle_da_merge {
     c_merge_id_t                  id;
     struct list_head              hash_list;
@@ -148,14 +162,8 @@ struct castle_da_merge {
            merge_dealloc so that it can be written out by the final checkpoint before being
            dropped by da_dealloc.
          */
-        struct castle_dmserlist_entry *mstore_entry;
-        struct castle_in_tree_merge_state_entry    *in_tree_mstore_entry_arr;
-        struct mutex     mutex; /* because we might lock while using mstore, spinlock
-                                   may be a bad idea. might need a "double buffering"
-                                   solution with round robin selection over 2
-                                   mstore_entry structures to get around it? */
-        atomic_t         valid; /* for merge thread to notify checkpoint when state is
-                                   checkpointable; see c_merge_serdes_state_t */
+        struct castle_da_merge_mstore_package live;           /* merge thread updates this */
+        struct castle_da_merge_mstore_package checkpointable; /* checkpoint write this out */
         unsigned int     des; /* for init to notify merge thread to resume merge, and
                                  to notify checkpoint not to writeback state because
                                  deserialisation still running. */
