@@ -2160,7 +2160,10 @@ struct castle_attachment* castle_attachment_get(c_collection_id_t col_id, int rw
         if(ca->col.id == col_id)
         {
             if (rw == WRITE && castle_collection_is_rdonly(ca))
+            {
+                castle_printk(LOG_USERINFO, "Collection %u is read only\n", col_id);
                 result = NULL;
+            }
             else
             {
                 result = ca;
