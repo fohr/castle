@@ -4679,7 +4679,6 @@ static void castle_da_merge_package(struct castle_da_merge *merge, c_ext_pos_t r
                     merge->level,
                     out_tree->tree_ext_free.ext_id,
                     USED_CHUNK(merge->growth_control_tree.ext_used_bytes),
-                    last_used_chunk,
                     merge->growth_control_tree.ext_used_bytes,
                     merge->growth_control_tree.ext_avail_bytes);
             castle_extent_truncate(out_tree->tree_ext_free.ext_id,
