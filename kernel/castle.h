@@ -107,6 +107,7 @@ typedef uint32_t block_t;
 #define BLOCK_OFFSET(offset)  ((offset) & (C_BLK_SIZE - 1))
 #define SECTOR_OFFSET(offset) ((offset) & ((1 << 9)-1))
 #define CHUNK(offset)         ((offset) >> C_CHK_SHIFT)
+#define USED_CHUNK(offset)    (offset ? CHUNK(offset-1) : CHUNK(0))
 #define BLOCK(offset)         ((offset) >> C_BLK_SHIFT)
 #define BLK_IN_CHK(offset)    (BLOCK(CHUNK_OFFSET(offset)))
 #define BLKS_PER_CHK          (C_CHK_SIZE / C_BLK_SIZE)         /**< Blocks(/pages) per chunk.    */
