@@ -4672,32 +4672,35 @@ static void castle_da_merge_package(struct castle_da_merge *merge, c_ext_pos_t r
                 merge->growth_control_tree.ext_used_bytes
                     > C_CHK_SIZE)
         {
-            c_chk_cnt_t last_used_chunk = merge->growth_control_tree.ext_used_bytes/C_CHK_SIZE;
-            castle_printk(LOG_DEBUG, "%s::[da %d level %d] truncating tree ext %u beyond chunk %u, after %llu bytes used and %llu bytes allocated (grown)\n",
+            castle_printk(LOG_DEBUG, "%s::[da %d level %d] truncating tree ext %u beyond chunk %u,"
+                    " after %llu bytes used and %llu bytes allocated (grown)\n",
                     __FUNCTION__,
                     merge->da->id,
                     merge->level,
                     out_tree->tree_ext_free.ext_id,
+                    USED_CHUNK(merge->growth_control_tree.ext_used_bytes),
                     last_used_chunk,
                     merge->growth_control_tree.ext_used_bytes,
                     merge->growth_control_tree.ext_avail_bytes);
-            castle_extent_truncate(out_tree->tree_ext_free.ext_id, last_used_chunk);
+            castle_extent_truncate(out_tree->tree_ext_free.ext_id,
+                                   USED_CHUNK(merge->growth_control_tree.ext_used_bytes));
         }
 
         if(merge->growth_control_data.ext_avail_bytes -
                 merge->growth_control_data.ext_used_bytes
                     > C_CHK_SIZE)
         {
-            c_chk_cnt_t last_used_chunk = merge->growth_control_data.ext_used_bytes/C_CHK_SIZE;
-            castle_printk(LOG_DEBUG, "%s::[da %d level %d] truncating data ext %u beyond chunk %u, after %llu bytes used and %llu bytes allocated (grown)\n",
+            castle_printk(LOG_DEBUG, "%s::[da %d level %d] truncating data ext %u beyond chunk %u,"
+                    " after %llu bytes used and %llu bytes allocated (grown)\n",
                     __FUNCTION__,
                     merge->da->id,
                     merge->level,
                     out_tree->data_ext_free.ext_id,
-                    last_used_chunk,
+                    USED_CHUNK(merge->growth_control_data.ext_used_bytes),
                     merge->growth_control_data.ext_used_bytes,
                     merge->growth_control_data.ext_avail_bytes);
-            castle_extent_truncate(out_tree->data_ext_free.ext_id, last_used_chunk);
+            castle_extent_truncate(out_tree->data_ext_free.ext_id,
+                                   USED_CHUNK(merge->growth_control_data.ext_used_bytes));
         }
     }
 
