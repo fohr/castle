@@ -5301,6 +5301,7 @@ retry:
             {
                 /* Failed to allocate a disk chunk (all slaves out of space). */
                 castle_printk(LOG_WARN, "Rebuild could not allocate a disk chunk.\n");
+                castle_free(remap_chunks);
                 return -ENOSPC;
             }
             /*
