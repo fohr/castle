@@ -2476,6 +2476,7 @@ static int castle_slaves_init(void)
     BUG_ON(sizeof(struct castle_fs_superblock) % 2);
 
     /* Init the slaves structures */
+    /* Note: kobject is already is initialised. Don't try to memset. */
     INIT_LIST_HEAD(&castle_slaves.slaves);
 
     return 0;
@@ -2485,6 +2486,7 @@ static int castle_attachments_init(void)
 {
     int major;
 
+    /* Note: kobject is already is initialised. Don't try to memset. */
     INIT_LIST_HEAD(&castle_attachments.attachments);
 
     /* Allocate a major for this device */
