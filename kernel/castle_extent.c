@@ -3915,7 +3915,9 @@ void castle_extent_mask_put(c_ext_mask_id_t mask_id)
 {
     /* Get the mask structure. */
     c_ext_mask_t *mask = castle_extent_mask_hash_get(mask_id);
-    uint32_t val;
+    static DEFINE_SPINLOCK(mask_ref_release_lock);
+    unsigned long flags;
+    int release_mask = 0;
 
     /* Expected to hold at least read_lock. */
     BUG_ON(write_can_lock(&castle_extents_hash_lock));
@@ -3930,71 +3932,65 @@ void castle_extent_mask_put(c_ext_mask_id_t mask_id)
         BUG();
     }
 
-    val = atomic_dec_return(&mask->ref_count);
-    //castle_printk(LOG_DEVEL, "PUT: %u "cemr_cstr"%u\n", mask->mask_id, cemr2str(mask->range), val);
-    /* Release reference and also check if this is the last reference; if so, schedule mask
-     * for deletion. */
-    if (val == 0)
+    /* If this is not last reference, just return. */
+    if (atomic_dec_return(&mask->ref_count))
+        return;
+
+    /* This is the last referece; if so, schedule mask for deletion. */
+    /* Take lock to make sure, no other last reference release for other in this
+     * extent is racgin. */
+    spin_lock_irqsave(&mask_ref_release_lock, flags);
+
+    if (IS_OLDEST_MASK(mask->ext, mask))
+        release_mask = 1;
+    else
     {
-        static DEFINE_SPINLOCK(mask_ref_release_lock);
-        unsigned long flags;
-        int release_mask = 0;
+        c_ext_mask_t *next_mask = list_entry(mask->list.next, c_ext_mask_t, list);
 
-        /* Take lock to make sure, no other last reference release for other in this
-         * extent is racgin. */
-        spin_lock_irqsave(&mask_ref_release_lock, flags);
-
-        if (IS_OLDEST_MASK(mask->ext, mask))
+        /* If the next mask is not in hash, then it is already marked for deletion. And
+         * this mask can be deleted. */
+        if (!castle_extent_mask_hash_get(next_mask->mask_id))
             release_mask = 1;
-        else
+    }
+
+    if (release_mask)
+    {
+        c_ext_t *ext = mask->ext;
+        struct list_head *pos;
+
+        /* Update global mask. */
+        list_for_each_prev(pos, &ext->mask_list)
         {
-            c_ext_mask_t *next_mask = list_entry(mask->list.next, c_ext_mask_t, list);
+            c_ext_mask_t *pos_mask = list_entry(pos, c_ext_mask_t, list);
 
-            /* If the next mask is not in hash, then it is already marked for deletion. And
-             * this mask can be deleted. */
-            if (!castle_extent_mask_hash_get(next_mask->mask_id))
-                release_mask = 1;
-        }
+            /* Already scheduled for release. */
+            if (castle_extent_mask_hash_get(pos_mask->mask_id) == NULL)
+                continue;
 
-        if (release_mask)
-        {
-            c_ext_t *ext = mask->ext;
-            struct list_head *pos;
-
-            /* Update global mask. */
-            list_for_each_prev(pos, &ext->mask_list)
-            {
-                c_ext_mask_t *pos_mask = list_entry(pos, c_ext_mask_t, list);
-
-                /* Already scheduled for release. */
-                if (castle_extent_mask_hash_get(pos_mask->mask_id) == NULL)
-                    continue;
-
-                /* Not yet ready for release. */
-                if (atomic_read(&pos_mask->ref_count))
-                    break;
+            /* Not yet ready for release. */
+            if (atomic_read(&pos_mask->ref_count))
+                break;
 
 #if 0
-                castle_printk(LOG_DEVEL, "Scheduling mask %u "cemr_cstr" for free\n",
-                                         pos_mask->mask_id, cemr2str(pos_mask->range));
+            castle_printk(LOG_DEVEL, "Scheduling mask %u "cemr_cstr" for free\n",
+                                     pos_mask->mask_id, cemr2str(pos_mask->range));
 #endif
-                /* If this is the last mask, there should be no active links. */
-                BUG_ON(list_is_singular(&ext->mask_list) && atomic_read(&ext->link_cnt));
+            /* If this is the last mask, there should be no active links. */
+            BUG_ON(list_is_singular(&ext->mask_list) && atomic_read(&ext->link_cnt));
 
-                castle_extent_mask_hash_remove(pos_mask);
+            castle_extent_mask_hash_remove(pos_mask);
 
-                /* Add to the free list, it would get destroyed later by the GC thread. */
-                list_add_tail(&pos_mask->hash_list, &castle_ext_mask_free_list);
+            /* Add to the free list, it would get destroyed later by the GC thread. */
+            list_add_tail(&pos_mask->hash_list, &castle_ext_mask_free_list);
 
-                atomic_inc_return(&castle_extents_gc_q_size);
-            }
-
-            /* Wakeup the garbage collector. */
-            wake_up(&castle_ext_mask_gc_wq);
+            atomic_inc_return(&castle_extents_gc_q_size);
         }
 
-        spin_unlock_irqrestore(&mask_ref_release_lock, flags);
+        /* Wakeup the garbage collector. */
+        wake_up(&castle_ext_mask_gc_wq);
     }
+
+    spin_unlock_irqrestore(&mask_ref_release_lock, flags);
 }
 
 /**
