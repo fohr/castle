@@ -957,6 +957,7 @@ int castle_fs_init(void)
             castle_printk(LOG_ERROR, "Could not add slave to sysfs.\n");
             return -EINVAL;
         }
+        castle_events_slave_claim(cs->uuid);
     }
 
     if(sync_checkpoint)
@@ -1639,9 +1640,8 @@ struct castle_slave* castle_claim(uint32_t new_dev)
             castle_printk(LOG_ERROR, "Could not add slave to sysfs.\n");
             goto err_out;
         }
+        castle_events_slave_claim(cs->uuid);
     }
-
-    castle_events_slave_claim(cs->uuid);
 
     return cs;
 err_out:
