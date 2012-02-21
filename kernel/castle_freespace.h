@@ -14,6 +14,9 @@
 #define SUPER_CHUNK(chk)           ((chk) / CHKS_PER_SLOT)
 #define FIRST_CHUNK(sup_chk)       ((sup_chk) * CHKS_PER_SLOT)
 
+/* Work out the disk capacity, as it'll be used when freespace gets initialised. */
+c_chk_cnt_t castle_freespace_slave_capacity_get     (struct castle_slave *cs);
+
 /* Load on-disk structures into memory */
 int         castle_freespace_slave_init             (struct castle_slave *cs, int fresh);
 
