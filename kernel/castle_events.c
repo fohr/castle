@@ -122,9 +122,6 @@ int castle_uevent_init(struct sk_buff *unused, struct genl_info *info)
     castle_printk(LOG_DEVEL, "Received castle uevent initialisation request (PID: %u)\n",
                   castle_uevent_pid);
 
-    /* Insert initialisation here ... */
-    castle_uevent_netlink_up = 1;
-
     /*
      * 'ACK' the init message. If 'NAK' is also needed, will have to add an attribute
      * to send back the result.
@@ -153,6 +150,8 @@ int castle_uevent_init(struct sk_buff *unused, struct genl_info *info)
     ret = genlmsg_unicast(skb, castle_uevent_pid);
     if (ret != 0)
         goto errout_dealloc;
+
+    castle_uevent_netlink_up = 1;
 
     return EXIT_SUCCESS;
 
