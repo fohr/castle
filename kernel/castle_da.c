@@ -12485,16 +12485,12 @@ out:
     read_unlock(&da->lock);
 
     if (ret)
-    {
-        castle_da_put(da);
         return ret;
-    }
 
     if (i != nr_arrays)
     {
         castle_printk(LOG_USERINFO, "Couldn't find the array 0x%llx in the array list\n",
                                      array_ids[i]);
-        castle_da_put(da);
         return C_ERR_MERGE_INVAL_ARRAY;
     }
 
