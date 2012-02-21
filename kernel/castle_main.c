@@ -476,6 +476,9 @@ static struct castle_slave *castle_slave_ghost_add(uint32_t uuid)
 
 extern atomic_t current_rebuild_seqno;
 
+#define GLOBAL_TREE_INTERNAL_SIZE   (100)
+#define GLOBAL_TREE_LEAF_SIZE       (100)
+#define GLOBAL_TREE_DATA_SIZE       (512)
 int castle_global_tree_init(void)
 {
     int ret = 0;
@@ -498,9 +501,9 @@ int castle_global_tree_init(void)
     }
 
     ct->dynamic                      = 1;
-    ct->internal_ext_free.ext_size   = 100 * C_CHK_SIZE;
-    ct->tree_ext_free.ext_size       = 100 * C_CHK_SIZE;
-    ct->data_ext_free.ext_size       = 512ULL * C_CHK_SIZE;
+    ct->internal_ext_free.ext_size   = GLOBAL_TREE_INTERNAL_SIZE * C_CHK_SIZE;
+    ct->tree_ext_free.ext_size       = GLOBAL_TREE_LEAF_SIZE * C_CHK_SIZE;
+    ct->data_ext_free.ext_size       = GLOBAL_TREE_DATA_SIZE * C_CHK_SIZE;
 
     castle_extent_transaction_start();
 
@@ -1497,6 +1500,18 @@ static int castle_slave_add(struct castle_slave *cs)
     return 0;
 }
 
+#define MIN_SLAVE_CAPACITY  (5120)  /* In chunks. */
+STATIC_BUG_ON(MIN_LIVE_SLAVES *  MIN_SLAVE_CAPACITY <=                              \
+              MIN_LIVE_SLAVES * (FREE_SPACE_START + MSTORE_SPACE_SIZE) +            \
+              MAX_NR_SLAVES * META_SPACE_SIZE +                                     \
+              2 /* 2-RDA */ * (GLOBAL_TREE_INTERNAL_SIZE +                          \
+                               GLOBAL_TREE_LEAF_SIZE +                              \
+                               GLOBAL_TREE_DATA_SIZE) +                             \
+              /* Fudge: there are extra overheads since the allocator               \
+                        allocates in CHKS_PER_SLOT granularity. */                  \
+              CHKS_PER_SLOT * 2 /* 2-RDA */ * MIN_LIVE_SLAVES /* per-disk */ *      \
+              5 /* number of extents allocated */ * 2 /* just in case */);
+
 struct castle_slave* castle_claim(uint32_t new_dev)
 {
     dev_t dev;
@@ -1546,10 +1561,12 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     }
 
     /* Make sure that the disk is at least FREE_SPACE_START big. */
-    if(get_bd_capacity(bdev) < (FREE_SPACE_START << (20 - 9)))
+    if(castle_freespace_slave_capacity_get(cs) < MIN_SLAVE_CAPACITY)
     {
         castle_printk(LOG_ERROR, "Disk %s capacity too small. Must be at least %dM, got %lldM\n",
-                 __bdevname(dev, b), FREE_SPACE_START, get_bd_capacity(bdev) >> (20 - 9));
+                 __bdevname(dev, b),
+                 MIN_SLAVE_CAPACITY,
+                 castle_freespace_slave_capacity_get(cs));
         goto err_out;
     }
 

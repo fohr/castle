@@ -431,6 +431,19 @@ void castle_freespace_slave_superchunk_free(struct castle_slave *cs,
 }
 
 sector_t get_bd_capacity(struct block_device *bd);
+c_chk_cnt_t castle_freespace_slave_capacity_get(struct castle_slave *cs)
+{
+    uint64_t disk_sz;
+    c_chk_cnt_t chunks;
+
+    disk_sz = (get_bd_capacity(cs->bdev) << 9);
+    chunks = disk_sz / C_CHK_SIZE;
+    if(castle_slaves_size && castle_slaves_size < chunks)
+        return castle_slaves_size;
+
+    return chunks;
+}
+
 static int castle_freespace_print(struct castle_slave *cs, void *unused);
 
 /*
@@ -451,12 +464,13 @@ int castle_freespace_slave_init(struct castle_slave *cs, int fresh)
     memset(freespace, 0, sizeof(castle_freespace_t));
     if (fresh)
     {
-        uint64_t disk_sz = (get_bd_capacity(cs->bdev) << 9);
+        c_chk_cnt_t disk_size;
 
         debug("Initialising new device\n");
-        freespace->disk_size   = disk_sz / C_CHK_SIZE - FREE_SPACE_START;
-        if (castle_slaves_size && castle_slaves_size < freespace->disk_size)
-            freespace->disk_size = castle_slaves_size;
+
+        disk_size = castle_freespace_slave_capacity_get(cs);
+        BUG_ON(disk_size < FREE_SPACE_START);
+        freespace->disk_size   = disk_size - FREE_SPACE_START;
         freespace->disk_size  -= (freespace->disk_size % CHKS_PER_SLOT);
         freespace->max_entries = (freespace->disk_size / CHKS_PER_SLOT) + 1;
         /* Now, double the max_entries, which guarantees that freespace
