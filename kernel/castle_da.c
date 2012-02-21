@@ -12316,6 +12316,7 @@ static int castle_merge_run(void *_data)
     do {
         int ret, ignore;
         uint64_t prev_nr_bytes;
+        tree_seq_t out_tree_seq;
 
         /* Wait for next merge work unit assignment or the exit condition. */
         castle_time_interval_start(&waiting_stats);
@@ -12340,7 +12341,8 @@ static int castle_merge_run(void *_data)
         BUG_ON(!merge_thread->cur_work_size);
         BUG_ON(!merge);
 
-        prev_nr_bytes   = merge->nr_bytes;
+        out_tree_seq  = merge->out_tree->seq;
+        prev_nr_bytes = merge->nr_bytes;
         ret = castle_da_merge_do(merge, merge_thread->cur_work_size);
 
         merge_thread->cur_work_size = 0;
@@ -12349,10 +12351,16 @@ static int castle_merge_run(void *_data)
         /* Check if merge completed successfully. */
         if (!ret)
         {
-            castle_events_merge_work_finished(merge_thread->da->id,
-                                              merge_thread->merge_id,
-                                              merge_thread->work_id,
-                                              0, 1);
+            if (castle_ct_hash_get(out_tree_seq))
+                castle_events_merge_work_finished(merge_thread->da->id,
+                                                  merge_thread->merge_id,
+                                                  merge_thread->work_id,
+                                                  0, MERGE_COMPLETED);
+            else
+                castle_events_merge_work_finished(merge_thread->da->id,
+                                                  merge_thread->merge_id,
+                                                  merge_thread->work_id,
+                                                  0, MERGE_COMPLETED_NO_OP_TREE);
             break;
         }
         /* Merge not completed, but work completed successfully.
@@ -12364,7 +12372,8 @@ static int castle_merge_run(void *_data)
             castle_events_merge_work_finished(merge_thread->da->id,
                                               merge_thread->merge_id,
                                               merge_thread->work_id,
-                                              merge->nr_bytes - prev_nr_bytes, 0);
+                                              merge->nr_bytes - prev_nr_bytes,
+                                              MERGE_NOT_COMPLETED);
         }
 
     } while(1);

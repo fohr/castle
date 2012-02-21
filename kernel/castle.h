@@ -2529,4 +2529,10 @@ extern unsigned int castle_rda_lvl;
 
 extern const char *castle_error_strings[];
 
+enum {
+    MERGE_NOT_COMPLETED = 0,
+    MERGE_COMPLETED = 1,
+    MERGE_COMPLETED_NO_OP_TREE = 2,
+};
+
 #endif /* __CASTLE_H__ */
