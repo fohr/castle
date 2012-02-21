@@ -5864,10 +5864,7 @@ static int castle_periodic_checkpoint(void *unused)
             if (!kthread_should_stop())
                 msleep_interruptible(1000);
             else
-            {
                 castle_last_checkpoint_ongoing = 1;
-                castle_last_checkpoint_ongoing = 1;
-            }
         }
 
         if (!castle_fs_inited)
