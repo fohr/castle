@@ -2740,9 +2740,6 @@ static void castle_back_big_put_call_queued(struct castle_back_stateful_op *stat
     /* Take an op from queue and schedule work for it. */
     if (castle_back_stateful_op_prod(stateful_op))
         BUG_ON(!queue_work_on(stateful_op->cpu, castle_back_wq, &stateful_op->work[0]));
-
-    /* To prevent #3144. */
-    might_resched();
 }
 
 static void castle_back_big_put_continue(struct castle_object_replace *replace)
@@ -2777,6 +2774,9 @@ static void castle_back_big_put_continue(struct castle_object_replace *replace)
     castle_back_big_put_call_queued(stateful_op);
 
     spin_unlock(&stateful_op->lock);
+
+    /* To prevent #3144. */
+    might_resched();
 }
 
 static void castle_back_big_put_complete(struct castle_object_replace *replace, int err)
