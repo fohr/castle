@@ -44,16 +44,6 @@ MODULE_PARM_DESC(castle_versions_deleted_sysfs_hide, "Hide deleted versions from
 
 LIST_HEAD(castle_versions_deleted);
 
-#define V_IMMUTABLE_INIT(_v)                       \
-{                                                  \
-    if (test_bit(CV_LEAF_BIT, &(_v)->flags))      \
-    {                                              \
-        do_gettimeofday(&(_v)->immute_timestamp);  \
-        barrier();                                 \
-        clear_bit(CV_LEAF_BIT, &(_v)->flags);      \
-    }                                              \
-}                                                  \
-
 /**
  * Describes the number of versions per DA.
  */
@@ -1497,24 +1487,22 @@ static int castle_version_new_create(int snap_or_clone,
     if(parent_size != 0)
         v->size = parent_size;
 
+    /* Must set immute_timestamp before running versions_process (which will make this parent
+       immutable) so that tombstone_discard is guaranteed to see a complete non-corrupt
+       timestamp (see castle_timestamped_tombstone_discardable_check). */
+    if (castle_version_is_mutable(parent))
+        do_gettimeofday(&p->immute_timestamp);
+    barrier();
     /* Run processing (which will thread the new version into the tree,
        and recalculate the order numbers) */
-    castle_versions_process(1);
+    BUG_ON(castle_versions_process(1));
 
-    /* Check if the version got initialised */
-    if(!(v->flags & CV_INITED_MASK))
-    {
-        atomic_dec(&castle_versions_count);
-        castle_versions_hash_remove(v);
-        kmem_cache_free(castle_versions_cache, v);
-
-        *ver_out = NULL;
-        return -EINVAL;
-    }
+    /* This new version must have been initialised by castle_versions_process */
+    BUG_ON(!(v->flags & CV_INITED_MASK));
 
     /* Set is_leaf bit for the the child and clear for parent. */
     set_bit(CV_LEAF_BIT, &v->flags);
-    V_IMMUTABLE_INIT(p);
+    clear_bit(CV_LEAF_BIT, &p->flags);
 
     castle_events_version_create(version);
     BUG_ON(version != atomic_read(&castle_versions_last) + 1);
