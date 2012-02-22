@@ -13,6 +13,7 @@
 #include "castle_da.h"
 #include "castle_utils.h"
 #include "castle_btree.h"
+#include "castle_ctrl_prog.h"
 
 static int castle_devel = 0;            /* Whether to show devel syfs directory.    */
 static int castle_devel_enabled = 0;    /* Required for safe shutdown.              */
@@ -549,6 +550,13 @@ static ssize_t filesystem_version_show(struct kobject *kobj,
     castle_fs_superblocks_put(fs_sb, 0);
 
     return sprintf(buf, "%u\n", fs_version);
+}
+
+static ssize_t filesystem_ctrl_prog_state_show(struct kobject *kobj,
+                                               struct attribute *attr,
+                                               char *buf)
+{
+    return sprintf(buf, "%d\n", castle_ctrl_prog_present() ? 1 : 0);
 }
 
 /* Empty _show() function. */
@@ -1416,8 +1424,13 @@ static struct kobj_type castle_collections_ktype = {
 static struct castle_sysfs_entry filesystem_version =
 __ATTR(filesystem_version, S_IRUGO|S_IWUSR, filesystem_version_show, NULL);
 
+static struct castle_sysfs_entry filesystem_ctrl_prog_state =
+__ATTR(filesystem_ctrl_prog_state, S_IRUGO|S_IWUSR, filesystem_ctrl_prog_state_show, NULL);
+
+
 static struct attribute *castle_filesystem_attrs[] = {
     &filesystem_version.attr,
+    &filesystem_ctrl_prog_state.attr,
     NULL,
 };
 
