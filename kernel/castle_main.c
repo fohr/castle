@@ -573,10 +573,26 @@ void castle_global_tree_free(void)
 #define MAX_VERSION -1
 int castle_fs_init(void)
 {
+#define FIRST_INIT_BUG_ON_ERROR(_fn)            \
+    ({                                          \
+        int _ret = 0;                           \
+        if(first)                               \
+            _ret = _fn;                         \
+        BUG_ON(_ret);                           \
+     })
+
+#define NOT_FIRST_INIT_BUG_ON_ERROR(_fn)        \
+    ({                                          \
+        int _ret = 0;                           \
+        if(!first)                              \
+            _ret = _fn;                         \
+        BUG_ON(_ret);                           \
+     })
+
     struct   list_head *lh;
     struct   castle_slave *cs;
     struct   castle_fs_superblock fs_sb, *cs_fs_sb;
-    int      ret, first, prev_new_dev = -1;
+    int      first, prev_new_dev = -1;
     int      i, last, sync_checkpoint=0;
     uint32_t slave_count=0, nr_fs_slaves=0, nr_live_slaves=0, need_rebuild=0;
     uint32_t bcv=0, max=0, last_version_checked=MAX_VERSION;
@@ -869,22 +885,11 @@ int castle_fs_init(void)
     else      castle_fs_superblocks_load(&fs_sb);
 
     /* Load extent structures of logical extents into memory */
-    ret = first ? castle_extents_create() : castle_extents_read();
-    if (ret)
-    {
-        if (ret == -ENOSPC)
-        {
-            castle_printk(LOG_ERROR, "Failed to create/read extents due to low freespace.\n");
-            return ret;
-        }
-
-        castle_printk(LOG_ERROR, "Failed to create/read extents.\n");
-        return ret;
-    }
+    FIRST_INIT_BUG_ON_ERROR(castle_extents_create());
+    NOT_FIRST_INIT_BUG_ON_ERROR(castle_extents_read());
 
     /* Load all extents into memory. */
-    if (!first && (ret = castle_extents_read_complete(&sync_checkpoint)))
-        return ret;
+    NOT_FIRST_INIT_BUG_ON_ERROR(castle_extents_read_complete(&sync_checkpoint));
 
     /* Now create the meta extent pool. */
     castle_extents_meta_pool_init();
@@ -893,8 +898,7 @@ int castle_fs_init(void)
        Init the fs superblock. */
     if(first) {
         /* Init version list */
-        if ((ret = castle_versions_zero_init()))
-            return ret;
+        FIRST_INIT_BUG_ON_ERROR(castle_versions_zero_init());
         /* Make sure that fs_sb is up-to-date */
         cs_fs_sb = castle_fs_superblocks_get();
         memcpy(&fs_sb, cs_fs_sb, sizeof(struct castle_fs_superblock));
@@ -909,32 +913,24 @@ int castle_fs_init(void)
     castle_fs_superblocks_put(cs_fs_sb, 1);
 
     /* Read versions in. */
-    if (!first && (ret = castle_versions_read()))
-        return ret;
+    NOT_FIRST_INIT_BUG_ON_ERROR(castle_versions_read());
 
     /* Read doubling arrays and component trees in. */
-    if (!first) ret = castle_double_array_read();
-    if (ret) return ret;
+    NOT_FIRST_INIT_BUG_ON_ERROR(castle_double_array_read());
 
     /* Delete any orphan version trees. Note: If the system checkpoints DA deletion and crashes
      * before it completes the deletion, then version tree can exist with out DA. */
     castle_versions_orphans_check();
 
     /* Read Collection Attachments. */
-    if (!first && (ret = castle_attachments_read()))
-        return ret;
+    NOT_FIRST_INIT_BUG_ON_ERROR(castle_attachments_read());
 
     /* Read stats in. */
-    if (!first && (ret = castle_stats_read()))
-        return ret;
+    NOT_FIRST_INIT_BUG_ON_ERROR(castle_stats_read());
 
     FAULT(FS_INIT_FAULT);
 
-    if (!first && (ret = castle_chk_disk()))
-    {
-        castle_printk(LOG_ERROR, "Failed to bring-up sane FS from disks\n");
-        return ret;
-    }
+    NOT_FIRST_INIT_BUG_ON_ERROR(castle_chk_disk());
 
     castle_checkpoint_version_inc();
 
@@ -978,17 +974,9 @@ int castle_fs_init(void)
 
     castle_extents_start();
 
-    if (first && (ret = castle_global_tree_init()))
-    {
-        castle_printk(LOG_ERROR, "Failed to init global tree.\n");
-        return -EINVAL;
-    }
+    FIRST_INIT_BUG_ON_ERROR(castle_global_tree_init());
 
-    if (castle_double_array_start() < 0)
-    {
-        castle_printk(LOG_ERROR, "Failed to start Doubling Arrays\n");
-        return -EINVAL;
-    }
+    BUG_ON(castle_double_array_start() < 0);
 
     castle_extents_rebuild_startup_check(need_rebuild);
 
