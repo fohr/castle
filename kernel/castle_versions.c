@@ -74,6 +74,12 @@ DEFINE_HASH_TBL(castle_versions_counts,
                 c_da_t,
                 da_id);
 
+static void castle_version_struct_mem_free(struct castle_version *v)
+{
+    BUG_ON(test_bit(CV_IN_SYSFS_BIT, &v->flags));
+    kmem_cache_free(castle_versions_cache, v);
+}
+
 /********************************************************
  * Functions related to the castle_versions_counts hash *
  *******************************************************/
@@ -258,7 +264,7 @@ static int castle_version_hash_remove(struct castle_version *v, void *unused)
 
     atomic_dec(&castle_versions_count);
     list_del(&v->hash_list);
-    kmem_cache_free(castle_versions_cache, v);
+    castle_version_struct_mem_free(v);
 
     return 0;
 }
@@ -822,7 +828,7 @@ int castle_version_tree_delete(c_ver_t version)
         castle_sysfs_version_del(del_v);
         castle_events_version_delete_version(del_v->version);
         list_del(pos);
-        kmem_cache_free(castle_versions_cache, del_v);
+        castle_version_struct_mem_free(del_v);
     }
 
     /* Run processing to re-calculate the version ordering. */
@@ -871,7 +877,7 @@ int castle_version_free(c_ver_t version)
 
     BUG_ON(castle_version_delete_from_tree(v, NULL) == NULL);
 
-    kmem_cache_free(castle_versions_cache, v);
+    castle_version_struct_mem_free(v);
 
     return 0;
 }
@@ -977,7 +983,7 @@ static int castle_version_add(c_ver_t version,
 
 out_dealloc:
     if (v)
-        kmem_cache_free(castle_versions_cache, v);
+        castle_version_struct_mem_free(v);
     /* Revert bump to version counts.  Don't propagate as this decrement does
      * not imply health -> health+1. */
     _castle_versions_count_adjust(da_id, health, 0 /*add*/, 0 /*propagate*/);
