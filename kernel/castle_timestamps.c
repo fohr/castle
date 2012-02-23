@@ -44,6 +44,7 @@ int castle_dfs_resolver_preconstruct(c_dfs_resolver *dfs_resolver, struct castle
 
     /* Allocate and init btree node buffer */
     new_node_size = castle_da_merge_node_size_get(merge, 0);
+    new_node_size *= 4; /* See trac #4749 */
     dfs_resolver->buffer_node = castle_alloc(new_node_size * C_BLK_SIZE);
     if(!dfs_resolver->buffer_node)
     {
@@ -59,6 +60,11 @@ int castle_dfs_resolver_preconstruct(c_dfs_resolver *dfs_resolver, struct castle
     /* Allocate the inclusion flag buffer */
     BUG_ON(!merge->out_btree);
     max_entries = merge->out_btree->max_entries(new_node_size);
+    castle_printk(LOG_DEBUG, "%s::[%p] max_entries = %d\n", __FUNCTION__, merge, max_entries);
+    BUG_ON(max_entries < (4*CASTLE_VERSIONS_MAX) ); /* This assertions is understrict to guarantee
+                                                       sufficient capacity in all cases, but we
+                                                       expect to satisfy this at least. */
+
     dfs_resolver->inclusion_flag = castle_alloc(sizeof(int) * max_entries);
     if(!dfs_resolver->inclusion_flag)
     {

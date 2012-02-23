@@ -26,7 +26,6 @@ static int castle_versions_process(int lock);
 
 static struct kmem_cache *castle_versions_cache  = NULL;
 
-#define CASTLE_VERSIONS_MAX                 (200)   /**< Maximum number of live versions per-DA.*/
 #define CASTLE_VERSIONS_HASH_SIZE           (1000)  /**< Size of castle_versions_hash.          */
 #define CASTLE_VERSIONS_COUNTS_HASH_SIZE    (1000)  /**< Size of castle_versions_counts_hash.   */
 static struct list_head  *castle_versions_hash          = NULL;

@@ -1,6 +1,8 @@
 #ifndef __CASTLE_VERSIONS_H__
 #define __CASTLE_VERSIONS_H__
 
+#define CASTLE_VERSIONS_MAX (200) /**< Maximum number of live versions per-DA.*/
+
 #define CV_INITED_BIT             (0)
 #define CV_INITED_MASK            (1 << CV_INITED_BIT)
 #define CV_ATTACHED_BIT           (1)
