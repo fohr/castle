@@ -34,6 +34,11 @@ static int castle_nugget_disabled = 0;
 module_param(castle_nugget_disabled, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_nugget_disabled, "Don't send events to start new nugget");
 
+int castle_no_nugget_insert_rate = 0;
+
+module_param(castle_no_nugget_insert_rate, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_no_nugget_insert_rate, "Rate of inserts(MB/s) when nugget is diabled");
+
 int castle_ctrl_prog_present(void)
 {
     return (castle_ctrl_prog_state == CTRL_PROG_PRESENT);
