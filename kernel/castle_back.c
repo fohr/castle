@@ -539,7 +539,6 @@ castle_back_stateful_op_get(struct castle_back_conn *conn,
     stateful_op->cancel_on_op_complete = 0;
     stateful_op->cancelled = 0;
     CASTLE_INIT_WORK(&stateful_op->expire_work, castle_back_stateful_op_expire);
-    stateful_op->in_use = 0;
     /* see def of castle_back_stateful_op */
     stateful_op->token = ((stateful_op - conn->stateful_ops) + (stateful_op->use_count * MAX_STATEFUL_OPS)) | 0x80000000;
     stateful_op->use_count++;
@@ -605,9 +604,14 @@ static void castle_back_start_stateful_op_timeout_check_timer(struct castle_back
     mod_timer(timer, jiffies + STATEFUL_OP_TIMEOUT_CHECK_INTERVAL);
 }
 
+/**
+ *
+ * NOTE: Called from a timer (soft interrupt).
+ */
 static void castle_back_stateful_op_timeout_check(unsigned long data)
 {
     struct castle_back_conn *conn = (struct castle_back_conn *)(data);
+    unsigned long flags;
 
     debug("castle_back_stateful_op_timeout_check for conn = %p\n", conn);
 
@@ -619,10 +623,10 @@ static void castle_back_stateful_op_timeout_check(unsigned long data)
      * which then blocks until we leave i.e. the timer is rescheduled.  Then the timer is running, but
      * the connection is freed.
      */
-    spin_lock(&conn->restart_timer_lock);
+    spin_lock_irqsave(&conn->restart_timer_lock, flags);
     if (conn->restart_timer)
         castle_back_start_stateful_op_timeout_check_timer(conn);
-    spin_unlock(&conn->restart_timer_lock);
+    spin_unlock_irqrestore(&conn->restart_timer_lock, flags);
 }
 
 static void _castle_back_stateful_op_timeout_check(void *data)
@@ -1608,6 +1612,7 @@ int castle_back_get_reply_continue(struct castle_object_get *get,
     if (err)
     {
         castle_back_buffer_put(op->conn, op->buf);
+        castle_free(get->key);
         castle_attachment_put(op->attachment);
         castle_back_reply(op, err, 0, 0, 0);
 
@@ -1663,16 +1668,16 @@ int castle_back_get_reply_start(struct castle_object_get *get,
 
     BUG_ON(buffer_length > data_length);
 
+    if (err)
+    {
+        err_prime = err;
+        goto err;
+    }
+
     if (!buffer)
     {
         BUG_ON((data_length != 0) || (buffer_length != 0));
         err_prime = -ENOENT;
-        goto err;
-    }
-
-    if (err)
-    {
-        err_prime = err;
         goto err;
     }
 
@@ -2292,7 +2297,7 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
         BUG_ON(!stateful_op->curr_op);
 
         op->req.tag = CASTLE_RING_ITER_FINISH;
-        op->req.iter_finish.token = op->req.iter_next.token;
+        op->req.iter_finish.token = stateful_op->token;
         spin_unlock(&stateful_op->lock);
 
         /* End the iterator. */
@@ -2323,6 +2328,7 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
         stateful_op->iterator.kv_list_tail->next =
             (struct castle_key_value_list *)op->buf->user_addr;
 
+        /* key->length + 4 because key->length does not include overheads. */
         stateful_op->iterator.saved_key = castle_dup_or_copy(key, key->length + 4, NULL, NULL);
         if (!stateful_op->iterator.saved_key)
         {
@@ -2758,6 +2764,8 @@ static void castle_back_big_put_continue(struct castle_object_replace *replace)
 
         /* Just completed data transfer for PUT_CHUNK, release the buffer. */
         if (op->req.tag == CASTLE_RING_PUT_CHUNK && op->buf)
+            /* This may free the buffer with stateful_op->lock held; this is
+             * safe (but not ideal) since the free functions don't sleep. */
             castle_back_buffer_put(stateful_op->conn, op->buf);
 
         /* Respond back to client. */
@@ -3697,7 +3705,7 @@ static int castle_back_work_do(void *data)
 {
     struct castle_back_conn *conn = data;
     castle_back_ring_t *back_ring = &conn->back_ring;
-    int more, items = 0;
+    int should_stop, more, items = 0;
     RING_IDX cons, rp;
     struct castle_back_op *op;
     uint32_t ring_size = __RING_SIZE(back_ring->sring, CASTLE_RING_SIZE);
@@ -3740,14 +3748,17 @@ static int castle_back_work_do(void *data)
         /* this ensures that if we get an ioctl in between checking the ring
          * for more and calling schedule, we don't sleep and miss it
          */
+        preempt_disable();
         set_current_state(TASK_INTERRUPTIBLE);
         xen_rmb();
         RING_FINAL_CHECK_FOR_REQUESTS(back_ring, more);
 
-        if (more)
+        should_stop = kthread_should_stop();
+        if (more || should_stop)
             set_current_state(TASK_RUNNING);
-        if (kthread_should_stop())
+        if (should_stop)
             break;
+        preempt_enable();
         if (!more)
         {
             trace_back_work_do(conn, items);
@@ -3804,7 +3815,7 @@ int castle_back_open(struct inode *inode, struct file *file)
     /* Do nothing if the castle_init hasn't yet completed. */
     if(!castle_back_inited)
     {
-        err = -EINVAL;
+        err = -EAGAIN;
         goto err0;
     }
 
@@ -3827,6 +3838,7 @@ int castle_back_open(struct inode *inode, struct file *file)
     spin_lock_init(&conn->restart_timer_lock);
     conn->buffers_rb = RB_ROOT;
 
+    /* Structure is mapped in userspace, vmalloc() for page alignment. */
     sring = (castle_sring_t *)castle_vmalloc(CASTLE_RING_SIZE);
     if (sring == NULL)
     {
@@ -3863,7 +3875,7 @@ int castle_back_open(struct inode *inode, struct file *file)
     {
         error("castle_back: failed to vmalloc buffer for stateful_ops\n");
         err = -ENOMEM;
-        goto err2;
+        goto err3;
     }
     memset(conn->stateful_ops, 0, sizeof(struct castle_back_stateful_op) * MAX_STATEFUL_OPS);
 
@@ -3887,7 +3899,7 @@ int castle_back_open(struct inode *inode, struct file *file)
     if (!conn->work_thread)
     {
         error("Could not create work thread\n");
-        goto err3;
+        goto err4;
     }
 
     INIT_WORK(&conn->timeout_check_work, _castle_back_stateful_op_timeout_check, conn);
@@ -3905,11 +3917,13 @@ int castle_back_open(struct inode *inode, struct file *file)
 
     return 0;
 
-err3:
+err4:
     castle_vfree(conn->stateful_ops);
+err3:
+    castle_vfree(conn->ops);
 err2:
     UnReservePages(conn->back_ring.sring, CASTLE_RING_SIZE);
-    castle_vfree(conn->back_ring.sring);
+    castle_vfree(sring);
 err1:
     castle_free(conn);
 err0:
