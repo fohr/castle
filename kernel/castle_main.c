@@ -954,7 +954,7 @@ int castle_fs_init(void)
         if (!test_bit(CASTLE_SLAVE_GHOST_BIT, &cs->flags) && castle_sysfs_slave_add(cs))
         {
             castle_printk(LOG_ERROR, "Could not add slave to sysfs.\n");
-            return -EINVAL;
+            BUG();
         }
         castle_events_slave_claim(cs->uuid);
     }
