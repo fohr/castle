@@ -19,6 +19,7 @@
 #include "castle_bloom.h"
 #include "castle_events.h"
 #include "castle_mstore.h"
+#include "castle_ctrl_prog.h"
 
 #ifndef CASTLE_PERF_DEBUG
 #define ts_delta_ns(a, b)                       ((void)0)
@@ -7960,6 +7961,7 @@ void castle_da_write_rate_check(struct castle_double_array *da, uint32_t nr_byte
 {
     struct timeval cur_time;
     uint64_t delta_time, throttle_time;
+    extern int castle_no_nugget_insert_rate;
 
     if (castle_fs_exiting)
         return;
@@ -7968,8 +7970,11 @@ void castle_da_write_rate_check(struct castle_double_array *da, uint32_t nr_byte
 
     da->sample_data_bytes += nr_bytes;
 
+    if (!castle_ctrl_prog_present())
+        da->write_rate = castle_no_nugget_insert_rate * 1024L * 1024L;
+
     /* If this is not yet time for sampling, just return. */
-    if (da->sample_data_bytes < da->sample_rate)
+    else if (da->sample_data_bytes < da->sample_rate)
         goto out;
 
     /* If inserts are already disabled, return from here. */
