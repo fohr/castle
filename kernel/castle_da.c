@@ -7042,6 +7042,12 @@ static void castle_da_merge_struct_deser(struct castle_da_merge *merge,
         /* Recover each btree level's node_c2b and last_key */
         if(!EXT_POS_INVAL(merge_mstore->levels[i].node_c2b_cep))
         {
+            int idx;
+            void        *dummy_k;
+            void        *dummy_k_unpack;
+            c_ver_t      dummy_v;
+            c_val_tup_t  dummy_cvt;
+
             castle_printk(LOG_DEBUG, "%s::sanity check for merge %p (da %d level %d) node_c2b[%d] ("cep_fmt_str")\n",
                     __FUNCTION__, merge, da->id, level,
                     i, cep2str(merge_mstore->levels[i].node_c2b_cep) );
@@ -7088,6 +7094,13 @@ static void castle_da_merge_struct_deser(struct castle_da_merge *merge,
                         &merge->levels[i].last_key, NULL, NULL);
                 if(i==0)
                     merge->last_key = merge->levels[i].last_key;
+            }
+            /* test that each key is sane, by forcing it through the entry_get code path */
+            for(idx=0; idx<node->used; idx++)
+            {
+                merge->out_btree->entry_get(node, idx, &dummy_k, &dummy_v, &dummy_cvt);
+                dummy_k_unpack = merge->out_btree->key_unpack(dummy_k, NULL, NULL);
+                castle_free(dummy_k_unpack);
             }
         }
     }
