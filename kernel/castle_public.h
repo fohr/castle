@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 34 /* last updated by VV */
+#define CASTLE_PROTOCOL_VERSION 35 /* last updated by BM */
 
 #ifdef SWIG
 #define PACKED               //override gcc intrinsics for SWIG
@@ -163,12 +163,15 @@ typedef enum {
  */
 typedef enum {
     TRACE_IO_SCHED_NUM_READ_IOS_ID,          /**< Number of IOs done due to reads               */
-    TRACE_IO_SCHED_NUM_MERGE_IOS_ID,         /**< Number of IOs done due to merges (and writes) */
+    TRACE_IO_SCHED_NUM_MERGE_RD_IOS_ID,      /**< Number of RD IOs done due to merges (and writes) */
+    TRACE_IO_SCHED_NUM_MERGE_WR_IOS_ID,      /**< Number of WR IOs done due to merges (and writes) */
     TRACE_IO_SCHED_NUM_CHECKPOINT_IOS_ID,    /**< Number of IOs done due to checkpoints         */
     TRACE_IO_SCHED_BYTES_READ_IOS_ID,        /**< Amount of IO data due to reads                */
-    TRACE_IO_SCHED_BYTES_MERGE_IOS_ID,       /**< Amount of IO data due to merges (and writes)  */
+    TRACE_IO_SCHED_BYTES_MERGE_RD_IOS_ID,    /**< Amount of RD IO data due to merges (and writes)  */
+    TRACE_IO_SCHED_BYTES_MERGE_WR_IOS_ID,    /**< Amount of WR data due to merges (and writes)  */
     TRACE_IO_SCHED_BYTES_CHECKPOINT_IOS_ID,  /**< Amount of IO data due to checkpoints          */
 } c_trc_io_sched_var_t;
+
 
 /* Bump the magic version byte (LSB) when c_trc_evt_t changes. */
 #define CASTLE_TRACE_MAGIC          0xCAE5E110
