@@ -2613,10 +2613,11 @@ static void __exit castle_exit(void)
 {
     castle_printk(LOG_INIT, "Castle FS exit.\n");
 
+    castle_fs_exiting = 1;
+
     /* Note: Doesn't seem like clean design. Revisit - BM.*/
     castle_double_array_inserts_enable();
 
-    castle_fs_exiting = 1;
     /* Remove externally visible interfaces. Starting with the control file
        (so that no new connections can be created). */
     castle_ctrl_prog_fini();
