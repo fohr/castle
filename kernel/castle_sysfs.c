@@ -559,6 +559,23 @@ static ssize_t filesystem_ctrl_prog_state_show(struct kobject *kobj,
     return sprintf(buf, "%d\n", castle_ctrl_prog_present() ? 1 : 0);
 }
 
+extern int meta_pool_inuse_count;
+extern int meta_pool_available_count;
+extern int meta_pool_released_count;
+extern int meta_pool_frozen_count;
+
+static ssize_t filesystem_meta_pool_show(struct kobject *kobj,
+                                         struct attribute *attr,
+                                         char *buf)
+{
+    return sprintf(buf,
+                   "%d %d %d %d\n",
+                   meta_pool_inuse_count,
+                   meta_pool_available_count,
+                   meta_pool_released_count,
+                   meta_pool_frozen_count);
+}
+
 /* Empty _show() function. */
 static USED ssize_t devel_null(struct kobject *kobj,
                           struct attribute *attr,
@@ -1427,10 +1444,13 @@ __ATTR(filesystem_version, S_IRUGO|S_IWUSR, filesystem_version_show, NULL);
 static struct castle_sysfs_entry filesystem_ctrl_prog_state =
 __ATTR(filesystem_ctrl_prog_state, S_IRUGO|S_IWUSR, filesystem_ctrl_prog_state_show, NULL);
 
+static struct castle_sysfs_entry filesystem_meta_pool =
+__ATTR(filesystem_meta_pool, S_IRUGO|S_IWUSR, filesystem_meta_pool_show, NULL);
 
 static struct attribute *castle_filesystem_attrs[] = {
     &filesystem_version.attr,
     &filesystem_ctrl_prog_state.attr,
+    &filesystem_meta_pool.attr,
     NULL,
 };
 
