@@ -2290,10 +2290,10 @@ static struct list_head     meta_pool_frozen;       /* Temp list for use during 
 
 int                         meta_pool_inited = 0;   /* set once the pool is available for use. */
 
-static int meta_pool_inuse_count = 0;
-static int meta_pool_available_count = 0;
-static int meta_pool_released_count = 0;
-static int meta_pool_frozen_count = 0;
+int meta_pool_inuse_count = 0;
+int meta_pool_available_count = 0;
+int meta_pool_released_count = 0;
+int meta_pool_frozen_count = 0;
 
 /*
  * Move all freed meta extent pool entries to the frozen list.
