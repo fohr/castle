@@ -2270,7 +2270,7 @@ out:
     *force_checkpoint = 0;
 }
 
-#define META_POOL_SIZE 10000
+#define META_POOL_SIZE 40000
 static unsigned int castle_meta_pool_entries = META_POOL_SIZE;
 module_param(castle_meta_pool_entries, uint, S_IRUSR | S_IRGRP);
 MODULE_PARM_DESC(castle_meta_pool_entries, "Meta extent pool size");
