@@ -29,15 +29,15 @@ static int               castle_ctrl_prog_state             = CTRL_PROG_NOT_PRES
 static pid_t             castle_ctrl_prog_pid;
 static long              castle_ctrl_prog_last_jiffies      = 0;
 
-static int castle_nugget_disabled = 0;
+static int castle_ctrl_prog_disabled = 0;
 
-module_param(castle_nugget_disabled, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
-MODULE_PARM_DESC(castle_nugget_disabled, "Don't send events to start new nugget");
+module_param(castle_ctrl_prog_disabled, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_ctrl_prog_disabled, "Don't send events to start new Castle Control Daemon");
 
-int castle_no_nugget_insert_rate = 0;
+int castle_no_ctrl_prog_insert_rate = 0;
 
-module_param(castle_no_nugget_insert_rate, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
-MODULE_PARM_DESC(castle_no_nugget_insert_rate, "Rate of inserts(MB/s) when nugget is diabled");
+module_param(castle_no_ctrl_prog_insert_rate, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_no_ctrl_prog_insert_rate, "Rate of inserts(MB/s) when nugget is diabled");
 
 int castle_ctrl_prog_present(void)
 {
@@ -173,7 +173,7 @@ static void castle_ctrl_prog_work_do(void *unused)
             castle_printk(LOG_USERINFO, "Startup ctrl prog.\n");
             castle_ctrl_prog_touch();
             /* If the nugget_disabled parameter is set, don't send event to start nugget. */
-            if (!castle_nugget_disabled)
+            if (!castle_ctrl_prog_disabled)
             {
                 do_gettimeofday(&tv);
                 castle_uevent1(CASTLE_CTRL_PROG_REGISTER, (uint64_t)tv.tv_sec);
