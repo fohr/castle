@@ -86,7 +86,6 @@ static atomic64_t               castle_next_tree_seq = ATOMIC64(0);
 static atomic64_t               castle_next_tree_data_age = ATOMIC64(0);
 static int                      castle_da_exiting    = 0;
 
-static int                      castle_dynamic_driver_merge = 1;
 static int                      castle_merge_max_work_id = 0;
 
 static int                      castle_merges_abortable = 1; /* 0 or 1, default=enabled */
@@ -111,9 +110,6 @@ static struct
     int                     cnt;    /**< Size of cpus array.                        */
     int                    *cpus;   /**< Array of CPU ids for handling requests.    */
 } request_cpus;
-
-module_param(castle_dynamic_driver_merge, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
-MODULE_PARM_DESC(castle_dynamic_driver_merge, "Dynamic driver merge");
 
 /* set to 0 to disable using SSDs for btree leaf nodes */
 static int                      castle_use_ssd_leaf_nodes = 0;
