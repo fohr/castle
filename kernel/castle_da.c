@@ -7961,7 +7961,7 @@ void castle_da_write_rate_check(struct castle_double_array *da, uint32_t nr_byte
 {
     struct timeval cur_time;
     uint64_t delta_time, throttle_time;
-    extern int castle_no_nugget_insert_rate;
+    extern int castle_no_ctrl_prog_insert_rate;
 
     if (castle_fs_exiting)
         return;
@@ -7971,7 +7971,7 @@ void castle_da_write_rate_check(struct castle_double_array *da, uint32_t nr_byte
     da->sample_data_bytes += nr_bytes;
 
     if (!castle_ctrl_prog_present())
-        da->write_rate = castle_no_nugget_insert_rate * 1024L * 1024L;
+        da->write_rate = castle_no_ctrl_prog_insert_rate * 1024L * 1024L;
 
     /* If this is not yet time for sampling, just return. */
     else if (da->sample_data_bytes < da->sample_rate)
