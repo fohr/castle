@@ -26,6 +26,11 @@
 #include "castle_ring.h"
 #include "castle_systemtap.h"
 
+static int castle_3016_debug = 0;
+module_param(castle_3016_debug, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_3016_debug, "Extra BUG_ON in order to debug trac-3016.");
+
+
 DEFINE_RING_TYPES(castle, castle_request_t, castle_response_t);
 
 #define MAX_BUFFER_PAGES  (256)
@@ -650,6 +655,12 @@ static void _castle_back_stateful_op_timeout_check(void *data)
         {
             castle_printk(LOG_INFO, "stateful_op index %u, token %u has expired.\n",
                     i, stateful_ops[i].token);
+            if(castle_3016_debug)
+            {
+                castle_printk(LOG_ERROR, "Expiring token %u, on conn %p. #3016 debug BUG().\n",
+                    stateful_ops[i].token, conn);
+                BUG();
+            }
             /*
              * We may have already queued up this stateful_op to expire. Be sure to not
              * take a reference more than once. It is safe to increment the reference count
