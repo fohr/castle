@@ -423,6 +423,12 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
         (does not include tombstone discard magic)
     */
 
+    //We don't do tombstone discard for level 1 merges anyway... right???
+    BUG_ON( (dfs_resolver->merge->level < 2) && (dfs_resolver->functions & DFS_RESOLVE_TOMBSTONES)); //tmp debugging for #4749
+    //While we're at it, let's check that we never see merge->level other than 1 or 2!
+    BUG_ON(dfs_resolver->merge->level < 1); //tmp for #4749
+    BUG_ON(dfs_resolver->merge->level > 2); //tmp for #4749
+
     BUG_ON(dfs_resolver->top_index != dfs_resolver->buffer_node->used);
     for(i = dfs_resolver->top_index - 1; i>=0; i--)
     {
@@ -458,7 +464,10 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
             if( (dfs_resolver->stack->top == 0) || !(stack_top_ts > entry_i_ts) )
                 entry_included = 1;
             else
+            {
                 atomic64_inc(&merge->da->stats.user_timestamps.merge_discards);
+                BUG_ON(dfs_resolver->merge->level == 1); //tmp debugging for #4749 - let's verify that the dfs resolver doesn't actually do anything for merges at level 1...
+            }
         }
         else /* No timestamping, so entries cannot be timestamp deprecated */
             entry_included = 1;
