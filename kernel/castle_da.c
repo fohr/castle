@@ -6012,12 +6012,15 @@ deser_done:
         castle_da_get(da);
     }
 
-    /* We need a DFS resolver if we are timestamping, or if this is the top-level merge and we need
-       to discard non-queriable tombstones, or both. */
-    if (castle_da_user_timestamping_check(merge->da))
-        dfs_resolver_functions |= DFS_RESOLVE_TIMESTAMPS;
-    if (castle_da_merge_top_level_check(merge))
-        dfs_resolver_functions |= DFS_RESOLVE_TOMBSTONES;
+    /* We need a DFS resolver if this is a level 2+ merge, AND we are timestamping, OR if this is
+       the top-level merge and we need to discard non-queriable tombstones. */
+    if (merge->level >1)
+    {
+        if (castle_da_user_timestamping_check(merge->da))
+            dfs_resolver_functions |= DFS_RESOLVE_TIMESTAMPS;
+        if (castle_da_merge_top_level_check(merge))
+            dfs_resolver_functions |= DFS_RESOLVE_TOMBSTONES;
+    }
     if(dfs_resolver_functions != DFS_RESOLVE_NOTHING)
     {
         merge->tv_resolver = castle_zalloc(sizeof(c_dfs_resolver));
