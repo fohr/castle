@@ -742,6 +742,12 @@ static int castle_back_stateful_op_queue_op(struct castle_back_stateful_op *stat
             || stateful_op->cancel_on_op_complete)
     {
         error("Token expired 0x%x\n", token);
+        if(castle_3016_debug)
+        {
+            castle_printk(LOG_WARN, "%s Token not found 0x%x, stateful_op=%p, op=%p\n",
+                    __FUNCTION__, op->req.get_chunk.token, stateful_op, op);
+            BUG();
+        }
         return -EBADFD;
     }
 
@@ -3147,6 +3153,12 @@ static void castle_back_put_chunk(void *data)
     {
         castle_printk(LOG_INFO, "%s Token not found 0x%x\n",
                 __FUNCTION__, op->req.put_chunk.token);
+        if(castle_3016_debug)
+        {
+            castle_printk(LOG_WARN, "%s Token not found 0x%x, conn=%p, op=%p\n",
+                    __FUNCTION__, op->req.get_chunk.token, conn, op);
+            BUG();
+        }
         err = -EBADFD;
         goto err0;
     }
@@ -3419,6 +3431,12 @@ static void castle_back_get_chunk(void *data)
     {
         castle_printk(LOG_INFO, "%s Token not found 0x%x\n",
                 __FUNCTION__, op->req.get_chunk.token);
+        if(castle_3016_debug)
+        {
+            castle_printk(LOG_WARN, "%s Token not found 0x%x, conn=%p, op=%p\n",
+                    __FUNCTION__, op->req.get_chunk.token, conn, op);
+            BUG();
+        }
         err = -EBADFD;
         goto err0;
     }
