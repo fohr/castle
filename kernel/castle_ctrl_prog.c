@@ -123,8 +123,6 @@ int castle_ctrl_prog_ioctl(cctrl_ioctl_t *ioctl)
             }
             castle_ctrl_prog_touch();
 
-            set_user_nice(current, -15);
-
             ioctl->ctrl_prog_heartbeat.ret = C_ERR_SUCCESS;
             break;
 
