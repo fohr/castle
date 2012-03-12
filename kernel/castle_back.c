@@ -499,6 +499,13 @@ static struct castle_back_stateful_op *castle_back_find_stateful_op(struct castl
         return stateful_op;
     }
 
+    if(castle_3016_debug)
+    {
+        castle_printk(LOG_WARN, "Token not found 0x%x, conn=%p, stateful_op=%p, crashing.\n",
+                        token, conn, stateful_op);
+        BUG();
+    }
+
     spin_unlock(&stateful_op->lock);
     return NULL;
 }
