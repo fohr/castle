@@ -1636,9 +1636,6 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         castle_printk(LOG_USERINFO, "Disk 0x%x [%s] has been successfully added.\n",
                       cs->uuid, cs->bdev_name);
 
-        /* Wake up anybody who is waiting for space .... */
-        castle_extent_lfs_victims_wakeup();
-
         err = castle_sysfs_slave_add(cs);
         if(err)
         {
