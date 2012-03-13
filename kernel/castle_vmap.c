@@ -372,32 +372,32 @@ static void castle_vmap_freelist_grow(int freelist_bucket_idx, int slots)
 {
     castle_vmap_freelist_t  *new;
     castle_vmap_freelist_t *castle_vmap_freelist;
+    int want_slots;
+
     debug("Adding new freelist of %d slots for bucket size %d\n",
           slots * CASTLE_VMAP_FREELIST_MULTI, SLOT_SIZE(freelist_bucket_idx));
-    new = castle_vmap_freelist_init(SLOT_SIZE(freelist_bucket_idx), slots * CASTLE_VMAP_FREELIST_MULTI);
+
+    want_slots = slots * CASTLE_VMAP_FREELIST_MULTI;
+    new = castle_vmap_freelist_init(SLOT_SIZE(freelist_bucket_idx), want_slots);
 
     if (!new)
         BUG(); /* failure to get vmem area is fatal */
 
+    /* Drop new map if we raced or if the active map is empty.  Only the active
+     * map (at the head of the list) handles allocations.  Maps get freed up
+     * when all of their slots become free so we must not install a new active
+     * map over an existing empty map, or it will not be freed. */
     spin_lock(&castle_vmap_lock[freelist_bucket_idx].lock);
-    /*
-     * Now we have the lock again, recheck to see if all the slots in the (old) freelist at the head
-     * of the bucket have become free since we dropped the lock. If they have, then we don't now
-     * need this new freelist. Worse, if we did add this new freelist, the old freelist would never
-     * get deleted, because the only thing that could have triggered its deletion is when all its
-     * slots became free, and that could never happen because freelists not at the head are not used
-     * for allocations.
-     */
     castle_vmap_freelist = get_freelist_head(freelist_bucket_idx);
-    if (castle_vmap_freelist->slots_free == castle_vmap_freelist->nr_slots)
+    if (castle_vmap_freelist->nr_slots >= want_slots
+            || castle_vmap_freelist->nr_slots == castle_vmap_freelist->slots_free)
     {
         debug("Dropping new list for freelist bucket index %d\n", freelist_bucket_idx);
+        spin_unlock(&castle_vmap_lock[freelist_bucket_idx].lock);
         castle_vmap_freelist_delete(new);
         castle_free(new);
-        goto out;
+        return;
     }
     list_add(&new->list, castle_vmap_fast_maps_ptr+freelist_bucket_idx);
-
-out:
     spin_unlock(&castle_vmap_lock[freelist_bucket_idx].lock);
 }
