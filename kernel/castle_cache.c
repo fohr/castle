@@ -1311,7 +1311,7 @@ static void c2b_multi_io_end(struct bio *bio, int err)
         struct castle_slave *oos_slave = castle_slave_find_by_bdev(bio_info->bdev);
         if (oos_slave->uuid == castle_fault_arg)
         {
-            castle_printk(LOG_DEVEL, "Injecting bio error on slave 0x%x\n", oos_slave->uuid);
+            castle_printk(LOG_WARN, "Injecting bio error on slave 0x%x\n", oos_slave->uuid);
             castle_fault = castle_fault_arg = 0;
             clear_bit(BIO_UPTODATE, &bio->bi_flags);
         }
@@ -1812,7 +1812,7 @@ retry:
     {
         slave = castle_slave_find_by_uuid(chunks[i].slave_id);
         if(!slave)
-            castle_printk(LOG_DEVEL, "%s::writing %d pages for cep "cep_fmt_str
+            castle_printk(LOG_ERROR, "%s::writing %d pages for cep "cep_fmt_str
                     ", no slave; chunks[%d].slave_id=%d\n",
                     __FUNCTION__, nr_pages, cep2str(array->start_cep), i, chunks[i].slave_id);
         BUG_ON(!slave);
@@ -2975,10 +2975,10 @@ static void castle_cache_block_free(c2_block_t *c2b)
 
 #ifdef CASTLE_DEBUG
     if(c2b_locked(c2b))
-        castle_printk(LOG_DEVEL, "%s::c2b for "cep_fmt_str" locked from: %s:%d\n",
+        castle_printk(LOG_DEBUG, "%s::c2b for "cep_fmt_str" locked from: %s:%d\n",
                 __FUNCTION__, cep2str(c2b->cep), c2b->file, c2b->line);
     if(atomic_read(&c2b->count) != 0)
-        castle_printk(LOG_DEVEL, "%s::c2b for "cep_fmt_str" refcount = %d, locked from: %s:%d\n",
+        castle_printk(LOG_DEBUG, "%s::c2b for "cep_fmt_str" refcount = %d, locked from: %s:%d\n",
                 __FUNCTION__, cep2str(c2b->cep), atomic_read(&c2b->count), c2b->file, c2b->line);
 #endif
     BUG_ON(c2b_locked(c2b));
@@ -5248,7 +5248,7 @@ aggressive:
                 data = kmem_cache_alloc(castle_flush_cache, GFP_KERNEL);
                 if (!data)
                 {
-                    castle_printk(LOG_DEVEL, "Failed to allocate space for flush element.\n");
+                    castle_printk(LOG_ERROR, "Failed to allocate space for flush element.\n");
                     goto err_out;
                 }
                 data->in_flight = &in_flight;
@@ -5372,7 +5372,7 @@ static void castle_cache_hashes_fini(void)
                     cep2str(c2b->cep), atomic_read(&c2b->count), c2b_locked(c2b));
 #ifdef CASTLE_DEBUG
                 if(c2b_locked(c2b))
-                    castle_printk(LOG_DEVEL, "Locked from: %s:%d\n", c2b->file, c2b->line);
+                    castle_printk(LOG_DEBUG, "Locked from: %s:%d\n", c2b->file, c2b->line);
 #endif
             }
             BUG_ON(c2b_dirty(c2b));
@@ -5870,7 +5870,7 @@ static int castle_periodic_checkpoint(void *unused)
         if (!castle_fs_inited)
             continue;
 
-        castle_printk(LOG_DEVEL, "***** Checkpoint start (period %ds) *****\n",
+        castle_printk(LOG_USERINFO, "***** Checkpoint start (period %ds) *****\n",
                       castle_checkpoint_period);
         castle_trace_cache(TRACE_START, TRACE_CACHE_CHECKPOINT_ID, 0, 0);
 
@@ -5959,7 +5959,7 @@ static int castle_periodic_checkpoint(void *unused)
 
         castle_checkpoint_version_inc();
 
-        castle_printk(LOG_DEVEL, "***** Completed checkpoint of version: %u *****\n", version);
+        castle_printk(LOG_USERINFO, "***** Completed checkpoint of version: %u *****\n", version);
         castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0, 0);
     } while (!castle_last_checkpoint_ongoing);
     /* Clean exit, return success. */

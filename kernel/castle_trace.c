@@ -369,7 +369,7 @@ int castle_trace_teardown(void)
     }
     else
     {
-        castle_printk(LOG_DEVEL, "Not all trace files have been closed, failing the teardown.\n");
+        castle_printk(LOG_WARN, "Not all trace files have been closed, failing the teardown.\n");
         return -EEXIST;
     }
 }

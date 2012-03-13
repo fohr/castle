@@ -55,12 +55,12 @@
 
 #if 0
 #undef debug_res_pools
-#define debug_res_pools(_f, _a...)  (printk(_f, ##_a))
+#define debug_res_pools(_f, _a...)  (castle_printk(LOG_DEBUG, _f, ##_a))
 #endif
 
 #if 0
 #undef debug_resize
-#define debug_resize(_f, _a...)  (printk(_f, ##_a))
+#define debug_resize(_f, _a...)  (castle_printk(LOG_DEBUG, _f, ##_a))
 #endif
 
 #define MAP_IDX(_ext, _i, _j)       (((_ext)->k_factor * _i) + _j)
@@ -1465,7 +1465,7 @@ static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
 
     /* And its reference count should be equal to number of links. */
     if (atomic_read(&mask->ref_count) != 1)
-        printk("%s: Extent ref count Freeing extent #%llu\n", __FUNCTION__, ext->ext_id);
+        castle_printk(LOG_INFO, "%s: Extent ref count Freeing extent #%llu\n", __FUNCTION__, ext->ext_id);
 
     BUG_ON(atomic_read(&mask->ref_count) != 1);
 
@@ -2804,7 +2804,7 @@ static c_disk_chk_t castle_extent_disk_chk_alloc(c_da_t da_id,
         /* Note: Rebuild can happen after shrink or truncate. But, rebuild doesn't go through
          * this code flow. */
         if ((chk_seq.first_chk + chk_seq.count) % CHKS_PER_SLOT)
-            printk("%p %u %u\n", ext_state, chk_seq.first_chk, chk_seq.count);
+            castle_printk(LOG_ERROR, "%p %u %u\n", ext_state, chk_seq.first_chk, chk_seq.count);
         BUG_ON((chk_seq.first_chk + chk_seq.count) % CHKS_PER_SLOT);
 
         /* Update the chunk buffer in extent state. */
@@ -3889,7 +3889,7 @@ c_ext_mask_id_t castle_extent_mask_get(c_ext_id_t ext_id)
         /* Get a reference on latest mask. Count shouldn't be zero, before increment. */
         BUG_ON((val = atomic_inc_return(&mask->ref_count)) == 1);
 
-        //castle_printk(LOG_DEVEL, "GET: %u "cemr_cstr"%u\n", mask->mask_id, cemr2str(mask->range), val);
+        //castle_printk(LOG_DEBUG, "GET: %u "cemr_cstr"%u\n", mask->mask_id, cemr2str(mask->range), val);
 
         BUG_ON(castle_extent_mask_hash_get(mask->mask_id) == NULL);
 
@@ -3972,7 +3972,7 @@ void castle_extent_mask_put(c_ext_mask_id_t mask_id)
                 break;
 
 #if 0
-            castle_printk(LOG_DEVEL, "Scheduling mask %u "cemr_cstr" for free\n",
+            castle_printk(LOG_INFO, "Scheduling mask %u "cemr_cstr" for free\n",
                                      pos_mask->mask_id, cemr2str(pos_mask->range));
 #endif
             /* If this is the last mask, there should be no active links. */
@@ -4059,7 +4059,7 @@ c_ext_mask_id_t castle_extent_all_masks_get(c_ext_id_t ext_id)
             {
                 uint32_t val;
                 BUG_ON((val = atomic_inc_return(&oldest_mask->ref_count)) == 1);
-                //castle_printk(LOG_DEVEL, "get: %u "cemr_cstr"%u\n", oldest_mask->mask_id, cemr2str(oldest_mask->range), val);
+                //castle_printk(LOG_DEBUG, "get: %u "cemr_cstr"%u\n", oldest_mask->mask_id, cemr2str(oldest_mask->range), val);
                 BUG_ON(castle_extent_mask_hash_get(oldest_mask->mask_id) == NULL);
                 break;
             }
@@ -5149,7 +5149,7 @@ int rebuild_init(void)
 {
     struct castle_fs_superblock *fs_sb;
 
-    castle_printk(LOG_DEVEL, "Starting rebuild run.\n");
+    castle_printk(LOG_USERINFO, "Starting rebuild run.\n");
 
     fs_sb = castle_fs_superblocks_get();
     fs_sb->fs_in_rebuild = 1;
@@ -6556,7 +6556,7 @@ int castle_extents_slave_scan(uint32_t uuid)
      */
     if (fs_sb->fs_in_rebuild)
     {
-        castle_printk(LOG_DEVEL, "REBUILD_VERIFY returning EBUSY\n");
+        castle_printk(LOG_INFO, "REBUILD_VERIFY returning EBUSY\n");
         castle_fs_superblocks_put(fs_sb, 1);
         return -EBUSY;
     }
@@ -6570,7 +6570,7 @@ int castle_extents_slave_scan(uint32_t uuid)
 
     if (list_empty(&verify_list))
     {
-        castle_printk(LOG_DEVEL, "REBUILD_VERIFY: list is empty.\n");
+        castle_printk(LOG_INFO, "REBUILD_VERIFY: list is empty.\n");
         return -ENOENT;
     }
 
@@ -6585,7 +6585,7 @@ int castle_extents_slave_scan(uint32_t uuid)
 
     if (nr_refs)
     {
-        castle_printk(LOG_DEVEL, "REBUILD_VERIFY: %d references found to uuid 0x%xd\n",
+        castle_printk(LOG_INFO, "REBUILD_VERIFY: %d references found to uuid 0x%xd\n",
                       nr_refs, uuid);
         return -EEXIST;
     }

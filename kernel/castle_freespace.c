@@ -18,7 +18,7 @@
 
 #if 0
 #undef debug_res_pools
-#define debug_res_pools(_f, _a...)  (printk(_f, ##_a))
+#define debug_res_pools(_f, _a...)  (castle_printk(LOG_DEBUG, _f, ##_a))
 #endif
 
 #define DISK_NO_SPACE(_fs) (((_fs)->prod == (_fs)->cons) &&            \

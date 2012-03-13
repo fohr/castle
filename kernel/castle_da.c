@@ -58,17 +58,17 @@
 
 #if 0
 #undef debug_dexts
-#define debug_dexts(_f, _a...)    (printk(_f, ##_a))
+#define debug_dexts(_f, _a...)    (castle_printk(LOG_DEBUG, _f, ##_a))
 #endif
 
 #if 0
 #undef debug_gn
-#define debug_gn(_f, _a...)       (printk("%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
+#define debug_gn(_f, _a...)       (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
 #if 0
 #undef debug_res_pools
-#define debug_res_pools(_f, _a...)  (printk(_f, ##_a))
+#define debug_res_pools(_f, _a...)  (castle_printk(LOG_DEBUG, _f, ##_a))
 #endif
 
 #define MAX_DYNAMIC_INTERNAL_SIZE       (5)     /* In C_CHK_SIZE. */
@@ -389,7 +389,7 @@ static inline void castle_da_deleted_set(struct castle_double_array *da)
 }
 
 #ifdef CASTLE_DEBUG
-#define print_merge_state(_f, _a...) (castle_printk(LOG_DEVEL, "%s::[%p] " _f, __FUNCTION__, (void *)merge, ##_a))
+#define print_merge_state(_f, _a...) (castle_printk(LOG_DEBUG, "%s::[%p] " _f, __FUNCTION__, (void *)merge, ##_a))
 static void castle_da_merge_debug_lock_state_query(struct castle_da_merge *merge)
 {
     uint8_t i;
@@ -459,7 +459,7 @@ static void castle_da_merge_debug_lock_state_query(struct castle_da_merge *merge
 /* Place this anywhere that merge might go to sleep, to see what locks are taken. */
 #define castle_merge_debug_locks(_m)                                                               \
 do{                                                                                                \
-    castle_printk(LOG_DEVEL,                                                                       \
+    castle_printk(LOG_DEBUG,                                                                       \
             "%s::calling castle_da_merge_debug_lock_state_query on merge %p from ln %u\n",         \
             __FUNCTION__, _m, __LINE__);                                                           \
     castle_da_merge_debug_lock_state_query(_m);                                                    \
@@ -5096,9 +5096,9 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err, int 
 
     if (merge->level != 1)
     {
-        castle_printk(LOG_DEVEL, "Completing merge with err: %d\n", err);
+        castle_printk(LOG_WARN, "Completing merge with err: %d\n", err);
         for (i=0; i<merge->nr_trees; i++)
-            castle_printk(LOG_DEVEL, "\t0x%llx\n", merge->in_trees[i]->seq);
+            castle_printk(LOG_WARN, "\t0x%llx\n", merge->in_trees[i]->seq);
     }
 
     /* Remove entries from sysfs first. This has to happen before any another clean-up. */
@@ -5544,7 +5544,7 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
         if (castle_da_exiting)
             return -ESHUTDOWN;
 
-        printk("******* Sleeping on LFS *****\n");
+        castle_printk(LOG_WARN, "******* Sleeping on LFS *****\n");
         castle_merge_sleep_prepare(merge);
         castle_merge_debug_locks(merge);
         msleep(1000);
@@ -5930,7 +5930,7 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
         /* Attach extents to reservation pools. */
         castle_da_merge_res_pool_attach(merge);
 
-        castle_printk(LOG_DEVEL, "Found merge with %llu entries\n", atomic64_read(&merge->out_tree->item_count));
+        castle_printk(LOG_INFO, "Found merge with %llu entries\n", atomic64_read(&merge->out_tree->item_count));
 
         goto deser_done;
     }
@@ -6109,9 +6109,9 @@ deser_done:
 
     if (merge->level != 1)
     {
-        castle_printk(LOG_DEVEL, "Doing merge on trees:\n");
+        castle_printk(LOG_INFO, "Doing merge on trees:\n");
         for (i=0; i<nr_trees; i++)
-            castle_printk(LOG_DEVEL, "\t0x%llx\n", merge->in_trees[i]->seq);
+            castle_printk(LOG_INFO, "\t0x%llx\n", merge->in_trees[i]->seq);
     }
 
     return 0;
@@ -7263,7 +7263,7 @@ static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_bytes)
     {
         /* If FS exiting, delay merge_dealloc until DA finish for the sake of last checkpoint.
            In case of DA destroy, merge thread itself will dealloc the merge. */
-        castle_printk(LOG_DEVEL, "Merge for DA=%d, level=%d, aborted.\n", da->id, level);
+        castle_printk(LOG_INFO, "Merge for DA=%d, level=%d, aborted.\n", da->id, level);
 
         return -ESHUTDOWN;
     }
@@ -7483,7 +7483,7 @@ static int castle_da_l1_merge_run(void *da_p)
         }
         else if (ret)
         {
-            castle_printk(LOG_DEVEL, "Failed to do merge with err=%d.\n", ret);
+            castle_printk(LOG_WARN, "Failed to do merge with err=%d.\n", ret);
 
             BUG_ON(ret == EAGAIN);
             /* Merge failed, wait 10s to retry. */
@@ -7619,10 +7619,10 @@ merge_do:
         nr_bytes = atomic64_read(&in_trees[0]->nr_bytes) + atomic64_read(&in_trees[1]->nr_bytes);
         if (nr_bytes == 0)
         {
-            printk("Level %u, CT1 size: %lu/%lu\n", in_trees[0]->level,
+            castle_printk(LOG_WARN, "Level %u, CT1 size: %lu/%lu\n", in_trees[0]->level,
                                                     atomic64_read(&in_trees[0]->nr_bytes),
                                                     atomic64_read(&in_trees[0]->item_count));
-            printk("Level %u, CT2 size: %lu/%lu\n", in_trees[1]->level,
+            castle_printk(LOG_WARN, "Level %u, CT2 size: %lu/%lu\n", in_trees[1]->level,
                                                     atomic64_read(&in_trees[1]->nr_bytes),
                                                     atomic64_read(&in_trees[1]->item_count));
         }
@@ -8766,7 +8766,7 @@ static int castle_data_exts_read(void)
         castle_data_ext_add(mentry.ext_id, mentry.nr_entries, mentry.nr_bytes,
                             mentry.nr_drain_bytes);
 
-        castle_printk(LOG_DEVEL, "Reading data extent of %llu bytes and %llu entries\n",
+        castle_printk(LOG_INFO, "Reading data extent of %llu bytes and %llu entries\n",
                                  mentry.nr_bytes, mentry.nr_entries);
     }
 
@@ -9344,7 +9344,7 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge,
 
     current_state = atomic_read(&merge->serdes.checkpointable.state);
 
-    castle_printk(LOG_DEVEL, "%s::[%p] checkpointing merge %u\n",
+    castle_printk(LOG_INFO, "%s::[%p] checkpointing merge %u\n",
             __FUNCTION__, merge, merge->id);
 
     /* writeback LOs */
@@ -12040,7 +12040,7 @@ void castle_double_array_fini(void)
 static int castle_da_merge_check(struct castle_da_merge *merge, void *da)
 {
     if (merge->da == da)
-        castle_printk(LOG_DEVEL, "Merge: %p, DA: %p\n", merge, da);
+        castle_printk(LOG_ERROR, "Merge: %p, DA: %p\n", merge, da);
 
     BUG_ON(merge->da == da);
 
@@ -12207,7 +12207,7 @@ int castle_double_array_prefetch(struct castle_double_array *da)
         castle_printk(LOG_USERINFO, "Couldn't get CTs proxy for DA id=0x%x\n", da->id);
         return -EINVAL;
     }
-    castle_printk(LOG_DEVEL, "Prefetching CTs for DA=%p id=0x%d\n", da, da->id);
+    castle_printk(LOG_INFO, "Prefetching CTs for DA=%p id=0x%d\n", da, da->id);
 
     /* Prefetch CTs. */
     for (i = 0; i < proxy->nr_cts; i++)
@@ -12396,8 +12396,8 @@ static int castle_merge_run(void *_data)
     } while(1);
 
     castle_time_interval_fini(&waiting_stats);
-    castle_printk(LOG_DEVEL, "Finished merge: %d. Timing stats:\n", merge_thread->merge_id);
-    castle_time_interval_print(LOG_DEVEL, &waiting_stats, "waiting for");
+    castle_printk(LOG_INFO, "Finished merge: %d. Timing stats:\n", merge_thread->merge_id);
+    castle_time_interval_print(LOG_INFO, &waiting_stats, "waiting for");
 
     merge_thread->merge_id = INVAL_MERGE_ID;
 

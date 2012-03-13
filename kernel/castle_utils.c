@@ -474,7 +474,7 @@ void castle_component_tree_prefetch(struct castle_component_tree *ct)
     c_ext_pos_t cep;
     int i;
 
-    castle_printk(LOG_DEVEL, "Prefetching ct=%p da_id=0x%x\n", ct, ct->da);
+    castle_printk(LOG_INFO, "Prefetching ct=%p da_id=0x%x\n", ct, ct->da);
 
     /* Internal btree nodes. */
     cep.ext_id = ct->internal_ext_free.ext_id;

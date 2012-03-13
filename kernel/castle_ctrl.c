@@ -1151,7 +1151,7 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                 merge_cfg->data_exts = NULL;
             else
             {
-                printk("Dataextents: %u, %llu, %llu\n", merge_cfg->nr_data_exts, data_exts[0], data_exts[1]);
+                castle_printk(LOG_INFO, "Dataextents: %u, %llu, %llu\n", merge_cfg->nr_data_exts, data_exts[0], data_exts[1]);
                 size = sizeof(c_ext_id_t) * merge_cfg->nr_data_exts;
                 merge_cfg->data_exts = castle_alloc(size);
                 if (!merge_cfg->data_exts || copy_from_user(merge_cfg->data_exts, data_exts, size))

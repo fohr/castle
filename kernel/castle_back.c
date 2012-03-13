@@ -264,17 +264,17 @@ static USED void castle_back_print_page(char *buff, int length)
     int i=0;
     while(i<length)
     {
-        castle_printk(LOG_DEVEL, " [%d]=", i);
+        castle_printk(LOG_DEBUG, " [%d]=", i);
 
         while(i<length)
         {
-            castle_printk(LOG_DEVEL, "%2x, ", (unsigned char)buff[i]);
+            castle_printk(LOG_DEBUG, "%2x, ", (unsigned char)buff[i]);
             i++;
             if (i % 8 == 0)
                 break;
         }
 
-        castle_printk(LOG_DEVEL, "\n");
+        castle_printk(LOG_DEBUG, "\n");
     }
 }
 

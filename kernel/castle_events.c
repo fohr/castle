@@ -119,7 +119,7 @@ int castle_uevent_init(struct sk_buff *unused, struct genl_info *info)
 
     castle_uevent_pid = info->snd_pid;
 
-    castle_printk(LOG_DEVEL, "Received castle uevent initialisation request (PID: %u)\n",
+    castle_printk(LOG_INFO, "Received castle uevent initialisation request (PID: %u)\n",
                   castle_uevent_pid);
 
     /*
@@ -187,12 +187,15 @@ int castle_netlink_init(void)
     result = genl_register_family(&castle_uevent_family);
 
     if (result)
+    {
+        castle_printk(LOG_ERROR, "Castle netlink init failed to register family: %i\n", result);
         return result;
+    }
 
     result = genl_register_ops(&castle_uevent_family, &castle_uevent_gnl_ops_init);
     if (result != 0)
     {
-        printk("register ops: %i\n",result);
+        castle_printk(LOG_ERROR, "Castle netlink init failed to register ops: %i\n", result);
         genl_unregister_family(&castle_uevent_family);
         return result;
     }
