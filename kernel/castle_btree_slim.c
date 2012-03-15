@@ -8,6 +8,7 @@
 #include "castle_utils.h"
 #include "castle_keys_normalized.h"
 #include "castle_unit_tests.h"
+#include "castle_versions.h"
 #ifdef CASTLE_DEBUG
 #include "castle_versions.h"
 #endif
