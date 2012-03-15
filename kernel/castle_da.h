@@ -7,6 +7,8 @@
 
 #define NR_CASTLE_DA_WQS 1
 
+#define FOR_EACH_MERGE_TREE(_i, _merge) for((_i)=0; (_i)<(_merge)->nr_trees; (_i)++)
+
 typedef struct {
     uint64_t    ext_used_bytes;       /* bytes currently used */
     uint64_t    ext_avail_bytes;      /* byets available from extent_grow calls */
@@ -172,6 +174,9 @@ struct castle_da_merge {
 
     struct castle_dfs_resolver *tv_resolver; /* A buffering DFS walker to resolve timestamp-version
                                                 disputes, and/or for tombstone discard. */
+    uint32_t current_key_stream_v_count; /* A running count of the number of versions seen of the
+                                            current key stream in _castle_da_entry_add; used to set
+                                            out_tree->max_versions_per_key. */
 
 };
 

@@ -7,6 +7,7 @@
 #include "castle.h"
 #include "castle_utils.h"
 #include "castle_keys_normalized.h"
+#include "castle_unit_tests.h"
 #ifdef CASTLE_DEBUG
 #include "castle_versions.h"
 #endif
@@ -426,8 +427,10 @@ static void intern_entry_extents_drop(struct slim_header *header, int low, int h
  * Node access function definitions.
  */
 
-/* 1MB maximum node size, because Gregor said so */
-#define NODE_SIZE_MAX                    (256 * C_BLK_SIZE)
+/* 1MB maximum node size, because Gregor said so...
+   ... but then TR needed it bigger for the DFS resolver! Allowing it to be this big (approx 60MB)
+   provides capacity for 50000 worst-case entries. */
+#define NODE_SIZE_MAX                    (15162 * C_BLK_SIZE)
 #define NODE_SIZE(node)                  ((node)->size * C_BLK_SIZE)
 #define NODE_END(node)                   ((char *) (node) + NODE_SIZE(node))
 #define NODE_INDEX(node, i)              (*((uint32_t *) NODE_END(node) - ((i)+1)))
@@ -441,6 +444,57 @@ static void intern_entry_extents_drop(struct slim_header *header, int low, int h
 static size_t castle_slim_max_entries(size_t size)
 {
     return (size * C_BLK_SIZE - SLIM_HEADER_MAX) / LEAF_ENTRY_MAX_SIZE;
+}
+
+/**
+ * Calculate a conservative estimate of the min node size into which the given number of entries
+ * may fit.
+ * @param size      the number of entries
+  *@return          the size of the node, in pages
+ */
+static size_t castle_slim_min_size(size_t entries)
+{
+    return (DIV_ROUND_UP(((entries * LEAF_ENTRY_MAX_SIZE) + SLIM_HEADER_MAX), C_BLK_SIZE));
+}
+
+static int castle_slim_min_size_vs_max_entries_unit_test(void)
+{
+    int entries;
+    /* Theoretically, a btree node may have to hold up to CASTLE_LIFETIME_VERSIONS_LIMIT items,
+       because within a btree we assert that a single node must hold all versions of any given
+       key. Therefore, we assert that the node size calculation functions must handle this. */
+    for (entries = 0; entries <= CASTLE_LIFETIME_VERSIONS_LIMIT; entries++)
+    {
+        int min_node_size;
+        int max_entries;
+
+        min_node_size = castle_slim_min_size(entries);
+        max_entries = castle_slim_max_entries(min_node_size);
+        if (max_entries < entries)
+        {
+            castle_printk(LOG_ERROR, "%s::for entries=%d, got min_node_size=%d, "
+                "which got max_entries=%d; somethin ain't right...\n",
+                __FUNCTION__, entries, min_node_size, max_entries);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+int castle_slim_tree_unit_tests_do(void)
+{
+    int test_seq_id = 0;
+    int err = 0;
+
+    test_seq_id++; if (0 != (err = castle_slim_min_size_vs_max_entries_unit_test()) ) goto fail;
+
+    BUG_ON(err);
+    castle_printk(LOG_INIT, "%s::%d tests passed.\n", __FUNCTION__, test_seq_id);
+    return 0;
+fail:
+    castle_printk(LOG_ERROR, "%s::test %d failed with return code %d.\n",
+            __FUNCTION__, test_seq_id, err);
+    return err;
 }
 
 /**
@@ -1145,6 +1199,7 @@ struct castle_btree_type castle_slim_tree = {
     .max_key       = (void *) &SLIM_MAX_KEY,
     .inv_key       = (void *) &SLIM_INVAL_KEY,
     .max_entries   = castle_slim_max_entries,
+    .min_size      = castle_slim_min_size,
     .need_split    = castle_slim_need_split,
     .mid_entry     = castle_slim_mid_entry,
     .key_pack      = castle_slim_key_pack,

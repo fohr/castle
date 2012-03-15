@@ -26,8 +26,9 @@ int castle_dfs_resolver_preconstruct(c_dfs_resolver *dfs_resolver, struct castle
                                      c_dfs_resolver_functions_t function_flags)
 {
     signed int ret = 0;
+    uint32_t max_entries = 0;
     uint32_t new_node_size;
-    int max_entries;
+    int i;
 
     BUG_ON(!merge);
     BUG_ON(!dfs_resolver);
@@ -45,10 +46,21 @@ int castle_dfs_resolver_preconstruct(c_dfs_resolver *dfs_resolver, struct castle
         goto error;
     }
 
+    FOR_EACH_MERGE_TREE(i, merge)
+    {
+        castle_printk(LOG_DEBUG, "%s::[%p] in_trees[%d] max_versions_per_key=%d\n",
+            __FUNCTION__, merge, i, merge->in_trees[i]->max_versions_per_key);
+        max_entries += merge->in_trees[i]->max_versions_per_key;
+    }
+
+    BUG_ON(!merge->out_btree);
+    new_node_size = merge->out_btree->min_size(max_entries);
+    castle_printk(LOG_DEBUG, "%s::[%p] expecting max key stream of %u entries, "
+            "which requires a node size of %u blocks.\n",
+            __FUNCTION__, merge, max_entries, new_node_size);
+    BUG_ON(max_entries > merge->out_btree->max_entries(new_node_size));
 
     /* Allocate and init btree node buffer */
-    new_node_size = castle_da_merge_node_size_get(merge, 0);
-    new_node_size *= 4; /* See trac #4749 */
     dfs_resolver->buffer_node = castle_alloc(new_node_size * C_BLK_SIZE);
     if(!dfs_resolver->buffer_node)
     {
@@ -62,13 +74,6 @@ int castle_dfs_resolver_preconstruct(c_dfs_resolver *dfs_resolver, struct castle
                                   0);
 
     /* Allocate the inclusion flag buffer */
-    BUG_ON(!merge->out_btree);
-    max_entries = merge->out_btree->max_entries(new_node_size);
-    castle_printk(LOG_DEBUG, "%s::[%p] max_entries = %d\n", __FUNCTION__, merge, max_entries);
-    BUG_ON(max_entries < (4*CASTLE_VERSIONS_MAX) ); /* This assertions is understrict to guarantee
-                                                       sufficient capacity in all cases, but we
-                                                       expect to satisfy this at least. */
-
     dfs_resolver->inclusion_flag = castle_alloc(sizeof(int) * max_entries);
     if(!dfs_resolver->inclusion_flag)
     {

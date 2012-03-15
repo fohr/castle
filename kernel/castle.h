@@ -911,6 +911,10 @@ struct castle_btree_type {
                               /* Returns a conservative estimate of the
                                  max number of entries which can fit in
                                  a node of the given size (in blocks).  */
+    size_t   (*min_size)      (size_t entries);
+                              /* Returns a conservative estimate of the
+                                 min node size into which the given number
+                                 of entries may fit. */
     int      (*need_split)    (struct castle_btree_node *node,
                                int                       version_or_key);
                               /* 0 - version split, 1 - key split       */
@@ -1118,6 +1122,9 @@ struct castle_component_tree {
     atomic64_t          max_user_timestamp; /**< To terminate point gets early */
     atomic64_t          min_user_timestamp; /**< For tombstone discard */
 
+    uint32_t            max_versions_per_key; /**< For a merge to correctly size the tv_resolver (see
+                                                   trac #4749) */
+
 #ifdef CASTLE_PERF_DEBUG
     u64                 bt_c2bsync_ns;
     u64                 data_c2bsync_ns;
@@ -1187,7 +1194,8 @@ struct castle_clist_entry {
     /*        329 */ uint64_t        max_user_timestamp;
     /*        337 */ uint64_t        min_user_timestamp;
     /*        345 */ int32_t         tree_depth;
-    /*        349 */ uint8_t         _unused[163];
+    /*        349 */ uint32_t        max_versions_per_key;
+    /*        353 */ uint8_t         _unused[159];
     /*        512 */
 } PACKED;
 STATIC_BUG_ON(sizeof(struct castle_clist_entry) != 512);

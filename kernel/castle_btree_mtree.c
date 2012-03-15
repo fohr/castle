@@ -40,6 +40,12 @@ static size_t castle_mtree_max_entries(size_t size)
     return MTREE_MAX_ENTRIES(size);
 }
 
+static size_t castle_mtree_min_size(size_t entries)
+{
+    castle_printk(LOG_ERROR, "%s::not implemented!\n", __FUNCTION__);
+    BUG();
+}
+
 static int castle_mtree_need_split(struct castle_btree_node *node, int ver_or_key_split)
 {
     switch(ver_or_key_split)
@@ -278,6 +284,7 @@ struct castle_btree_type castle_mtree = {
     .max_key        = (void *)MTREE_MAX_BLK,
     .inv_key        = (void *)MTREE_INVAL_BLK,
     .max_entries    = castle_mtree_max_entries,
+    .min_size       = castle_mtree_min_size,
     .need_split     = castle_mtree_need_split,
     .mid_entry      = castle_mtree_mid_entry,
     .key_compare    = castle_mtree_key_compare,

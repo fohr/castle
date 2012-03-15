@@ -16,6 +16,8 @@
 #define CV_IN_SYSFS_BIT           (4)
 #define CV_IN_SYSFS_MASK          (1 << CV_IN_SYSFS_BIT)
 
+#define CASTLE_LIFETIME_VERSIONS_LIMIT (50000)
+
 struct castle_version {
     /* Various tree links */
     c_ver_t                    version;     /**< Version ID, unique across all Doubling Arrays. */

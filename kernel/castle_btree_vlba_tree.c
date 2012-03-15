@@ -104,6 +104,12 @@ static size_t castle_vlba_tree_max_entries(size_t size)
     return VLBA_TREE_MAX_ENTRIES(size);
 }
 
+static size_t castle_vlba_tree_min_size(size_t entries)
+{
+    castle_printk(LOG_ERROR, "%s::not implemented!\n", __FUNCTION__);
+    BUG();
+}
+
 /* Implementation of heap sort from wiki */
 static void min_heap_swap(uint32_t *a, int i, int j)
 {
@@ -967,6 +973,7 @@ struct castle_btree_type castle_vlba_tree = {
     .max_key        = (void *)&VLBA_TREE_MAX_KEY,
     .inv_key        = (void *)&VLBA_TREE_INVAL_KEY,
     .max_entries    = castle_vlba_tree_max_entries,
+    .min_size       = castle_vlba_tree_min_size,
     .need_split     = castle_vlba_tree_need_split,
     .mid_entry      = castle_vlba_tree_mid_entry,
     .key_pack       = castle_vlba_tree_key_pack,

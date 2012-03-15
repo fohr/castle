@@ -374,8 +374,6 @@ static inline void castle_da_growing_rw_clear(struct castle_double_array *da)
     clear_bit(DOUBLE_ARRAY_GROWING_RW_TREE_BIT, &da->flags);
 }
 
-#define FOR_EACH_MERGE_TREE(_i, _merge) for((_i)=0; (_i)<(_merge)->nr_trees; (_i)++)
-
 #define MERGE_CHECKPOINTABLE(_merge) ((_merge->level >= MIN_DA_SERDES_LEVEL))
 
 static inline int castle_da_deleted(struct castle_double_array *da)
@@ -4334,6 +4332,19 @@ static c_val_tup_t _castle_da_entry_add(struct castle_da_merge *merge,
     key_cmp = (level->next_idx != 0) ?
                ((depth == 0)? merge->is_new_key: btree->key_compare(key, level->last_key)) :
                0;
+
+    /* Keep track of the max stream length of versions for any given key (but only for a fresh stream
+       into the output leaf nodes). */
+    if ( (!is_re_add) && (depth==0) )
+    {
+        if (merge->is_new_key)
+            merge->current_key_stream_v_count = 1;
+        else
+            merge->current_key_stream_v_count++;
+        merge->out_tree->max_versions_per_key =
+                max(merge->out_tree->max_versions_per_key, merge->current_key_stream_v_count);
+    }
+
     debug("Key cmp=%d\n", key_cmp);
     BUG_ON(key_cmp < 0);
 
@@ -4651,6 +4662,8 @@ static void castle_da_merge_package(struct castle_da_merge *merge, c_ext_pos_t r
 
     castle_printk(LOG_INFO, "Depth of ct=%d (%p) is: %d\n",
             out_tree->seq, out_tree, atomic_read(&out_tree->tree_depth) );
+    castle_printk(LOG_INFO, "Max key version set size of ct=%d (%p) is: %d\n",
+            out_tree->seq, out_tree, out_tree->max_versions_per_key );
     BUG_ON(out_tree->root_node.ext_id != root_cep.ext_id);
     BUG_ON(out_tree->root_node.offset != root_cep.offset);
 
@@ -6113,6 +6126,8 @@ deser_done:
         for (i=0; i<nr_trees; i++)
             castle_printk(LOG_INFO, "\t0x%llx\n", merge->in_trees[i]->seq);
     }
+
+    merge->current_key_stream_v_count = 0;
 
     return 0;
 
@@ -9002,22 +9017,23 @@ void castle_da_ct_marshall(struct castle_clist_entry *ctm,
 {
     int i;
 
-    ctm->da_id             = (ct->da)?ct->da->id:INVAL_DA;
-    ctm->item_count        = atomic64_read(&ct->item_count);
-    ctm->nr_bytes          = ct->chkpt_nr_bytes;
-    ctm->nr_drained_bytes  = ct->chkpt_nr_drained_bytes;
-    ctm->btree_type        = ct->btree_type;
-    ctm->dynamic           = ct->dynamic;
-    ctm->seq               = ct->seq;
-    ctm->data_age          = ct->data_age;
-    ctm->level             = ct->level;
-    ctm->tree_depth        = atomic_read(&ct->tree_depth);
-    ctm->root_node         = ct->root_node;
-    ctm->large_ext_chk_cnt = atomic64_read(&ct->large_ext_chk_cnt);
-    ctm->nr_data_exts      = ct->nr_data_exts;
-    ctm->nr_rwcts          = ct->nr_rwcts;
+    ctm->da_id                = (ct->da)?ct->da->id:INVAL_DA;
+    ctm->item_count           = atomic64_read(&ct->item_count);
+    ctm->nr_bytes             = ct->chkpt_nr_bytes;
+    ctm->nr_drained_bytes     = ct->chkpt_nr_drained_bytes;
+    ctm->btree_type           = ct->btree_type;
+    ctm->dynamic              = ct->dynamic;
+    ctm->seq                  = ct->seq;
+    ctm->data_age             = ct->data_age;
+    ctm->level                = ct->level;
+    ctm->tree_depth           = atomic_read(&ct->tree_depth);
+    ctm->root_node            = ct->root_node;
+    ctm->large_ext_chk_cnt    = atomic64_read(&ct->large_ext_chk_cnt);
+    ctm->nr_data_exts         = ct->nr_data_exts;
+    ctm->nr_rwcts             = ct->nr_rwcts;
     for(i=0; i<MAX_BTREE_DEPTH; i++)
         ctm->node_sizes[i] = ct->node_sizes[i];
+    ctm->max_versions_per_key = ct->max_versions_per_key;
 
     castle_ext_freespace_marshall(&ct->internal_ext_free, &ctm->internal_ext_free_bs);
     castle_ext_freespace_marshall(&ct->tree_ext_free, &ctm->tree_ext_free_bs);
@@ -9051,23 +9067,25 @@ static struct castle_component_tree * castle_da_ct_unmarshall(struct castle_clis
     if (!ct)
         return NULL;
 
-    ct->seq                 = ctm->seq;
-    ct->data_age            = ctm->data_age;
+    ct->seq                  = ctm->seq;
+    ct->data_age             = ctm->data_age;
     atomic64_set(&ct->item_count, ctm->item_count);
     atomic64_set(&ct->nr_bytes, ctm->nr_bytes);
-    ct->nr_drained_bytes    = ctm->nr_drained_bytes;
-    ct->chkpt_nr_bytes      = ctm->nr_bytes;
+    ct->nr_drained_bytes     = ctm->nr_drained_bytes;
+    ct->chkpt_nr_bytes       = ctm->nr_bytes;
     ct->chkpt_nr_drained_bytes = ctm->nr_drained_bytes;
-    ct->btree_type          = ctm->btree_type;
-    ct->dynamic             = ctm->dynamic;
-    ct->da                  = da;           BUG_ON(!ct->da && !TREE_GLOBAL(ct->seq));
-    ct->level               = ctm->level;
-    ct->nr_rwcts            = ctm->nr_rwcts;
+    ct->btree_type           = ctm->btree_type;
+    ct->dynamic              = ctm->dynamic;
+    ct->da                   = da;           BUG_ON(!ct->da && !TREE_GLOBAL(ct->seq));
+    ct->level                = ctm->level;
+    ct->nr_rwcts             = ctm->nr_rwcts;
     atomic_set(&ct->tree_depth, ctm->tree_depth);
-    ct->root_node           = ctm->root_node;
+    ct->root_node            = ctm->root_node;
     atomic64_set(&ct->large_ext_chk_cnt, ctm->large_ext_chk_cnt);
     for(i=0; i<MAX_BTREE_DEPTH; i++)
         ct->node_sizes[i] = ctm->node_sizes[i];
+    ct->max_versions_per_key = ctm->max_versions_per_key;
+
     castle_ext_freespace_unmarshall(&ct->internal_ext_free, &ctm->internal_ext_free_bs);
     castle_ext_freespace_unmarshall(&ct->tree_ext_free, &ctm->tree_ext_free_bs);
     castle_ext_freespace_unmarshall(&ct->data_ext_free, &ctm->data_ext_free_bs);
@@ -10267,6 +10285,7 @@ static struct castle_component_tree * castle_ct_init(struct castle_double_array 
     ct->bloom_exists             = 0;
     ct->merge                    = NULL;
     ct->merge_id                 = INVAL_MERGE_ID;
+    ct->max_versions_per_key     = 0;
 
     atomic_set(&ct->tree_depth, -1);
 

@@ -28,6 +28,7 @@
 #include "castle_freespace.h"
 #include "castle_rebuild.h"
 #include "castle_ctrl_prog.h"
+#include "castle_unit_tests.h"
 
 struct castle               castle;
 struct castle_slaves        castle_slaves;
@@ -570,6 +571,22 @@ void castle_global_tree_free(void)
         castle_ct_dealloc(castle_global_tree);
 }
 
+static int castle_unit_tests(void)
+{
+    int test_seq_id = 0;
+    int err = 0;
+
+    test_seq_id++; if (0 != (err = castle_slim_tree_unit_tests_do() ) ) goto fail;
+
+    BUG_ON(err);
+    castle_printk(LOG_INIT, "%s::%d tests passed.\n", __FUNCTION__, test_seq_id);
+    return 0;
+fail:
+    castle_printk(LOG_ERROR, "%s::test %d failed with return code %d.\n",
+            __FUNCTION__, test_seq_id, err);
+    return err;
+}
+
 #define MAX_VERSION -1
 int castle_fs_init(void)
 {
@@ -937,6 +954,8 @@ int castle_fs_init(void)
     FAULT(FS_RESTORE_FAULT);
 
     castle_events_init();
+
+    BUG_ON(castle_unit_tests());
 
     castle_printk(LOG_INIT, "Castle FS started.\n");
     castle_fs_inited = 1;

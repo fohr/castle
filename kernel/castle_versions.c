@@ -1457,7 +1457,7 @@ static int castle_version_new_create(int snap_or_clone,
 
     /* Only accept 50k versions. This guarantees that we won't run out of space in
        the mstore extent. */
-    if(atomic_read(&castle_versions_count) >= 50000)
+    if(atomic_read(&castle_versions_count) >= CASTLE_LIFETIME_VERSIONS_LIMIT)
     {
         castle_printk(LOG_WARN, "Too many versions created: %d, rejecting an attempt "
                                 "to create a new one.\n",

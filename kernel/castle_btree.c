@@ -2043,6 +2043,12 @@ void castle_btree_node_buffer_init(btree_t type,
     buffer->used    = 0;
     buffer->flags   = flags;
     buffer->size    = node_size;
+    if( (node_size*C_BLK_SIZE) > NODE_SIZE_WARN)
+    {
+        castle_printk(LOG_WARN, "%s:: made a very large node; %u blocks\n",
+            __FUNCTION__, node_size);
+        WARN_ON(1);
+    }
 }
 
 static struct node_buf_t* node_buf_alloc(c_rq_iter_t *rq_iter)

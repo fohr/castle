@@ -3,6 +3,9 @@
 
 #include "castle_cache.h"
 
+/* When initialising a new btree node, a node size larger then this should be cause for concern. */
+#define NODE_SIZE_WARN (256 * C_BLK_SIZE)
+
 struct castle_btree_type*
             castle_btree_type_get     (btree_t type);
 size_t      castle_btree_node_size_get(btree_t type);
