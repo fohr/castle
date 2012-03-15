@@ -4298,6 +4298,7 @@ static void castle_cache_prefetch_unpin(c_ext_pos_t cep, int chunks, c2_advise_t
         else //if (advise & C2_ADV_HARDPIN)
         {
             c2b = castle_cache_block_get(cep, BLKS_PER_CHK);
+            BUG_ON(!c2b);
             put_c2b(c2b); /* will cause problems if they weren't prefetch-locked. */
         }
 
