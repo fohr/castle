@@ -1238,7 +1238,13 @@ struct bio_info {
     int                 err;
 };
 
-static void c2b_remaining_io_sub(int rw, int nr_pages, c2_block_t *c2b)
+/**
+ * Decrement c2b->remaining and finalise c2b and execute end_io(), if necessary.
+ *
+ * @param   nr_pages    Number of outstanding pages that have completed
+ * @param   async       Whether nr_pages are being put asynchronously
+ */
+static void c2b_remaining_io_sub(int rw, int nr_pages, c2_block_t *c2b, int async)
 {
     BUG_ON(!c2b_in_flight(c2b));
     if(!atomic_sub_and_test(nr_pages, &c2b->remaining))
@@ -1271,7 +1277,7 @@ static void c2b_remaining_io_sub(int rw, int nr_pages, c2_block_t *c2b)
     else
         clean_c2b(c2b);
     clear_c2b_in_flight(c2b);
-    c2b->end_io(c2b, 1 /*did_io*/);
+    c2b->end_io(c2b, async /*did_io*/);
 }
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
@@ -1358,7 +1364,7 @@ static void c2b_multi_io_end(struct bio *bio, int err)
     }
 
     /* Record how many pages we've completed, potentially ending the c2b io. */
-    c2b_remaining_io_sub(bio_info->rw, bio_info->nr_pages, c2b);
+    c2b_remaining_io_sub(bio_info->rw, bio_info->nr_pages, c2b, 1 /*async*/);
 #ifdef CASTLE_DEBUG
     local_irq_restore(flags);
 #endif
@@ -1989,14 +1995,11 @@ int submit_c2b_remap_rda(c2_block_t *c2b, c_disk_chk_t *chunks, int nr_remaps)
             ret = c_io_array_submit(WRITE, c2b, chunks, (found_dirty_page ? k_factor : nr_remaps),
                                 io_array, ext_id);
             if (ret)
-            {
                 /*
                  * Could not submit the IO, possibly due to a slave going out-of-service. Drop
                  * our reference and return early.
                  */
-                c2b_remaining_io_sub(WRITE, 1, c2b);
                 goto out;
-            }
             /* Reinit the array, and re-try adding the current page. This should not
                fail any more. */
             c_io_array_init(io_array);
@@ -2012,23 +2015,23 @@ int submit_c2b_remap_rda(c2_block_t *c2b, c_disk_chk_t *chunks, int nr_remaps)
         ret = c_io_array_submit(WRITE, c2b, chunks, (found_dirty_page ? k_factor : nr_remaps),
                                 io_array, ext_id);
         if (ret)
-        {
             /*
              * Could not submit the IO, possibly due to a slave going out-of-service. Drop
              * our reference and return early.
              */
-            c2b_remaining_io_sub(WRITE, 1, c2b);
             goto out;
-        }
     }
 
     if (c2b_remap(c2b))
         rebuild_write_chunks+=nr_remaps;
 
     /* Drop the 1 ref. */
-    c2b_remaining_io_sub(WRITE, 1, c2b);
 
 out:
+    /* Drop the c2b->remaining reference we took at the beginning.  We correctly
+     * pass async==0 here as if we put the last remaining reference we should
+     * synchronously call c2b->end_io(). */
+    c2b_remaining_io_sub(WRITE, 1, c2b, 0 /*async*/);
     kmem_cache_free(castle_io_array_cache, io_array);
     return ret;
 }
@@ -2041,11 +2044,15 @@ out:
  * Dispatches array once it reaches a chunk boundary
  * Continues until whole c2b has been dispatched
  *
+ * @param   rw              [in]    READ or WRITE c2b
+ * @param   c2b             [in]    c2b to dispatch I/O for
+ * @param   submitted_c2ps  [out]   Number of c2ps that needed I/O
+ *
  * @see c_io_array_init()
  * @see c_io_array_page_add()
  * @see c_io_array_submit()
  */
-int submit_c2b_rda(int rw, c2_block_t *c2b)
+int _submit_c2b_rda(int rw, c2_block_t *c2b, int *submitted_c2ps)
 {
     c2_page_t    *c2p;
     c_io_array_t *io_array;
@@ -2057,11 +2064,19 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
     uint32_t      k_factor = castle_extent_kfactor_get(ext_id);
     c_disk_chk_t  chunks[k_factor*2]; /* May need to handle I/O to shadow map chunks as well. */
     int           chunk;
+    int           array_submitted_c2ps; /* Number of c2ps in current io_array.  */
 
     debug("%s::Submitting c2b "cep_fmt_str", for %s\n",
             __FUNCTION__, __cep2str(c2b->cep), (rw == READ) ? "read" : "write");
 
     /* TODO: Add a check to make sure cep is within live extent range. */
+
+    /* Track not only the total number of submitted c2ps but also the number
+     * of c2ps that are submitted per io_array so we can accurately inform
+     * c2b->end_io()s of whether or not we did I/O. */
+    if (submitted_c2ps)
+        *submitted_c2ps  = 0;
+    array_submitted_c2ps = 0;
 
     io_array = kmem_cache_alloc(castle_io_array_cache, GFP_KERNEL);
     if (!io_array)
@@ -2073,6 +2088,7 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
     last_chk = INVAL_CHK;
     cur_chk = INVAL_CHK;
     c_io_array_init(io_array);
+
     /* Everything initialised, go through each page in the c2p. */
     c2b_for_each_page_start(page, c2p, cur_cep, c2b)
     {
@@ -2088,7 +2104,7 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
                     cep2str(c2p->cep));
         /* Move to the next page, if we are not supposed to do IO on this page. */
         if(skip_c2p)
-            goto next_page;
+            goto next_page; // continue
 
         /* If we are not skipping, add the page to io array. */
         if(c_io_array_page_add(io_array, cur_cep, cur_chk, page) != EXIT_SUCCESS)
@@ -2098,24 +2114,28 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
              * attempt to add the page to the new array.
              *
              * We've got physical chunks for last_chk (logical chunk), this should
-               match with the logical chunk stored in io_array. */
+             * match with the logical chunk stored in io_array. */
             BUG_ON(io_array->chunk != last_chk);
             /* Submit the array. */
             ret = c_io_array_submit(rw, c2b, chunks, iochunks, io_array, ext_id);
             if (ret)
-            {
                 /*
                  * Could not submit the IO, possibly due to a slave going out-of-service. Drop
                  * our reference and return early.
                  */
-                c2b_remaining_io_sub(rw, 1, c2b);
                 goto out;
-            }
+            if (submitted_c2ps)
+                *submitted_c2ps += array_submitted_c2ps;
+            array_submitted_c2ps = 0;
+
             /* Reinit the array, and re-try adding the current page. This should not
                fail any more. */
             c_io_array_init(io_array);
             BUG_ON(c_io_array_page_add(io_array, cur_cep, cur_chk, page));
         }
+
+        /* Increment the number of c2ps we are going to do I/O on. */
+        array_submitted_c2ps++;
 
         /* Update chunk map when we move to a new chunk. */
         if(cur_chk != last_chk)
@@ -2128,11 +2148,8 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
                                         rw, cur_cep.offset);
             BUG_ON((iochunks != 0) && (iochunks > k_factor*2));
             if (iochunks == 0)
-            {
                 /* Complete the IO by dropping our reference, return early. */
-                c2b_remaining_io_sub(rw, 1, c2b);
                 goto out;
-            }
 
             /*
              * Keep track of remap c2b IOs (we're only handling writes).
@@ -2161,21 +2178,27 @@ next_page:
         BUG_ON(io_array->chunk != last_chk);
         ret = c_io_array_submit(rw, c2b, chunks, iochunks, io_array, ext_id);
         if (ret)
-        {
             /*
              * Could not submit the IO, possibly due to a slave going out-of-service. Drop
              * our reference and return early.
              */
-            c2b_remaining_io_sub(rw, 1, c2b);
             goto out;
-        }
+        if (submitted_c2ps)
+            *submitted_c2ps += array_submitted_c2ps;
     }
-    /* Drop the 1 ref. */
-    c2b_remaining_io_sub(rw, 1, c2b);
 
 out:
+    /* Drop the c2b->remaining reference we took at the beginning.  We correctly
+     * pass async==0 here as if we put the last remaining reference we should
+     * synchronously call c2b->end_io(). */
+    c2b_remaining_io_sub(rw, 1 /*nr_pages*/, c2b, 0 /*async*/);
     kmem_cache_free(castle_io_array_cache, io_array);
     return ret;
+}
+
+int submit_c2b_rda(int rw, c2_block_t *c2b)
+{
+    return _submit_c2b_rda(rw, c2b, NULL);
 }
 
 /**
@@ -2188,7 +2211,7 @@ out:
  * @also submit_c2b_rda()
  * @also submit_c2b_remap_rda()
  */
-int submit_c2b(int rw, c2_block_t *c2b)
+int _submit_c2b(int rw, c2_block_t *c2b, int *submitted_c2ps)
 {
     BUG_ON(!c2b->end_io);
     BUG_ON(EXT_POS_INVAL(c2b->cep));
@@ -2207,7 +2230,89 @@ int submit_c2b(int rw, c2_block_t *c2b)
     /* Set in-flight bit on the block. */
     set_c2b_in_flight(c2b);
 
-    return submit_c2b_rda(rw, c2b);
+    return _submit_c2b_rda(rw, c2b, submitted_c2ps);
+}
+
+/**
+ * Submit asynchronous c2b I/O.
+ *
+ * @param   rw  READ or WRITE
+ * @param   c2b Block to perform I/O on
+ *
+ * On I/O completion c2b->end_io() is called.
+ */
+int submit_c2b(int rw, c2_block_t *c2b)
+{
+    return _submit_c2b(rw, c2b, NULL);
+}
+
+/**
+ * Submit synchronous c2b I/O.
+ *
+ * @param   rw              [in]    READ or WRITE
+ * @param   c2b             [in]    Block to perform I/O on
+ * @param   submitted_c2ps  [out]   Number of c2ps we issued I/O on
+ *
+ * @also submit_c2b()
+ */
+int _submit_c2b_sync(int rw, c2_block_t *c2b, int *submitted_c2ps)
+{
+    struct completion completion;
+    int ret;
+
+    BUG_ON((rw == READ)  &&  c2b_uptodate(c2b));
+    BUG_ON((rw == WRITE) && !c2b_dirty(c2b));
+    c2b->end_io = castle_cache_sync_io_end;
+    c2b->private = &completion;
+    init_completion(&completion);
+    if ((ret = _submit_c2b(rw, c2b, submitted_c2ps)) != EXIT_SUCCESS)
+        return ret;
+    wait_for_completion(&completion);
+
+    /* Success (ret=0) if c2b is uptodate now for READ, or dirty now for WRITE */
+    if (rw == READ)
+        return !c2b_uptodate(c2b);
+    else
+        return c2b_dirty(c2b);
+}
+
+/**
+ * Submit synchronous c2b I/O.
+ *
+ * @param   rw  READ or WRITE
+ * @param   c2b Block to perform I/O on
+ *
+ * @return  Non-zero if an error occurred dispatching I/O.
+ */
+int submit_c2b_sync(int rw, c2_block_t *c2b)
+{
+    return _submit_c2b_sync(rw, c2b, NULL);
+}
+
+/**
+ * Submit synchronous c2b write, which is also a barrier write.
+ *
+ * See Documentation/block/barrier.txt for more information.
+ *
+ * @see submit_c2b_sync()
+ */
+int submit_c2b_sync_barrier(int rw, c2_block_t *c2b)
+{
+    int ret;
+
+    /* Only makes sense for writes. */
+    BUG_ON(rw != WRITE);
+
+    /* Mark the c2b as a barrier c2b. */
+    set_c2b_barrier(c2b);
+
+    /* Submit the c2b as per usual. */
+    ret = submit_c2b_sync(rw, c2b);
+
+    /* Clear the bit, since c2b is write locked, noone else will see it. */
+    clear_c2b_barrier(c2b);
+
+    return ret;
 }
 
 /**
@@ -2230,59 +2335,6 @@ static void castle_slaves_unplug(void)
             generic_unplug_device(bdev_get_queue(cs->bdev));
     }
     rcu_read_unlock();
-}
-
-/**
- * Submit synchronous c2b I/O.
- *
- * Dispatches cache block-I/O then blocks for completion.
- *
- * @see submit_c2b()
- */
-int submit_c2b_sync(int rw, c2_block_t *c2b)
-{
-    struct completion completion;
-    int ret;
-
-    BUG_ON((rw == READ)  &&  c2b_uptodate(c2b));
-    BUG_ON((rw == WRITE) && !c2b_dirty(c2b));
-    c2b->end_io = castle_cache_sync_io_end;
-    c2b->private = &completion;
-    init_completion(&completion);
-    if((ret = submit_c2b(rw, c2b)) != EXIT_SUCCESS)
-        return ret;
-    wait_for_completion(&completion);
-
-    /* Success (ret=0) if c2b is uptodate now for READ, or dirty now for WRITE */
-    if (rw == READ)
-        return !c2b_uptodate(c2b);
-    else
-        return c2b_dirty(c2b);
-}
-
-/**
- * Submit synchronous c2b write, which is also a barrier write
- * (as per: Documentation/block/barrier.txt).
- *
- * @see submit_c2b_sync()
- */
-int submit_c2b_sync_barrier(int rw, c2_block_t *c2b)
-{
-    int ret;
-
-    /* Only makes sense for writes. */
-    BUG_ON(rw != WRITE);
-
-    /* Mark the c2b as a barrier c2b. */
-    set_c2b_barrier(c2b);
-
-    /* Submit the c2b as per usual. */
-    ret = submit_c2b_sync(rw, c2b);
-
-    /* Clear the bit, since c2b is write locked, no-one else will see it. */
-    clear_c2b_barrier(c2b);
-
-    return ret;
 }
 
 static inline unsigned long castle_cache_hash_idx(c_ext_pos_t cep, int nr_buckets)
@@ -3384,6 +3436,7 @@ int castle_cache_block_read(c2_block_t *c2b, c2b_end_io_t end_io, void *private)
  */
 int castle_cache_block_sync_read(c2_block_t *c2b)
 {
+    int submitted_c2ps;
     int ret = 0;
 
     /* Don't issue I/O if uptodate. */
@@ -3395,7 +3448,7 @@ int castle_cache_block_sync_read(c2_block_t *c2b)
         goto out;
 
     /* Issue sync I/O on block. */
-    ret = submit_c2b_sync(READ, c2b);
+    ret = _submit_c2b_sync(READ, c2b, &submitted_c2ps);
 out:
     write_unlock_c2b(c2b);
     return ret;
