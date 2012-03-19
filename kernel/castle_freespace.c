@@ -267,13 +267,11 @@ get_super_chunk:
     cep.ext_id = cs->sup_ext;
     cep.offset = MASK_BLK_OFFSET(cons_off);
     c2b = castle_cache_block_get(cep, 1);
-    write_lock_c2b(c2b);
 
     /* Get the uptodate buffer, If failed it should be due to disk failure. */
-    if ((!c2b_uptodate(c2b)) && (submit_c2b_sync(READ, c2b)))
+    if (castle_cache_block_sync_read(c2b))
     {
         debug("Failed to read superblock from slave %x\n", cs->uuid);
-        write_unlock_c2b(c2b);
         put_c2b(c2b);
         freespace_sblk_put(cs);
         /* If we reserved superchunks at the top of this function, we should return them.
@@ -284,6 +282,7 @@ get_super_chunk:
 
         return INVAL_CHK_SEQ;
     }
+    write_lock_c2b(c2b);
 
     cons_chk = (c_chk_t *)(((uint8_t *)c2b_buffer(c2b)) + BLOCK_OFFSET(cons_off));
     BUG_ON((*cons_chk == -1) || (*cons_chk % CHKS_PER_SLOT));
@@ -378,8 +377,7 @@ void castle_freespace_slave_superchunk_free(struct castle_slave *cs,
                     cep.offset += C_BLK_SIZE;
             }
             c2b = castle_cache_block_get(cep, 1);
-            write_lock_c2b(c2b);
-            if (!c2b_uptodate(c2b) && submit_c2b_sync(READ, c2b))
+            if (castle_cache_block_sync_read(c2b))
             {
                 /*
                  * If the submit failed for a slave superblock extent that has gone OOS,
@@ -388,13 +386,13 @@ void castle_freespace_slave_superchunk_free(struct castle_slave *cs,
                  */
                 if (SUPER_EXTENT(c2b->cep.ext_id) && test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags))
                 {
-                    write_unlock_c2b(c2b);
                     put_c2b(c2b);
                     freespace_sblk_put(cs);
                     return;
                 }
                 BUG();
             }
+            write_lock_c2b(c2b);
             chunks = (c_chk_t *)c2b->buffer;
         }
 

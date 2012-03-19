@@ -764,17 +764,27 @@ static void castle_bloom_block_read_end_io(c2_block_t *c2b, int did_io)
 {
     c_bloom_lookup_t *bl = c2b->private;
 
-    INIT_WORK(&bl->work, _castle_bloom_block_read_end_io, bl);
-    queue_work(castle_da_wqs[0], &bl->work);
+    if (did_io)
+    {
+        if (bl->bf->num_chunks <= BLOOM_MAX_SOFTPIN_CHUNKS)
+            /* Softpin bloom filter c2bs. */
+            castle_cache_block_softpin(c2b);
+
+        castle_printk(LOG_DEBUG, "%s::Bloom filter block not in cache, "
+                "I/O completed at "cep_fmt_str" for bf %p.\n",
+                __FUNCTION__, cep2str(c2b->cep), bl->bf);
+
+        INIT_WORK(&bl->work, _castle_bloom_block_read_end_io, bl);
+        queue_work(castle_da_wqs[0], &bl->work);
+    }
+    else
+        _castle_bloom_block_read_end_io(bl);
 }
 
 /**
- * Get c2b for bloom block relevant for key and submit async I/O, if necessary.
- *
- * @return -1   Scheduled I/O and went asynchronous
- * @return  *   Requested block is uptodate
+ * Get c2b for relevant bloom block, do I/O (if necessary) and fire callback.
  */
-static int castle_bloom_block_read(c_bloom_lookup_t *bl, int chunk_id)
+static void castle_bloom_block_read(c_bloom_lookup_t *bl, int chunk_id)
 {
     castle_bloom_t *bf = bl->bf;
     uint32_t block_id;
@@ -792,36 +802,7 @@ static int castle_bloom_block_read(c_bloom_lookup_t *bl, int chunk_id)
 
     c2b = castle_cache_block_get(cep, bf->block_size_pages);
     bl->block_c2b = c2b;
-
-    if (c2b_uptodate(c2b))
-        /* Block c2b is uptodate, return immediately. */
-        return 0; /* didn't go async */
-
-    /* Block c2b is not update, get write lock and schedule I/O. */
-
-    write_lock_c2b(c2b);
-    if (c2b_uptodate(c2b))
-    {
-        /* While waiting for the write lock, somebody else did I/O. */
-        write_unlock_c2b(c2b);
-
-        return 0; /* didn't go async */
-    }
-
-    if (bf->num_chunks <= BLOOM_MAX_SOFTPIN_CHUNKS)
-        /* Softpin bloom filter c2bs. */
-        castle_cache_block_softpin(c2b);
-
-    c2b->end_io  = castle_bloom_block_read_end_io;
-    c2b->private = bl;
-
-    castle_printk(LOG_DEBUG, "%s::Bloom filter block not in cache, "
-            "scheduling I/O at "cep_fmt_str" for bf %p.\n",
-            __FUNCTION__, cep2str(c2b->cep), bf);
-
-    BUG_ON(submit_c2b(READ, c2b));
-
-    return -1; /* went async */
+    BUG_ON(castle_cache_block_read(c2b, castle_bloom_block_read_end_io, bl));
 }
 
 /**
@@ -930,24 +911,9 @@ static void castle_bloom_index_get(castle_bloom_t *bf, struct castle_bloom_index
         c2_block_t *c2b;
 
         c2b = castle_cache_block_get(cep, BLOOM_INDEX_NODE_SIZE_PAGES);
-        if (unlikely(!c2b_uptodate(c2b)))
-        {
-            /* We expect the index btree node c2bs to be uptodate and hence
-             * don't expect to get here frequently.  As a result of this we
-             * will now do 2 I/Os for this lookup. */
-            write_lock_c2b(c2b);
-            if (!c2b_uptodate(c2b))
-            {
-                /* We now have a write lock and c2b is still not uptodate,
-                 * schedule the I/O now. */
-                castle_cache_block_softpin(c2b);
-                castle_printk(LOG_INFO, "%s: Bloom filter partition index not "
-                        "in cache, scheduling I/O at offset %llu for bf %p.\n",
-                        __FUNCTION__, c2b->cep.offset, bf);
-                BUG_ON(submit_c2b_sync(READ, c2b));
-            }
-            write_unlock_c2b(c2b);
-        }
+        if (!c2b_uptodate(c2b))
+            castle_cache_block_softpin(c2b);
+        BUG_ON(castle_cache_block_sync_read(c2b));
         cep.offset += BLOOM_INDEX_NODE_SIZE;
 
         /* Store uptodate c2b in the index. */
@@ -1002,8 +968,6 @@ static void castle_bloom_index_put(struct castle_bloom_index *index)
  * @also castle_bloom_block_process()
  *
  * @return -1   Look-up went asynchronous
- * @return  0   Key does not exist in bloom filter
- * @return  1   Key exists in bloom filter
  * @return  2   Bloom filters are disabled, assume key exists
  */
 int castle_bloom_key_exists(c_bloom_lookup_t *bl,
@@ -1041,13 +1005,10 @@ int castle_bloom_key_exists(c_bloom_lookup_t *bl,
      * just completed the current chunk but not started the next). */
     BUG_ON(chunk_id < 0);
 
-    if (castle_bloom_block_read(bl, chunk_id) < 0)
-        /* Block read issued I/O and went asynchronous. */
-        return -1;
-
-    else
-        /* Search for key hash in bloom block. */
-        return castle_bloom_block_process(bl, 0 /*async*/);
+    /* Read and process bloom block.  Completes asynchronously via
+     * castle_bloom_block_read_end_io()/castle_bloom_block_process(). */
+    castle_bloom_block_read(bl, chunk_id);
+    return -1;
 }
 
 /**** Marshalling ****/
@@ -1193,10 +1154,9 @@ void castle_bloom_build_param_unmarshall(castle_bloom_t *bf, struct castle_bbp_e
         int drop_end=0;
         BUG_ON(EXT_POS_INVAL(bf_bp->node_cep));
         bf_bp->node_c2b = castle_cache_block_get(bf_bp->node_cep, BLOOM_INDEX_NODE_SIZE_PAGES);
-        write_lock_c2b(bf_bp->node_c2b);
-        if(!c2b_uptodate(bf_bp->node_c2b))
-            BUG_ON(submit_c2b_sync(READ, bf_bp->node_c2b));
+        BUG_ON(castle_cache_block_sync_read(bf_bp->node_c2b));
         castle_cache_block_softpin(bf_bp->node_c2b);
+        write_lock_c2b(bf_bp->node_c2b);
         bf_bp->cur_node = c2b_bnode(bf_bp->node_c2b);
         BUG_ON(!bf_bp->cur_node);
         if(bf_bp->cur_node->magic != BTREE_NODE_MAGIC)
@@ -1235,13 +1195,10 @@ void castle_bloom_build_param_unmarshall(castle_bloom_t *bf, struct castle_bbp_e
         bf_bp->chunk_c2b = castle_cache_block_get(bf_bp->chunk_cep,
                                                   BLOOM_BLOCKS_PER_CHUNK(bf)
                                                         * bf->block_size_pages);
-        write_lock_c2b(bf_bp->chunk_c2b);
-        if(!c2b_uptodate(bf_bp->chunk_c2b))
-            BUG_ON(submit_c2b_sync(READ, bf_bp->chunk_c2b));
+        BUG_ON(castle_cache_block_sync_read(bf_bp->chunk_c2b));
         if (bf->num_chunks <= BLOOM_MAX_SOFTPIN_CHUNKS)
             castle_cache_block_softpin(bf_bp->chunk_c2b);
         bf_bp->cur_chunk_buffer = c2b_buffer(bf_bp->chunk_c2b);
-        write_unlock_c2b(bf_bp->chunk_c2b);
     }
     return;
 }

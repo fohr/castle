@@ -89,6 +89,8 @@ static int castle_resubmit_run(void *unused)
         }
         while (!list_empty(&resubmit_list))
         {
+            int ret;
+
             rc2b = list_first_entry(&resubmit_list, struct resubmit_c2b, list);
             list_del(&rc2b->list);
             spin_unlock_irq(&resubmit_list_lock);
@@ -103,7 +105,14 @@ static int castle_resubmit_run(void *unused)
              */
             BUG_ON(atomic_read(&c2b->remaining));
             debug("Resubmitting c2b %p\n", rc2b->c2b);
-            if (submit_c2b(rc2b->rw, rc2b->c2b))
+            if (rc2b->rw == READ)
+                ret = castle_cache_block_read(rc2b->c2b,
+                                              rc2b->c2b->end_io,
+                                              rc2b->c2b->private);
+            else
+                ret = submit_c2b(WRITE, rc2b->c2b);
+
+            if (ret)
             {
                 /*
                  * If the submit failed for a READ from a slave superblock extent that has gone OOS,

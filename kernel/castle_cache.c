@@ -4196,8 +4196,13 @@ static c2_pref_window_t* c2_pref_window_get(c_ext_pos_t cep, c2_advise_t advise)
  */
 static void c2_pref_io_end(c2_block_t *c2b, int did_io)
 {
-    pref_debug(0, "Finished prefetch io at cep="cep_fmt_str", nr_pages=%d.\n",
-            cep2str(c2b->cep), c2b->nr_pages);
+    if (did_io)
+        pref_debug(debug, "ext_id==%lld chunk %lld/%u I/O completed\n",
+                cep.ext_id, CHUNK(cep.offset), castle_extent_size_get(cep.ext_id)-1);
+    else
+        pref_debug(debug, "ext_id==%lld chunk %lld/%u already up-to-date\n",
+                cep.ext_id, CHUNK(cep.offset), castle_extent_size_get(cep.ext_id)-1);
+
     write_unlock_c2b(c2b);
     put_c2b(c2b);
 
@@ -4292,11 +4297,8 @@ void castle_cache_prefetch_pin(c_ext_pos_t cep, int chunks, c2_advise_t advise)
         if (advise & C2_ADV_PREFETCH)
         {
             get_c2b(c2b); /* will drop this in c2_pref_io_end() */
-            write_lock_c2b(c2b);
-            c2b->end_io = c2_pref_io_end;
-
+            BUG_ON(castle_cache_block_read(c2b, c2_pref_io_end, NULL));
             atomic_inc(&castle_cache_prefetch_in_flight);
-            BUG_ON(submit_c2b(READ, c2b));
         }
 
         if (advise & C2_ADV_SOFTPIN)
@@ -4394,33 +4396,8 @@ static void c2_pref_window_submit(c2_pref_window_t *window, c_ext_pos_t cep, int
     while (pages && CHUNK(cep.offset) < castle_extent_size_get(cep.ext_id))
     {
         c2b = c2_pref_block_chunk_get(cep, window, debug);
-
-        if (c2b_uptodate(c2b))
-        {
-            /* c2b already up-to-date, don't do anything. */
-            pref_debug(debug, "ext_id==%lld chunk %lld/%u already up-to-date\n",
-                    cep.ext_id, CHUNK(cep.offset), castle_extent_size_get(cep.ext_id)-1);
-#ifdef CASTLE_PERF_DEBUG
-            castle_extent_up2date_inc(cep.ext_id);
-#endif
-            put_c2b(c2b);
-        }
-        else
-        {
-            /* Submit I/O for c2b. */
-            pref_debug(debug, "ext_id==%lld chunk %lld/%u submitted for I/O\n",
-                    cep.ext_id, CHUNK(cep.offset), castle_extent_size_get(cep.ext_id)-1);
-#ifdef CASTLE_PERF_DEBUG
-            castle_extent_not_up2date_inc(cep.ext_id);
-#endif
-
-            write_lock_c2b(c2b);
-            c2b->end_io = c2_pref_io_end;
-
-            atomic_inc(&castle_cache_prefetch_in_flight);
-            BUG_ON(submit_c2b(READ, c2b));
-        }
-
+        BUG_ON(castle_cache_block_read(c2b, c2_pref_io_end, NULL));
+        atomic_inc(&castle_cache_prefetch_in_flight);
         pages -= BLKS_PER_CHK;
         cep.offset += C_CHK_SIZE;
     }
@@ -5801,23 +5778,15 @@ int castle_slaves_superblock_invalidate(void)
 
         /* Get c2b for superblock. */
         c2b = castle_cache_block_get(cep, 2);
-
-        write_lock_c2b(c2b);
-        if(!c2b_uptodate(c2b))
+        if (castle_cache_block_sync_read(c2b))
         {
-            ret = (submit_c2b_sync(READ, c2b));
-            if (ret)
-            {
-                /*
-                 * If the read failed due to the slave now being OOS, then we don't care.
-                 * We can't handle any other reason for this to fail.
-                 */
-                BUG_ON(!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags));
-                write_unlock_c2b(c2b);
-                put_c2b(c2b);
-                continue;
-            }
+            /* If the read failed due to the slave now being OOS, then we don't
+             * care.  We can't handle any other reason for this to fail. */
+            BUG_ON(!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags));
+            put_c2b(c2b);
+            continue;
         }
+        write_lock_c2b(c2b);
 
         /* The buffer is the superblock. */
         superblock = (struct castle_slave_superblock *)c2b_buffer(c2b);

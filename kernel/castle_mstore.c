@@ -107,12 +107,8 @@ again:
         {
             debug("Node exists.\n");
             c2b = castle_cache_block_get(node->next, MSTORE_NODE_BLOCKS);
+            BUG_ON(castle_cache_block_sync_read(c2b));
             write_lock_c2b(c2b);
-            if(!c2b_uptodate(c2b))
-            {
-                debug("Scheduling a read.\n");
-                BUG_ON(submit_c2b_sync(READ, c2b));
-            }
         }
         debug("Unlocking prev node.\n");
         write_unlock_c2b(iter->node_c2b);
@@ -214,14 +210,9 @@ struct castle_mstore_iter* castle_mstore_iterate(c_mstore_id_t store_id)
     BUG_ON(!BYTE_OFF_INVAL(iter->store.last_node_last_entry_offset));
     iter->store.last_node_next_entry_offset = sizeof(struct castle_mlist_node);
     iter->node_c2b = castle_cache_block_get(list_cep, MSTORE_NODE_BLOCKS);
+    BUG_ON(castle_cache_block_sync_read(iter->node_c2b));
+    write_lock_c2b(iter->node_c2b); /* unlocked in castle_mstore_iterator_advance() */
     iter->next_entry_idx = -1;  /* This is going to be advanced to 0 later in the function. */
-
-    /* Read in the first node (leave it locked). */
-    debug("Locking the first node "cep_fmt_str_nl, cep2str(iter->node_c2b->cep));
-    write_lock_c2b(iter->node_c2b);
-    if(!c2b_uptodate(iter->node_c2b))
-        BUG_ON(submit_c2b_sync(READ, iter->node_c2b));
-    debug("Node uptodate\n");
 
     /* Validate the first node, and advance once, to set all the iterator fields correctly. */
     castle_mstore_iterator_validate(iter);
@@ -287,12 +278,11 @@ static void castle_mstore_node_add(struct castle_mstore *store)
         struct castle_mstore_entry *last_entry;
 
         prev_c2b = castle_cache_block_get(store->last_node_cep, MSTORE_NODE_BLOCKS);
+        BUG_ON(castle_cache_block_sync_read(prev_c2b));
         debug("Linking into the prev node "cep_fmt_str_nl,
                 cep2str(prev_c2b->cep));
-        write_lock_c2b(prev_c2b);
-        if(!c2b_uptodate(prev_c2b))
-            BUG_ON(submit_c2b_sync(READ, prev_c2b));
         debug("Read prev node.\n");
+        write_lock_c2b(prev_c2b);
         /* Link the new node in. */
         prev_node = c2b_buffer(prev_c2b);
         prev_node->next = cep;
@@ -342,9 +332,8 @@ int castle_mstore_entry_insert(struct castle_mstore *store,
     debug("Reading last node "cep_fmt_str_nl,
             cep2str(store->last_node_cep));
     c2b = castle_cache_block_get(store->last_node_cep, MSTORE_NODE_BLOCKS);
+    BUG_ON(castle_cache_block_sync_read(c2b));
     write_lock_c2b(c2b);
-    if(!c2b_uptodate(c2b))
-        BUG_ON(submit_c2b_sync(READ, c2b));
     node = c2b_buffer(c2b);
     mentry = castle_mstore_entry_get(store, node, 1 /* next entry */);
     debug("Writing out under off=%lld (%p), first 32bits are: %x, size=%ld.\n",

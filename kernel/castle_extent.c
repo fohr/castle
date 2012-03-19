@@ -1591,9 +1591,8 @@ void castle_extent_micro_ext_update(struct castle_slave * cs)
     cep.offset = 0;
 
     c2b = castle_cache_block_get(cep, BLKS_PER_CHK);
+    BUG_ON(castle_cache_block_sync_read(c2b));
     write_lock_c2b(c2b);
-    if(!c2b_uptodate(c2b))
-        BUG_ON(submit_c2b_sync(READ, c2b));
 
     /* Update the micro map to include the new slave. */
     castle_extent_transaction_start();
@@ -2156,16 +2155,15 @@ static int castle_extent_meta_copy(c_ext_t *ext, void *compactor_p)
         s_c2b = castle_cache_block_get(s_cep, 1);
         d_c2b = castle_cache_block_get(d_cep, 1);
 
-        write_lock_c2b(s_c2b);
+        BUG_ON(castle_cache_block_sync_read(s_c2b));
+        read_lock_c2b(s_c2b);
         write_lock_c2b(d_c2b);
-        if(!c2b_uptodate(s_c2b))
-            BUG_ON(submit_c2b_sync(READ, s_c2b));
         update_c2b(d_c2b);
         memcpy(c2b_buffer(d_c2b), c2b_buffer(s_c2b), PAGE_SIZE);
         dirty_c2b(d_c2b);
         submit_c2b_sync(WRITE, d_c2b);
         write_unlock_c2b(d_c2b);
-        write_unlock_c2b(s_c2b);
+        read_unlock_c2b(s_c2b);
         put_c2b(s_c2b);
         put_c2b(d_c2b);
     }
@@ -2724,9 +2722,8 @@ static void _castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t start, c_chk_cnt
         debug("Processing map page at cep: "cep_fmt_str_nl, cep2str(map_cep));
         map_cep = PG_ALIGN_CEP(map_cep);
         map_c2b = castle_cache_block_get(map_cep, 1);
-        write_lock_c2b(map_c2b);
-        if(!c2b_uptodate(map_c2b))
-            BUG_ON(submit_c2b_sync(READ, map_c2b));
+        BUG_ON(castle_cache_block_sync_read(map_c2b));
+        read_lock_c2b(map_c2b);
         map_buf = c2b_buffer(map_c2b);
 
         /* For each logical chunk, look through each copy. */
@@ -2748,7 +2745,7 @@ static void _castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t start, c_chk_cnt
             }
         }
 
-        write_unlock_c2b(map_c2b);
+        read_unlock_c2b(map_c2b);
         put_c2b(map_c2b);
 
         map_cep.offset += C_BLK_SIZE;
@@ -2962,13 +2959,17 @@ retry:
             /* Get the next map_c2b. */
             debug("Getting map c2b, for cep: "cep_fmt_str_nl, cep2str(map_cep));
             map_c2b = castle_cache_block_get(map_cep, 1);
-            write_lock_c2b(map_c2b);
-
-            /* Read old maps, if we are allocating from in-between. */
-            if (map_page_idx && !c2b_uptodate(map_c2b))
-                BUG_ON(submit_c2b_sync(READ, map_c2b));
+            /* Read old maps, if we're allocating from in-between. */
+            if (map_page_idx)
+            {
+                BUG_ON(castle_cache_block_sync_read(map_c2b));
+                write_lock_c2b(map_c2b);
+            }
             else
+            {
+                write_lock_c2b(map_c2b);
                 update_c2b(map_c2b);
+            }
 
             /* Reset the map pointer. */
             map_page = c2b_buffer(map_c2b);
@@ -3623,30 +3624,17 @@ static void __castle_extent_map_get(c_ext_t *ext, c_chk_t chk_idx, c_disk_chk_t 
         map_page_cep.offset = MASK_BLK_OFFSET(map_page_cep.offset);
         /* Get the c2b corresponding to map_page_cep. */
         map_c2b = castle_cache_block_get(map_page_cep, 1);
+        /* Issue read I/O for map_c2b if it is not already uptodate. */
+        set_c2b_no_resubmit(map_c2b);
+        castle_cache_block_sync_read(map_c2b);
         if (!c2b_uptodate(map_c2b))
-        {
-            debug("Scheduling read to get chunk mappings for ext: %llu\n",
-                        ext->ext_id);
-            write_lock_c2b(map_c2b);
-            /* Need to recheck whether it's uptodate after getting the lock. */
-            if(!c2b_uptodate(map_c2b))
-            {
-                set_c2b_no_resubmit(map_c2b);
-                submit_c2b_sync(READ, map_c2b);
-                if (!c2b_uptodate(map_c2b))
-                {
-                    /*
-                     * The I/O has failed. This may be because we had a slave die on us. That I/O
-                     * fail should have resulted in future I/O submissions by-passing that dead
-                     * slave. So, try again, just once, and we should be able to read successfully
-                     * from the other slave for this c2b. Assumes no_resubmit still set on c2b.
-                     */
-                    BUG_ON(submit_c2b_sync(READ, map_c2b));
-                }
-                clear_c2b_no_resubmit(map_c2b);
-            }
-            write_unlock_c2b(map_c2b);
-        }
+            /* This means that the first I/O submission failed, e.g. because we
+             * had a slave die on us.  That I/O fail should have resulted in
+             * future I/O submissions by-passing the dead slave.  So, try again,
+             * just once, and we should be able to read successfully from the
+             * other slave for this c2b.  Assumes no_resubmit still set. */
+            BUG_ON(castle_cache_block_sync_read(map_c2b));
+        clear_c2b_no_resubmit(map_c2b);
         read_lock_c2b(map_c2b);
         /* Check that the mapping for the chunk fits in the page. */
         BUG_ON(BLOCK_OFFSET(map_cep.offset) + (ext->k_factor * sizeof(c_disk_chk_t)) > C_BLK_SIZE);
@@ -5615,7 +5603,9 @@ int submit_async_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_chunks,
     {
         /* Read will read from one chunk only. */
         rebuild_read_chunks++;
-        /* Submit read only. Read c2b endio will schedule the write. */
+        /* Submit read only. Read c2b endio will schedule the write.
+         * Since this is rebuild, we call submit_c2b(READ, ...) directly
+         * as we do not care about recording cache hit/miss statistics. */
         BUG_ON(submit_c2b(READ, c2b));
     } else
     {
@@ -5736,7 +5726,6 @@ static void writeback_rebuild_chunk(writeback_info_t *writeback_info)
              */
             reserve_c2b = castle_cache_page_block_reserve();
             map_c2b = castle_cache_block_get(map_cep, 1);
-            write_lock_c2b(map_c2b);
 
             /*
              * If this is the last page for the shadow map range, and we are only writing back a
@@ -5746,9 +5735,9 @@ static void writeback_rebuild_chunk(writeback_info_t *writeback_info)
              * (If we are changing the contents of an entire page, then we don't care what the old
              * contents were).
              */
-            if ((((chunkno / maps_in_a_page) == last_map_page) && last_map_page_partial) &&
-                !c2b_uptodate(map_c2b))
-                BUG_ON(submit_c2b_sync(READ, map_c2b));
+            if (((chunkno / maps_in_a_page) == last_map_page) && last_map_page_partial)
+                BUG_ON(castle_cache_block_sync_read(map_c2b));
+            write_lock_c2b(map_c2b);
 
             /* Next (if any) cache block get will be for the next page in the map. */
             map_cep.offset += C_BLK_SIZE;

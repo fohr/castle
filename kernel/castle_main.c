@@ -1910,8 +1910,9 @@ static void castle_bio_c2b_update(c2_block_t *c2b, int did_io)
     if(c2b_uptodate(c2b))
     {
         castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2B_UPTODATE);
-        castle_bio_data_copy(c_bvec, c2b);
-    } else
+        castle_bio_data_copy(c_bvec, c2b); /* drops c2b write-lock */
+    }
+    else
     {
         /* Just drop the lock, if we failed to update */
         write_unlock_c2b(c2b);
@@ -1944,23 +1945,20 @@ static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_ext_pos_t cep)
 #ifdef CASTLE_DEBUG
     c_bvec->locking = c2b;
 #endif
-    write_lock_c2b(c2b);
     castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2B_LOCKED);
-
-    /* We don't need to update the c2b if it's already uptodate
-       or if we are doing entire page write, in which case we'll
-       overwrite previous content anyway */
-    if(c2b_uptodate(c2b) || (write && test_bit(CBV_ONE2ONE_BIT, &c_bvec->flags)))
+    /* We can skip reading the c2b if we're doing an entire
+     * page write as we will overwrite the previous contents. */
+    if (write && test_bit(CBV_ONE2ONE_BIT, &c_bvec->flags))
     {
+        write_lock_c2b(c2b);
         update_c2b(c2b);
         castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2B_UPTODATE);
-        castle_bio_data_copy(c_bvec, c2b);
-    } else
+        castle_bio_data_copy(c_bvec, c2b); /* drops c2b write-lock */
+    }
+    else
     {
         castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2B_OUTOFDATE);
-        c2b->private = c_bvec;
-        c2b->end_io = castle_bio_c2b_update;
-        BUG_ON(submit_c2b(READ, c2b));
+        BUG_ON(castle_cache_block_read(c2b, castle_bio_c2b_update, c_bvec));
     }
 }
 

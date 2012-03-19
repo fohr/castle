@@ -1296,7 +1296,11 @@ void castle_object_get_io_end(c2_block_t *c2b, int did_io)
 #endif
     write_unlock_c2b(c2b);
     /* @TODO: io error handling. */
-    debug("IO end for cep "cep_fmt_str_nl, cep2str(c2b->cep));
+
+    if (did_io)
+        debug("IO end for cep "cep_fmt_str_nl, cep2str(c2b->cep));
+
+    /* Requeue regardless of did_io as castle_object_get() is recursive. */
     CASTLE_INIT_WORK(&c_bvec->work, __castle_object_get_complete);
     queue_work(castle_wq, &c_bvec->work);
 }
@@ -1345,14 +1349,6 @@ void castle_object_get_continue(struct castle_bio_vec *c_bvec,
     debug("data_c2b_length=%d, data_length=%d\n", data_c2b_length, data_length);
     data_length -= data_c2b_length;
 
-    debug("Locking cep "cep_fmt_str_nl, cep2str(data_cep));
-    c2b = castle_cache_block_get(data_cep, nr_blocks);
-    write_lock_c2b(c2b);
-
-    get->data_c2b        = c2b;
-    get->data_c2b_length = data_c2b_length;
-    get->data_length     = data_length;
-
     /* Unlock the old c2b if we had one */
     if(old_c2b)
     {
@@ -1360,19 +1356,14 @@ void castle_object_get_continue(struct castle_bio_vec *c_bvec,
         put_c2b(old_c2b);
     }
 
-    debug("c2b uptodate: %d\n", c2b_uptodate(c2b));
-    if(!c2b_uptodate(c2b))
-    {
-        /* If the buffer doesn't contain up to date data, schedule the IO */
-        c2b->private = c_bvec;
-        c2b->end_io = castle_object_get_io_end;
-        BUG_ON(submit_c2b(READ, c2b));
-    } else
-    {
-        write_unlock_c2b(c2b);
-        CASTLE_INIT_WORK(&c_bvec->work, __castle_object_get_complete);
-        queue_work(castle_wq, &c_bvec->work);
-    }
+    debug("Reading cep "cep_fmt_str_nl, cep2str(data_cep));
+    c2b = castle_cache_block_get(data_cep, nr_blocks);
+    get->data_c2b        = c2b;
+    get->data_c2b_length = data_c2b_length;
+    get->data_length     = data_length;
+    BUG_ON(castle_cache_block_read(c2b, castle_object_get_io_end, c_bvec));
+
+    /* completes in __castle_object_get_complete(). */
 }
 
 /**
@@ -1576,8 +1567,13 @@ void castle_object_chunk_pull_io_end(c2_block_t *c2b, int did_io)
 
     /* @TODO deal with not up to date - get error and pass it on? */
 
-    CASTLE_INIT_WORK(&pull->work, __castle_object_chunk_pull_complete);
-    queue_work(castle_wq, &pull->work);
+    if (did_io)
+    {
+        CASTLE_INIT_WORK(&pull->work, __castle_object_chunk_pull_complete);
+        queue_work(castle_wq, &pull->work);
+    }
+    else
+        __castle_object_chunk_pull_complete(&pull->work);
 }
 
 /**
@@ -1620,25 +1616,14 @@ void castle_object_chunk_pull(struct castle_object_pull *pull, void *buf, size_t
     cep.offset = pull->cvt.cep.offset + pull->offset; /* @TODO in bytes or blocks? */
 
     debug("Locking cdb (0x%x, 0x%x)\n", cep.ext_id, cep.offset);
+    pull->buf      = buf;
     pull->curr_c2b = castle_cache_block_get(cep, (pull->to_copy - 1) / PAGE_SIZE + 1);
     castle_cache_advise(pull->curr_c2b->cep, C2_ADV_PREFETCH, -1, -1, 0);
-    write_lock_c2b(pull->curr_c2b);
+    BUG_ON(castle_cache_block_read(pull->curr_c2b,
+                                   castle_object_chunk_pull_io_end,
+                                   pull));
 
-    pull->buf = buf;
-
-    debug("c2b uptodate: %d\n", c2b_uptodate(pull->curr_c2b));
-    if (!c2b_uptodate(pull->curr_c2b))
-    {
-        /* If the buffer doesn't contain up to date data, schedule the IO */
-        pull->curr_c2b->private = pull;
-        pull->curr_c2b->end_io = castle_object_chunk_pull_io_end;
-        BUG_ON(submit_c2b(READ, pull->curr_c2b));
-    }
-    else
-    {
-        write_unlock_c2b(pull->curr_c2b);
-        __castle_object_chunk_pull_complete(&pull->work);
-    }
+    /* completes in __castle_object_chunk_pull_complete(). */
 }
 EXPORT_SYMBOL(castle_object_chunk_pull);
 

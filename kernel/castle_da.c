@@ -660,20 +660,8 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter,
         castle_perf_debug_getnstimeofday(&ts_start);
         c2b = castle_cache_block_get(cep, node_size);
         castle_perf_debug_getnstimeofday(&ts_end);
-        /* Update time spent obtaining c2bs. */
-        castle_perf_debug_bump_ctr(iter->tree->get_c2b_ns, ts_end, ts_start);
-        debug("Node in immut iter.\n");
         castle_cache_advise(c2b->cep, C2_ADV_PREFETCH, -1, -1, 0);
-        write_lock_c2b(c2b);
-        /* If c2b is not up to date, issue a blocking READ to update */
-        if(!c2b_uptodate(c2b))
-        {
-            castle_perf_debug_getnstimeofday(&ts_start);
-            BUG_ON(submit_c2b_sync(READ, c2b));
-            castle_perf_debug_getnstimeofday(&ts_end);
-            castle_perf_debug_bump_ctr(iter->tree->bt_c2bsync_ns, ts_end, ts_start);
-        }
-        write_unlock_c2b(c2b);
+        BUG_ON(castle_cache_block_sync_read(c2b));
         node = c2b_bnode(c2b);
         /* Determine if this is a leaf-node with entries */
         BUG_ON(node->magic != BTREE_NODE_MAGIC); //see trac #2844
@@ -4081,32 +4069,14 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
         castle_perf_debug_getnstimeofday(&ts_end);
         castle_perf_debug_bump_ctr(tree->get_c2b_ns, ts_end, ts_start);
         castle_cache_advise(s_c2b->cep, C2_ADV_PREFETCH|C2_ADV_SOFTPIN, -1, -1, 0);
-        /* Make sure that we lock _after_ prefetch call. */
-        write_lock_c2b(s_c2b);
+        BUG_ON(castle_cache_block_sync_read(s_c2b));
+        read_lock_c2b(s_c2b);
         write_lock_c2b(c_c2b);
-        if(!c2b_uptodate(s_c2b))
-        {
-            /* c2b is not marked as up-to-date.  We hope this is because we are
-             * at the start of the extent and have just issued a prefetch call.
-             * If this is true, the underlying c2p is up-to-date so a quick call
-             * into submit_c2b_sync() should detect this and update the c2b to
-             * reflect this change.
-             *
-             * Alternatively it could mean that some of our prefetched c2bs have
-             * been evicted.
-             *
-             * By analysing the time spent in submit_c2b_sync() it should be
-             * possible to determine which of these scenarios are occurring. */
-            castle_perf_debug_getnstimeofday(&ts_start);
-            BUG_ON(submit_c2b_sync(READ, s_c2b));
-            castle_perf_debug_getnstimeofday(&ts_end);
-            castle_perf_debug_bump_ctr(tree->data_c2bsync_ns, ts_end, ts_start);
-        }
         update_c2b(c_c2b);
         memcpy(c2b_buffer(c_c2b), c2b_buffer(s_c2b), blocks * PAGE_SIZE);
         dirty_c2b(c_c2b);
         write_unlock_c2b(c_c2b);
-        write_unlock_c2b(s_c2b);
+        read_unlock_c2b(s_c2b);
         put_c2b(c_c2b);
         put_c2b_and_demote(s_c2b);
         old_cep.offset += blocks * PAGE_SIZE;
@@ -4737,10 +4707,8 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge, c_ext_pos
     /* Start with the root node. */
     node_size = ct->node_sizes[atomic_read(&merge->out_tree->tree_depth) - 1];
     node_c2b = castle_cache_block_get(root_cep, node_size);
-    /* Lock and update the c2b. */
+    BUG_ON(castle_cache_block_sync_read(node_c2b));
     write_lock_c2b(node_c2b);
-    if(!c2b_uptodate(node_c2b))
-        BUG_ON(submit_c2b_sync(READ, node_c2b));
     node = c2b_bnode(node_c2b);
     debug("Maxifying the right most path, starting with root_cep="cep_fmt_str_nl,
             cep2str(node_c2b->cep));
@@ -4766,11 +4734,9 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge, c_ext_pos
               cep2str(cvt.cep));
         node_size = ct->node_sizes[atomic_read(&merge->out_tree->tree_depth) - level];
         next_node_c2b = castle_cache_block_get(cvt.cep, node_size);
+        /* unlikely to do IO as these nodes have just been in the cache. */
+        BUG_ON(castle_cache_block_sync_read(next_node_c2b));
         write_lock_c2b(next_node_c2b);
-        /* We unlikely to need a blocking read, because we've just had these
-           nodes in the cache. */
-        if(!c2b_uptodate(next_node_c2b))
-            BUG_ON(submit_c2b_sync(READ, next_node_c2b));
         /* Release the old node. */
         debug("Unlocking prev node cep=" cep_fmt_str_nl,
                cep2str(node_c2b->cep));
@@ -6982,14 +6948,7 @@ static c2_block_t* castle_da_merge_des_out_tree_c2b_write_fetch(struct castle_da
     BUG_ON(node_size == 0);
 
     c2b = castle_cache_block_get(cep, node_size);
-    BUG_ON(!c2b);
-
-    write_lock_c2b(c2b);
-    /* If c2b is not up to date, issue a blocking READ to update */
-    if(!c2b_uptodate(c2b))
-        BUG_ON(submit_c2b_sync(READ, c2b));
-
-    write_unlock_c2b(c2b);
+    BUG_ON(castle_cache_block_sync_read(c2b));
 
     return c2b;
 }
@@ -7871,11 +7830,7 @@ static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry 
                     SSD_RO_TREE_NODE_SIZE : HDD_RO_TREE_NODE_SIZE;
 
             node_c2b = castle_cache_block_get(merge_mstore->levels[i].node_c2b_cep, node_size);
-            BUG_ON(!node_c2b);
-            write_lock_c2b(node_c2b);
-            if(!c2b_uptodate(node_c2b))
-                BUG_ON(submit_c2b_sync(READ, node_c2b));
-            write_unlock_c2b(node_c2b);
+            BUG_ON(castle_cache_block_sync_read(node_c2b));
 
             node = c2b_bnode(node_c2b);
             BUG_ON(!node);
@@ -9928,10 +9883,7 @@ static int castle_da_merge_deser_mstore_outtree_recover(void)
                 castle_cache_block_get(
                     merge->serdes.live.merge_state->redirection_partition_node_cep, node_size);
             merge->redirection_partition.node_size = node_size;
-            write_lock_c2b(merge->redirection_partition.node_c2b);
-            if(!c2b_uptodate(merge->redirection_partition.node_c2b))
-                BUG_ON(submit_c2b_sync(READ, merge->redirection_partition.node_c2b));
-            write_unlock_c2b(merge->redirection_partition.node_c2b);
+            BUG_ON(castle_cache_block_sync_read(merge->redirection_partition.node_c2b));
 
             /* recover partition key */
             node = c2b_bnode(merge->redirection_partition.node_c2b);
