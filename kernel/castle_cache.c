@@ -910,8 +910,8 @@ static int _unsoftpin_c2b(c2_block_t *c2b, int clear)
 
         /* Decrement softpin cleanlist if we decremented the last
          * softpin hold on a clean block. */
-        if ((p_new->softpin_cnt == 0) && !c2b_dirty(c2b))
-            BUG_ON(atomic_dec_return(&castle_cache_cleanlist_softpin_size) < 0);
+        if ((p_new->softpin_cnt == 0) && !test_bit(C2B_dirty, p_old))
+            atomic_dec(&castle_cache_cleanlist_softpin_size);
         else
             return p_new->softpin_cnt;
     }
@@ -1154,9 +1154,9 @@ void dirty_c2b(c2_block_t *c2b)
         /* Remove from cleanlist and do cachelist accounting. */
         list_del(&c2b->clean);
         BUG_ON(atomic_dec_return(&castle_cache_cleanlist_size) < 0);
+        set_c2b_dirty(c2b);
         if (c2b_softpin(c2b))
             atomic_dec(&castle_cache_cleanlist_softpin_size);
-        set_c2b_dirty(c2b);
         spin_unlock_irqrestore(&castle_cache_block_lru_lock, flags);
 
         /* Place dirty c2b onto per-extent dirtytree. */
@@ -3096,8 +3096,10 @@ static int castle_cache_block_hash_clean(void)
     /* Victimise softpin blocks if they make up more than half the cleanlist. */
     clean   = atomic_read(&castle_cache_cleanlist_size);
     softpin = atomic_read(&castle_cache_cleanlist_softpin_size);
+    /* Sanitise the softpin count as it is possible the counter could go
+     * negative due to a transitory race dirtying a 'being-softpinned' c2b. */
     if (softpin < 0)
-        softpin = 0; /* to prevent a transient race */
+        softpin = 0;
     if (softpin > clean / 2)
         victimise_softpin = 1;
 
