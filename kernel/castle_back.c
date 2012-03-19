@@ -3308,6 +3308,8 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
     if (stateful_op->curr_op->req.tag == CASTLE_RING_GET_CHUNK)
         castle_back_buffer_put(stateful_op->conn, stateful_op->curr_op->buf);
 
+    spin_lock(&stateful_op->lock);
+
     castle_back_reply(stateful_op->curr_op,
                       err ? err : (not_found ? -ENOENT : 0),
                       stateful_op->token,
@@ -3316,7 +3318,6 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
 
     if (err || done)
     {
-        spin_lock(&stateful_op->lock);
         castle_back_stateful_op_finish_all(stateful_op, err);
         spin_unlock(&stateful_op->lock);
 
@@ -3346,8 +3347,6 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
 
         return;
     }
-
-    spin_lock(&stateful_op->lock);
 
     if (!stateful_op->in_use)
         stateful_op->in_use = 1;
