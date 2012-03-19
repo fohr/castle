@@ -4297,8 +4297,8 @@ void castle_cache_prefetch_pin(c_ext_pos_t cep, int chunks, c2_advise_t advise)
         if (advise & C2_ADV_PREFETCH)
         {
             get_c2b(c2b); /* will drop this in c2_pref_io_end() */
-            BUG_ON(castle_cache_block_read(c2b, c2_pref_io_end, NULL));
             atomic_inc(&castle_cache_prefetch_in_flight);
+            BUG_ON(castle_cache_block_read(c2b, c2_pref_io_end, NULL));
         }
 
         if (advise & C2_ADV_SOFTPIN)
@@ -4396,8 +4396,8 @@ static void c2_pref_window_submit(c2_pref_window_t *window, c_ext_pos_t cep, int
     while (pages && CHUNK(cep.offset) < castle_extent_size_get(cep.ext_id))
     {
         c2b = c2_pref_block_chunk_get(cep, window, debug);
-        BUG_ON(castle_cache_block_read(c2b, c2_pref_io_end, NULL));
         atomic_inc(&castle_cache_prefetch_in_flight);
+        BUG_ON(castle_cache_block_read(c2b, c2_pref_io_end, NULL));
         pages -= BLKS_PER_CHK;
         cep.offset += C_CHK_SIZE;
     }
