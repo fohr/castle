@@ -968,7 +968,7 @@ struct castle_key_value_list {
 #define CASTLE_SLAVE_MAGIC1     (0x02061985)
 #define CASTLE_SLAVE_MAGIC2     (0x16071983)
 #define CASTLE_SLAVE_MAGIC3     (0x16061981)
-#define CASTLE_SLAVE_VERSION    (24)            /* Last changed by: GM */
+#define CASTLE_SLAVE_VERSION    (25)            /* Last changed by: TR */
 
 #define CASTLE_SLAVE_NEWDEV     (0x00000004)
 #define CASTLE_SLAVE_SSD        (0x00000008)
