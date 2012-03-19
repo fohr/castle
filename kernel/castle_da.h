@@ -73,15 +73,6 @@ struct castle_da_merge {
     struct castle_version_states  version_states;       /**< Merged version states.             */
     struct castle_version_delete_state snapshot_delete; /**< Snapshot delete state.             */
 
-#ifdef CASTLE_PERF_DEBUG
-    u64                           get_c2b_ns;           /**< ns in castle_cache_block_get_for_merge()     */
-    u64                           merged_iter_next_ns;
-    u64                           da_medium_obj_copy_ns;
-    u64                           nodes_complete_ns;
-    u64                           progress_update_ns;
-    u64                           merged_iter_next_hasnext_ns;
-    u64                           merged_iter_next_compare_ns;
-#endif
 #ifdef CASTLE_DEBUG
     uint8_t                       is_recursion;
 #endif

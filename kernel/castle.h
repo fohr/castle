@@ -1124,12 +1124,6 @@ struct castle_component_tree {
 
     uint32_t            max_versions_per_key; /**< For a merge to correctly size the tv_resolver (see
                                                    trac #4749) */
-
-#ifdef CASTLE_PERF_DEBUG
-    u64                 bt_c2bsync_ns;
-    u64                 data_c2bsync_ns;
-    u64                 get_c2b_ns;
-#endif
 };
 extern struct castle_component_tree *castle_global_tree;
 
