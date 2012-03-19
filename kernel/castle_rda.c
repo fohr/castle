@@ -39,6 +39,51 @@ typedef struct c_ssd_rda_state {
 static c_rda_spec_t castle_rda_1, castle_rda_2;
 
 /**
+ * RDA Algorithm: RDA code makes sure that chunks of extents are uniformly being distributed
+ * onto all slaves in the system. This makes sure that system can survive disk failures, when
+ * RDA factor is > 1. And also improves the read performance by equally distributing the load
+ * across all disks.
+ *
+ * Call flow of extent allocation (only the bits interesting from RDA):
+ *
+ * 1. __castle_extent_space_reserve() - Reserve space
+ *      a. Based on RDA type, select slaves - SSDs or HDs
+ *      b. Calculate space needed on each slave (in superchunks).
+ *      c. Reserve space into a local pool.
+ *
+ *    Note: There is no optimisation for small extents here. Which means, even if the extent is
+ *    of size 2 chunks, we try to reserve 1 superchunk each on all slaves. (8 superchunks on 8
+ *    slaves).
+ * 2. extent_init() - Get ready RDA spec structure for extent allocation.
+ *      a. Find the slaves to be used
+ *          i. SSDs or HDs
+ *         ii. In case of small extents take only use minimum number of disks to reduce the waste.
+ *      b. Get a random permutation of slaves.
+ * 3. For each logical chunk in extent
+ *      a. next_slave_get() - Find next n slaves (for n-RDA) to keep n-copies of the current
+ *                            logical chunk.
+ *          i. We maintain current permutation of slaves in the RDA state. Return slaves, if
+ *             current permutation has enough number of slaves left.
+ *         ii. Other wise, create another permuation such that last slave on the current
+ *             permutation is not same as first slave on new permutation. To avoid two copies
+ *             of the logical chunk being placed on same disk.
+ *      b. Allocate a chunk for each slave returned by next_slave_get()
+ *          i. Freespace works with superchunks (10 chunks, configurable). So, we need to maintan
+ *             superchunks currently being used.
+ *         ii. Take a chunk from the super-chunk, if we already got one, other wise get one super
+ *             chunk from freespace.
+ *
+ *             Note: Reads always happen from first copy, unless that slave is marked as OOS. To
+ *             avoid unnecessary seeks, we keep seperate superchunks for different copies. For
+ *             example, assume disk A stores (22, 1), (23, 2) and (24, 1) - where (n, k) is nth
+ *             logical chunk and kth copy. If we dont do the above mentioned optimization same
+ *             superchunk would contain (22, 1) (23, 2) and (24, 1). So while reading we would
+ *             need an extra seek to skip (23, 2). We avoid this by keeping seperate super chunks
+ *             for each copy.
+ *      c. Write the map to meta extent.
+ */
+
+/**
  * (Re)permute the array of castle_slave pointers, used to construct the extent. Uses Fisher-Yates
  * shuffle.
  *
