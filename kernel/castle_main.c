@@ -1902,7 +1902,7 @@ static void castle_bio_data_io_error(c_bvec_t *c_bvec, int err)
     castle_bio_put(c_bvec->c_bio);
 }
 
-static void castle_bio_c2b_update(c2_block_t *c2b)
+static void castle_bio_c2b_update(c2_block_t *c2b, int did_io)
 {
     /* @TODO: comment when it gets called */
     c_bvec_t *c_bvec = c2b->private;

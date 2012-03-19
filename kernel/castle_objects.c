@@ -1285,7 +1285,7 @@ out:
     castle_utils_bio_free(c_bvec->c_bio);
 }
 
-void castle_object_get_io_end(c2_block_t *c2b)
+void castle_object_get_io_end(c2_block_t *c2b, int did_io)
 {
     c_bvec_t *c_bvec = c2b->private;
 
@@ -1567,7 +1567,7 @@ void __castle_object_chunk_pull_complete(struct work_struct *work)
     pull->pull_continue(pull, 0 /*err*/, to_copy, pull->remaining == 0 /*done*/);
 }
 
-void castle_object_chunk_pull_io_end(c2_block_t *c2b)
+void castle_object_chunk_pull_io_end(c2_block_t *c2b, int did_io)
 {
     struct castle_object_pull *pull = c2b->private;
 

@@ -1306,7 +1306,7 @@ static void castle_btree_bvec_queue(c_bvec_t *c_bvec)
         queue_work(castle_wqs[c_bvec->btree_depth], &c_bvec->work);
 }
 
-static void castle_btree_submit_io_end(c2_block_t *c2b)
+static void castle_btree_submit_io_end(c2_block_t *c2b, int did_io)
 {
 #ifdef CASTLE_DEBUG
     struct castle_btree_node *node;
@@ -1752,7 +1752,7 @@ static void _castle_btree_iter_path_traverse(struct work_struct *work)
  * @also castle_btree_iter_path_traverse()
  * @also _castle_btree_iter_path_traverse()
  */
-static void castle_btree_iter_path_traverse_endio(c2_block_t *c2b)
+static void castle_btree_iter_path_traverse_endio(c2_block_t *c2b, int did_io)
 {
     c_iter_t *c_iter = c2b->private;
 

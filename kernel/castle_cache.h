@@ -4,7 +4,7 @@
 #define __CASTLE_CACHE_H__
 
 struct castle_cache_block;
-typedef void  (*c2b_end_io_t)(struct castle_cache_block *c2b);
+typedef void  (*c2b_end_io_t)(struct castle_cache_block *c2b, int did_io);
 
 struct castle_cache_page;
 typedef struct castle_cache_block {
@@ -232,6 +232,8 @@ int         submit_direct_io          (int rw, struct block_device *bdev, sector
 
 int         c2b_has_clean_pages       (c2_block_t *c2b);
 
+int         castle_cache_block_read   (c2_block_t *c2b, c2b_end_io_t end_io, void *private);
+int         castle_cache_block_sync_read(c2_block_t *c2b);
 #define     castle_cache_page_block_reserve() \
             castle_cache_block_get    ((c_ext_pos_t){RESERVE_EXT_ID, 0}, 1)
 c2_block_t* castle_cache_block_get    (c_ext_pos_t  cep, int nr_pages);

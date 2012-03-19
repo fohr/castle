@@ -1260,7 +1260,7 @@ static void c2b_remaining_io_sub(int rw, int nr_pages, c2_block_t *c2b)
              */
             debug("c2b %p had bio error(s) - returning error\n", c2b);
             clear_c2b_in_flight(c2b);
-            c2b->end_io(c2b);
+            c2b->end_io(c2b, 1 /*did_io*/);
         }
         return;
     }
@@ -1271,7 +1271,7 @@ static void c2b_remaining_io_sub(int rw, int nr_pages, c2_block_t *c2b)
     else
         clean_c2b(c2b);
     clear_c2b_in_flight(c2b);
-    c2b->end_io(c2b);
+    c2b->end_io(c2b, 1 /*did_io*/);
 }
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
@@ -1908,7 +1908,7 @@ extern atomic_t wi_in_flight;
  *
  * @param c2b   completed c2b I/O
  */
-static void castle_cache_sync_io_end(c2_block_t *c2b)
+static void castle_cache_sync_io_end(c2_block_t *c2b, int did_io)
 {
     struct completion *completion = c2b->private;
 
@@ -3353,6 +3353,54 @@ static inline void castle_cache_page_freelist_grow(int nr_pages)
     castle_cache_freelists_grow(0, nr_pages);
 }
 
+/**
+ * Asynchronously issue read I/O for c2b, if required, or execute callback.
+ *
+ * NOTE: end_io() must handle dropping c2b write-lock.
+ *
+ * @return  Return value from submit_c2b().
+ */
+int castle_cache_block_read(c2_block_t *c2b, c2b_end_io_t end_io, void *private)
+{
+    int ret = 0;
+
+    /* Issue I/O or execute callback directly if already uptodate. */
+    write_lock_c2b(c2b);
+    c2b->end_io  = end_io;
+    c2b->private = private;
+    if (c2b_uptodate(c2b))
+        c2b->end_io(c2b, 0 /*did_io*/);
+    else
+        ret = submit_c2b(READ, c2b);
+    return ret;
+}
+
+/**
+ * Synchronously issue read I/O for c2b, if required.
+ *
+ * NOTE: c2b returned with no locks held.
+ *
+ * @return  Return value from submit_c2b_sync().
+ */
+int castle_cache_block_sync_read(c2_block_t *c2b)
+{
+    int ret = 0;
+
+    /* Don't issue I/O if uptodate. */
+    if (c2b_uptodate(c2b))
+        return 0;
+    write_lock_c2b(c2b);
+    if (c2b_uptodate(c2b))
+        /* Somebody did I/O. */
+        goto out;
+
+    /* Issue sync I/O on block. */
+    ret = submit_c2b_sync(READ, c2b);
+out:
+    write_unlock_c2b(c2b);
+    return ret;
+}
+
 static c2_block_t* _castle_cache_block_get(c_ext_pos_t cep,
                                            int nr_pages,
                                            int transient)
@@ -4146,7 +4194,7 @@ static c2_pref_window_t* c2_pref_window_get(c_ext_pos_t cep, c2_advise_t advise)
  *
  * @param c2b   Cache block I/O has been completed on
  */
-static void c2_pref_io_end(c2_block_t *c2b)
+static void c2_pref_io_end(c2_block_t *c2b, int did_io)
 {
     pref_debug(0, "Finished prefetch io at cep="cep_fmt_str", nr_pages=%d.\n",
             cep2str(c2b->cep), c2b->nr_pages);
@@ -4690,7 +4738,7 @@ void castle_cache_debug_fini(void)
  * @also __castle_cache_extent_flush()
  * @also castle_cache_flush()
  */
-static void castle_cache_extent_flush_endio(c2_block_t *c2b)
+static void castle_cache_extent_flush_endio(c2_block_t *c2b, int did_io)
 {
     atomic_t *in_flight = c2b->private; /* outstanding IOs count */
 
@@ -4706,7 +4754,7 @@ static void castle_cache_extent_flush_endio(c2_block_t *c2b)
     wake_up(&castle_cache_flush_wq);
 }
 
-static void castle_cache_flush_endio(c2_block_t *c2b);
+static void castle_cache_flush_endio(c2_block_t *c2b, int did_io);
 
 /**
  * Flush a batch of dirty c2bs.
@@ -5034,7 +5082,7 @@ int castle_cache_dirtytree_compare(struct list_head *l1, struct list_head *l2)
         return 0;
 }
 
-static void castle_cache_flush_endio(c2_block_t *c2b)
+static void castle_cache_flush_endio(c2_block_t *c2b, int did_io)
 {
     c_ext_inflight_t *data = c2b->private;
 

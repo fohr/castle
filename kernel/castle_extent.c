@@ -5357,7 +5357,7 @@ retry:
 /*
  * end_io for extent processing.
  */
-static void castle_extent_process_async_end(c2_block_t *c2b)
+static void castle_extent_process_async_end(c2_block_t *c2b, int did_io)
 {
     process_work_item_t *wi = c2b->private;
     unsigned long flags;

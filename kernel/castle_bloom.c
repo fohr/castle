@@ -760,7 +760,7 @@ static void _castle_bloom_block_read_end_io(void *data)
  * @also castle_bloom_block_read()
  * @also castle_bloom_block_process()
  */
-static void castle_bloom_block_read_end_io(c2_block_t *c2b)
+static void castle_bloom_block_read_end_io(c2_block_t *c2b, int did_io)
 {
     c_bloom_lookup_t *bl = c2b->private;
 
