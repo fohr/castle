@@ -2340,11 +2340,9 @@ struct castle_double_array {
         int                     nr_trees;           /**< Number of queriable CTs at level.      */
         int                     nr_output_trees;    /**< Number of output trees at level.       */
         struct list_head        trees;              /**< List of (nr_trees) at level            */
-        /* Merge related variables. */
-        struct {
-            struct task_struct *thread;
-        } merge;
     } levels[MAX_DA_LEVEL];
+
+    struct task_struct         *l1_merge_thread;    /**< Level-1 merge thread.                  */
     struct castle_da_cts_proxy *cts_proxy;          /**< Reference-taking snapshot of CTs in DA.
                                                          Protected by da->lock.                 */
     atomic_t                    lfs_victim_count;   /**< Number of queued LFS callbacks.
