@@ -871,9 +871,9 @@ void castle_cache_block_softpin(c2_block_t *c2b)
         p_new->softpin_cnt++;
     } while (cmpxchg((unsigned long*)&c2b->state, old, new) != old);
 
-    /* Increment softpin cleanlist if it wasn't already softpinnined
-     * and if it is a clean block. */
-    if ((p_old->softpin_cnt == 0) && !c2b_dirty(c2b))
+    /* Increment softpin cleanlist if it wasn't already softpinnined and
+     * if it is a clean block.  We use a stored state so we don't race! */
+    if ((p_old->softpin_cnt == 0) && !test_bit(C2B_dirty, p_old))
         atomic_inc(&castle_cache_cleanlist_softpin_size);
 }
 
@@ -1155,7 +1155,7 @@ void dirty_c2b(c2_block_t *c2b)
         list_del(&c2b->clean);
         BUG_ON(atomic_dec_return(&castle_cache_cleanlist_size) < 0);
         if (c2b_softpin(c2b))
-            BUG_ON(atomic_dec_return(&castle_cache_cleanlist_softpin_size) < 0);
+            atomic_dec(&castle_cache_cleanlist_softpin_size);
         set_c2b_dirty(c2b);
         spin_unlock_irqrestore(&castle_cache_block_lru_lock, flags);
 
@@ -3096,6 +3096,8 @@ static int castle_cache_block_hash_clean(void)
     /* Victimise softpin blocks if they make up more than half the cleanlist. */
     clean   = atomic_read(&castle_cache_cleanlist_size);
     softpin = atomic_read(&castle_cache_cleanlist_softpin_size);
+    if (softpin < 0)
+        softpin = 0; /* to prevent a transient race */
     if (softpin > clean / 2)
         victimise_softpin = 1;
 
