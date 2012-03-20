@@ -10798,6 +10798,7 @@ static inline int _castle_da_cts_proxy_all_invalidate(struct castle_double_array
     write_lock(&da->lock);
     if (da->cts_proxy)
     {
+        castle_da_get(da);
         invalidate->proxies[invalidate->proxy++] = da->cts_proxy;
         da->cts_proxy = NULL;
     }
@@ -10813,6 +10814,7 @@ static void castle_da_cts_proxy_all_invalidate(void)
 {
     struct castle_da_cts_proxy_all_invalidate invalidate;
     struct castle_da_cts_proxy **proxies;
+    struct castle_double_array *da;
     unsigned long flags;
     int nr_das, i;
 
@@ -10845,7 +10847,11 @@ retry:
     /* Put proxies with no locks held.  If we're dropping the last reference
      * castle_free() is called, which may sleep. */
     for (i = 0; i < invalidate.proxy; i++)
+    {
+        da = invalidate.proxies[i]->da;
         castle_da_cts_proxy_put(invalidate.proxies[i]);
+        castle_da_put(da);
+    }
 
     castle_free(proxies);
 
