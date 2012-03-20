@@ -1596,7 +1596,7 @@ int castle_version_attach(c_ver_t version)
 
     if(test_and_set_bit(CV_ATTACHED_BIT, &v->flags))
     {
-        castle_printk(LOG_WARN, "version is already attached\n");
+        castle_printk(LOG_WARN, "Version %d is already attached.\n", version);
         ret = -EAGAIN;
         goto out;
     }
