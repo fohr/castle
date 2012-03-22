@@ -49,7 +49,12 @@ for kvariant in %{kvariants}
 do
     ksrc=%{_usrsrc}/kernels/%{kverrel}${kvariant:+-$kvariant}-%{_target_cpu}
     pushd _kmod_build_$kvariant
-    make KVER=%{kversion} KERNEL_DIR="${ksrc}" DEBUG=n PERF_DEBUG=n %{?_smp_mflags}
+    if [[ $kvariant == *debug* ]]; then
+        # TODO: enable PERF_DEBUG once Trac#4954 is fixed
+        make KVER=%{kversion} KERNEL_DIR="${ksrc}" DEBUG=y PERF_DEBUG=n %{?_smp_mflags}
+    else
+        make KVER=%{kversion} KERNEL_DIR="${ksrc}" DEBUG=n PERF_DEBUG=n %{?_smp_mflags}
+    fi
     popd
 done
 
