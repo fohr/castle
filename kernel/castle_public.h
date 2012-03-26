@@ -282,7 +282,7 @@ typedef struct castle_merge_config {
 #define CASTLE_CTRL_MERGE_THREAD_ATTACH      38
 #define CASTLE_CTRL_INSERT_RATE_SET          39
 #define CASTLE_CTRL_READ_RATE_SET            40
-#define CASTLE_CTRL_PROG_REGISTER            41
+#define CASTLE_CTRL_PROG_REGISTER            41 /* This is hardcoded in castle-fs.rules */
 #define CASTLE_CTRL_PROG_DEREGISTER          42
 #define CASTLE_CTRL_PROG_HEARTBEAT           43
 
