@@ -33,7 +33,10 @@
 struct castle               castle;
 struct castle_slaves        castle_slaves;
 
-struct castle_attachments    castle_attachments;
+struct castle_attachments    castle_attachments = {
+    .attachments    = {&castle_attachments.attachments, &castle_attachments.attachments}
+};
+
 struct castle_component_tree *castle_global_tree;
 
 static DEFINE_MUTEX(castle_sblk_lock);
