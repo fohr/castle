@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 35 /* last updated by BM */
+#define CASTLE_PROTOCOL_VERSION 36 /* last updated by TR */
 
 #ifdef SWIG
 #define PACKED               //override gcc intrinsics for SWIG
@@ -272,24 +272,23 @@ typedef struct castle_merge_config {
 #define CASTLE_CTRL_THREAD_PRIORITY          29
 #define CASTLE_CTRL_SLAVE_SCAN               30
 #define CASTLE_CTRL_DELETE_VERSION           31
-#define CASTLE_CTRL_VERTREE_COMPACT          32
-#define CASTLE_CTRL_COLLECTION_REATTACH      33
+#define CASTLE_CTRL_COLLECTION_REATTACH      32
 
-#define CASTLE_CTRL_MERGE_THREAD_CREATE      34
-#define CASTLE_CTRL_MERGE_THREAD_DESTROY     35
-#define CASTLE_CTRL_MERGE_START              36
-#define CASTLE_CTRL_MERGE_DO_WORK            37
-#define CASTLE_CTRL_MERGE_STOP               38
-#define CASTLE_CTRL_MERGE_THREAD_ATTACH      39
-#define CASTLE_CTRL_INSERT_RATE_SET          40
-#define CASTLE_CTRL_READ_RATE_SET            41
-#define CASTLE_CTRL_PROG_REGISTER            42
-#define CASTLE_CTRL_PROG_DEREGISTER          43
-#define CASTLE_CTRL_PROG_HEARTBEAT           44
+#define CASTLE_CTRL_MERGE_THREAD_CREATE      33
+#define CASTLE_CTRL_MERGE_THREAD_DESTROY     34
+#define CASTLE_CTRL_MERGE_START              35
+#define CASTLE_CTRL_MERGE_DO_WORK            36
+#define CASTLE_CTRL_MERGE_STOP               37
+#define CASTLE_CTRL_MERGE_THREAD_ATTACH      38
+#define CASTLE_CTRL_INSERT_RATE_SET          39
+#define CASTLE_CTRL_READ_RATE_SET            40
+#define CASTLE_CTRL_PROG_REGISTER            41
+#define CASTLE_CTRL_PROG_DEREGISTER          42
+#define CASTLE_CTRL_PROG_HEARTBEAT           43
 
-#define CASTLE_CTRL_CREATE_WITH_OPTS         45
-#define CASTLE_CTRL_VERTREE_TDP_SET          46
-#define CASTLE_CTRL_STATE_QUERY              47
+#define CASTLE_CTRL_CREATE_WITH_OPTS         44
+#define CASTLE_CTRL_VERTREE_TDP_SET          45
+#define CASTLE_CTRL_STATE_QUERY              46
 
 
 
@@ -363,11 +362,6 @@ typedef struct castle_control_cmd_destroy_vertree {
     c_da_t vertree_id;      /* IN */
     int    ret;             /* OUT */
 } cctrl_cmd_destroy_vertree_t;
-
-typedef struct castle_control_cmd_vertree_compact {
-    c_da_t vertree_id;      /* IN */
-    int    ret;             /* OUT */
-} cctrl_cmd_vertree_compact_t;
 
 typedef struct castle_control_cmd_delete_version {
     c_ver_t version;         /* IN */
@@ -546,7 +540,6 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_create_with_opts_t    create_with_opts;
         cctrl_cmd_destroy_vertree_t     destroy_vertree;
         cctrl_cmd_delete_version_t      delete_version;
-        cctrl_cmd_vertree_compact_t     vertree_compact;
         cctrl_cmd_clone_t               clone;
 
         cctrl_cmd_transfer_create_t     transfer_create;
@@ -617,8 +610,6 @@ enum {
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_DESTROY_VERTREE, cctrl_ioctl_t),
     CASTLE_CTRL_DELETE_VERSION_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_DELETE_VERSION, cctrl_ioctl_t),
-    CASTLE_CTRL_VERTREE_COMPACT_IOCTL =
-        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_VERTREE_COMPACT, cctrl_ioctl_t),
     CASTLE_CTRL_PROTOCOL_VERSION_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_PROTOCOL_VERSION, cctrl_ioctl_t),
     CASTLE_CTRL_ENVIRONMENT_SET_IOCTL =

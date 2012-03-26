@@ -1046,10 +1046,6 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                                                      &ioctl.delete_version.ret);
             break;
 
-        case CASTLE_CTRL_VERTREE_COMPACT:
-            err = -EINVAL;
-            goto err;
-
         case CASTLE_CTRL_CLONE:
             castle_control_clone( ioctl.clone.version,
                                  &ioctl.clone.ret,
