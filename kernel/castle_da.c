@@ -2841,7 +2841,7 @@ static int castle_da_l1_merge_cts_get(struct castle_double_array *da,
             castle_component_tree_del(da, ct);
             write_unlock(&da->lock);
             CASTLE_TRANSACTION_END;
-            castle_ct_put(ct, 0 /*write*/, NULL);
+            castle_ct_put(ct, READ /*rw*/, NULL);
 
             return -EAGAIN;
         }
@@ -4864,11 +4864,11 @@ static void castle_da_merge_cts_release(struct castle_da_merge *merge, int err)
     {
         /* Release all input trees. */
         for (i=0; i<merge->nr_trees; i++)
-            castle_ct_put(merge->in_trees[i], 0, NULL);
+            castle_ct_put(merge->in_trees[i], READ /*rw*/, NULL);
 
         /* Get-rid of empty out_tree. */
         if (out_tree && (atomic64_read(&merge->out_tree->item_count) == 0))
-            castle_ct_put(out_tree, 0, NULL);
+            castle_ct_put(out_tree, READ /*rw*/, NULL);
     }
     /* Merge Failed and out_tree is valid. */
     else if (out_tree)
@@ -4881,7 +4881,7 @@ static void castle_da_merge_cts_release(struct castle_da_merge *merge, int err)
         if (err == -ESHUTDOWN)
             castle_ct_dealloc(out_tree);
         else
-            castle_ct_put(out_tree, 0, NULL);
+            castle_ct_put(out_tree, READ /*rw*/, NULL);
     }
 
     merge->out_tree = NULL;
@@ -5875,7 +5875,7 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
     ret = castle_da_merge_extents_alloc(merge);
     if(ret)
     {
-        castle_ct_put(merge->out_tree, 0, NULL);
+        castle_ct_put(merge->out_tree, READ /*rw*/, NULL);
         merge->out_tree = NULL;
 
         goto error_out;
@@ -6045,7 +6045,7 @@ error_out:
         castle_da_merge_res_pool_detach(merge, ret);
         if (merge->out_tree->bloom_exists)
             castle_bloom_abort(&merge->out_tree->bloom);
-        castle_ct_put(merge->out_tree, 0, NULL);
+        castle_ct_put(merge->out_tree, READ /*rw*/, NULL);
         merge->out_tree = NULL;
     }
     castle_printk(LOG_ERROR, "%s::Failed a merge with ret=%d\n", __FUNCTION__, ret);
@@ -8433,7 +8433,7 @@ static int castle_data_exts_read(void)
  *
  * @also castle_ct_put()
  */
-void castle_ct_get(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *refs)
+void castle_ct_get(struct castle_component_tree *ct, int rw, c_ct_ext_ref_t *refs)
 {
     int i, nr_refs = 0;
 
@@ -8442,7 +8442,7 @@ void castle_ct_get(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *
 
     /* Take read reference. */
     atomic_inc(&ct->ref_count);
-    if (write)
+    if (rw == WRITE)
         /* Take write reference. */
         atomic_inc(&ct->write_ref_count);
 
@@ -8473,20 +8473,20 @@ void castle_ct_get(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *
  * Drop CT and extent references.
  *
  * @param   ct      Component Tree to drop references on
- * @param   write   1 => Get a write reference
- *                  0 => Get a read reference
- * @param   refs    *    => Pointer to extent references to drop
- *                  NULL => Don't drop extent references (not taken during get)
+ * @param   rw      READ  => Get a read reference
+ *                  WRITE => Get a write reference
+ * @param   refs    *     => Pointer to extent references to drop
+ *                  NULL  => Don't drop extent references (not taken during get)
  *
  * @also castle_ct_get()
  */
-void castle_ct_put(struct castle_component_tree *ct, int write, c_ct_ext_ref_t *refs)
+void castle_ct_put(struct castle_component_tree *ct, int rw, c_ct_ext_ref_t *refs)
 {
     int i;
 
     BUG_ON(in_atomic());
 
-    if (write)
+    if (rw == WRITE)
         /* Drop write reference. */
         atomic_dec(&ct->write_ref_count);
 
@@ -8597,7 +8597,7 @@ static void __castle_da_level0_modified_promote(struct work_struct *work)
                                                    0 /*in_tran*/,
                                                    LFS_VCT_T_INVALID);
         }
-        castle_ct_put(ct, 1 /*write*/, NULL);
+        castle_ct_put(ct, WRITE /*rw*/, NULL);
         if (create_failed)
             goto out;
     }
@@ -9322,7 +9322,7 @@ err_out:
         l->next = NULL; /* for castle_ct_put() */
         l->prev = NULL; /* for castle_ct_put() */
         ct = list_entry(l, struct castle_component_tree, da_list);
-        castle_ct_put(ct, 0 /*write*/, NULL);
+        castle_ct_put(ct, READ /*rw*/, NULL);
     }
 
     /* Clear the growing bit and return failure. */
@@ -10099,7 +10099,7 @@ static int _castle_da_rwct_create(struct castle_double_array *da,
 
 no_space:
     if (ct)
-        castle_ct_put(ct, 0 /*write*/, NULL);
+        castle_ct_put(ct, READ /*rw*/, NULL);
     return -ENOSPC;
 }
 
@@ -10242,7 +10242,7 @@ static struct castle_component_tree* castle_da_rwct_get(struct castle_double_arr
     read_lock(&da->lock);
     ct = __castle_da_rwct_get(da, cpu_index);
     BUG_ON(!ct);
-    castle_ct_get(ct, 1 /*write*/, NULL);
+    castle_ct_get(ct, WRITE /*rw*/, NULL);
     read_unlock(&da->lock);
 
     return ct;
@@ -10280,7 +10280,7 @@ again:
     debug("Number of items in component tree %d, # items %ld. Trying to add a new rwct.\n",
             ct->seq, atomic64_read(&ct->item_count));
     /* Drop reference for old CT. */
-    castle_ct_put(ct, 1 /*write*/, NULL);
+    castle_ct_put(ct, WRITE /*rw*/, NULL);
 
     /* Try creating a new CT. */
     ret = castle_da_rwct_create(da, cpu_index, 0 /* in_tran */);
@@ -10564,7 +10564,7 @@ reallocate:
             proxy_ct            = &proxy->cts[ct++];
             proxy_ct->ct        = ct_p;
             proxy_ct->ext_refs  = (c_ct_ext_ref_t *)ext_refs;
-            castle_ct_get(proxy_ct->ct, 0 /*write*/, proxy_ct->ext_refs);
+            castle_ct_get(proxy_ct->ct, READ /*rw*/, proxy_ct->ext_refs);
             VERIFY_PROXY_CT(proxy_ct->ct, da);
             ext_refs += sizeof(c_ct_ext_ref_t)
                 + proxy_ct->ext_refs->nr_refs * sizeof(((c_ct_ext_ref_t *)0)->refs[0]);
@@ -10732,7 +10732,7 @@ static inline void _castle_da_cts_proxy_put(struct castle_da_cts_proxy *proxy)
             BUG_ON(!proxy->cts[ct].pk);
         else
             BUG_ON(proxy->cts[ct].pk);
-        castle_ct_put(proxy->cts[ct].ct, 0 /*write*/, proxy->cts[ct].ext_refs);
+        castle_ct_put(proxy->cts[ct].ct, READ /*rw*/, proxy->cts[ct].ext_refs);
     }
 
     castle_free(proxy->ext_refs);
@@ -11245,7 +11245,7 @@ static void castle_da_ct_write_complete(c_bvec_t *c_bvec, int err, c_val_tup_t c
     if(err == -ENOSPC)
     {
         /* Release the reference to the tree. */
-        castle_ct_put(ct, 1 /*write*/, NULL);
+        castle_ct_put(ct, WRITE /*rw*/, NULL);
         /*
          * For now all inserts reserve space, and castle_da_write_bvec_start is not reentrant,
          * therefore err should never be -ENOSPC.
@@ -11465,7 +11465,7 @@ new_ct:
     debug("Number of items in component tree %d, # items %ld. Trying to add a new rwct.\n",
             ct->seq, atomic64_read(&ct->item_count));
     /* Drop reference for old CT. */
-    castle_ct_put(ct, 1 /*write*/, NULL);
+    castle_ct_put(ct, WRITE /*rw*/, NULL);
 
     ret = castle_da_rwct_create(da, c_bvec->cpu_index, 0 /* in_tran */);
     if((ret == 0) || (ret == -EAGAIN))
@@ -11742,7 +11742,7 @@ void castle_da_destroy_complete(struct castle_double_array *da)
             castle_component_tree_del(da, ct);
             write_unlock(&da->lock);
 
-            castle_ct_put(ct, 0 /*write*/, NULL);
+            castle_ct_put(ct, READ /*rw*/, NULL);
         }
     }
 
