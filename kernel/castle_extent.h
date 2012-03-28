@@ -47,8 +47,9 @@ typedef struct castle_extent {
     struct list_head    verify_list;    /* Used for testing.                            */
     c_ext_mask_id_t     rebuild_mask_id;/* Stores reference taken by rebuild.           */
     /* TODO: Move rebuild data to a private state structure. */
-    uint32_t            curr_rebuild_seqno;
-    uint32_t            remap_seqno;
+    uint32_t            curr_rebuild_seqno; /**< Current extent sequence ID.            */
+    uint32_t            remap_seqno;    /**< Future extent sequence ID, rebuild in
+                                             progress if > curr_rebuild_seqno.          */
     spinlock_t          shadow_map_lock;
     c_disk_chk_t        *shadow_map;
     c_ext_mask_range_t  shadow_map_range; /* Range of chunks covered by shadow map. */
