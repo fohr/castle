@@ -127,8 +127,8 @@ typedef struct castle_cache_page {
         struct list_head  list;         /**< Position on freelist/meta-extent reserve freelist. */
     };
     struct rw_semaphore   lock;
-    unsigned long         state;
-    uint16_t              count;
+    unsigned long         state;        /**< c2p state bits, see C2P_FNS macros.                */
+    uint16_t              count;        /**< Number of references to c2p (e.g. how many c2bs).  */
 #ifdef CASTLE_DEBUG
     uint32_t              id;
 #endif
