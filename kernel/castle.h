@@ -542,7 +542,7 @@ enum {
 
     CVT_TYPE_COUNTER_SET           = 0x01, /**< Counter set, c_val_tup_t.val points to the data.  */
     CVT_TYPE_COUNTER_ADD           = 0x03, /**< Counter add, c_val_tup_t.val points to the data.  */
-    CVT_TYPE_COUNTER_LOCAL_SET     = 0x05, /**< Counter set (only used for returning the response
+    CVT_TYPE_COUNTER_LOCAL_SET     = 0x05, /**< Counter set, only used for returning the response
                                               to the user. Counter stored in c_val_tup_t.counter. */
     CVT_TYPE_COUNTER_LOCAL_ADD     = 0x06, /**< Counter add. Counter stored in cvt.counter.       */
     CVT_TYPE_COUNTER_ACCUM_SET_SET = 0x07, /**< Composite counter, first counter stores count
