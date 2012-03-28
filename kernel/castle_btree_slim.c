@@ -218,9 +218,7 @@ struct slim_extern_val {
                                           4) /* for the index entry */
 #define LEAF_ENTRY_BASE_SIZE(key)        (sizeof(struct slim_leaf_entry) - sizeof *(key) + \
                                           castle_norm_key_size(key))
-#define LEAF_ENTRY_VAL_PTR(entry)        ((char *) (entry) + LEAF_ENTRY_BASE_SIZE(&(entry)->key))
-#define LEAF_ENTRY_INLINE_VAL_PTR(entry) ((struct slim_inline_val *) LEAF_ENTRY_VAL_PTR(entry))
-#define LEAF_ENTRY_EXTERN_VAL_PTR(entry) ((struct slim_extern_val *) LEAF_ENTRY_VAL_PTR(entry))
+#define LEAF_ENTRY_VAL_PTR(entry)        ((void *) ((char *) (entry) + LEAF_ENTRY_BASE_SIZE(&(entry)->key)))
 #define LEAF_ENTRY_INLINE_VAL_END(val)   ((char *) (val) + sizeof(struct slim_inline_val) + (val)->length)
 #define LEAF_ENTRY_EXTERN_VAL_END(val)   ((char *) (val) + sizeof(struct slim_extern_val))
 #define LEAF_ENTRY_IS_DISABLED(entry)    ((entry)->flags & LEAF_ENTRY_DISABLED_FLAG)
@@ -552,7 +550,7 @@ static int castle_slim_entry_get(struct castle_btree_node *node, int idx,
         {
             if (TYPE_ON_DISK(entry->type))
             {
-                struct slim_extern_val *val = LEAF_ENTRY_EXTERN_VAL_PTR(entry);
+                struct slim_extern_val *val = LEAF_ENTRY_VAL_PTR(entry);
                 const void *entry_end = LEAF_ENTRY_EXTERN_VAL_END(val);
                 castle_user_timestamp_t timestamp = 0;
                 if (LEAF_ENTRY_HAS_TIMESTAMP(entry))
@@ -561,7 +559,7 @@ static int castle_slim_entry_get(struct castle_btree_node *node, int idx,
             }
             else
             {
-                struct slim_inline_val *val = LEAF_ENTRY_INLINE_VAL_PTR(entry);
+                struct slim_inline_val *val = LEAF_ENTRY_VAL_PTR(entry);
                 const void *entry_end = LEAF_ENTRY_INLINE_VAL_END(val);
                 castle_user_timestamp_t timestamp = 0;
                 if (LEAF_ENTRY_HAS_TIMESTAMP(entry))
@@ -976,7 +974,7 @@ static void castle_slim_node_print(struct castle_btree_node *node)
 
             if (TYPE_ON_DISK(entry->type))
             {
-                struct slim_extern_val *val = LEAF_ENTRY_EXTERN_VAL_PTR(entry);
+                struct slim_extern_val *val = LEAF_ENTRY_VAL_PTR(entry);
                 const void *entry_end = LEAF_ENTRY_EXTERN_VAL_END(val);
                 castle_user_timestamp_t timestamp = 0;
                 if (LEAF_ENTRY_HAS_TIMESTAMP(entry))
@@ -986,7 +984,7 @@ static void castle_slim_node_print(struct castle_btree_node *node)
             }
             else
             {
-                struct slim_inline_val *val = LEAF_ENTRY_INLINE_VAL_PTR(entry);
+                struct slim_inline_val *val = LEAF_ENTRY_VAL_PTR(entry);
                 const void *entry_end = LEAF_ENTRY_INLINE_VAL_END(val);
                 castle_user_timestamp_t timestamp = 0;
                 if (LEAF_ENTRY_HAS_TIMESTAMP(entry))
@@ -1135,7 +1133,7 @@ static void castle_slim_node_validate(struct castle_btree_node *node)
 
             if (TYPE_ON_DISK(entry->type))
             {
-                struct slim_extern_val *val = LEAF_ENTRY_EXTERN_VAL_PTR(entry);
+                struct slim_extern_val *val = LEAF_ENTRY_VAL_PTR(entry);
 
                 if (entry->type == CVT_TYPE_MEDIUM_OBJECT &&
                     (val->length <= MAX_INLINE_VAL_SIZE ||
@@ -1150,7 +1148,7 @@ static void castle_slim_node_validate(struct castle_btree_node *node)
             }
             else
             {
-                struct slim_inline_val *val = LEAF_ENTRY_INLINE_VAL_PTR(entry);
+                struct slim_inline_val *val = LEAF_ENTRY_VAL_PTR(entry);
 
                 if (entry->type == CVT_TYPE_TOMBSTONE && val->length != 0 && (failed = 1))
                     castle_printk(LOG_ERROR, "error: found tombstone with non-zero length at position %u\n", i);
