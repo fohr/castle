@@ -5145,7 +5145,7 @@ int rebuild_init(void)
 
     rebuild_to_seqno = atomic_read(&current_rebuild_seqno);
 
-    // State is initialised here, and each time another slave goes oos. */
+    /* State is initialised here, and each time another slave goes oos. */
     castle_extents_process_state_init();
 
     return 1;
