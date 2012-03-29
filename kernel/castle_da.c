@@ -7128,7 +7128,7 @@ static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_bytes)
     castle_merge_sleep_return(merge);
 
     /* Perform the merge work. Specify hardpin if merging RWCTs. */
-    ret = castle_da_merge_unit_do(merge, nr_bytes, (merge->level == 1));
+    ret = castle_da_merge_unit_do(merge, nr_bytes, (merge->level == 1) /*hardpin*/);
 
 #ifdef CASTLE_PERF_DEBUG
     /* Output & reset cache efficiency stats. */
