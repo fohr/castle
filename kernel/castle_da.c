@@ -9039,8 +9039,10 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge,
         {
             for(i=0; i < (merge_mstore->nr_trees + merge_mstore->nr_drain_exts); i++)
             {
-                /* If this extent is data extent and marked not to merge. Don't shrink it. */
-                if(!EXT_POS_INVAL(merge->serdes.shrinkable_cep[i]))
+                /* If this extent is a data extent and marked not to merge, or there is no
+                   shrink needed, don't shrink it. */
+                if(!EXT_POS_INVAL(merge->serdes.shrinkable_cep[i]) &&
+                   (merge->serdes.shrinkable_cep[i].offset/C_CHK_SIZE) != 0)
                 {
                     castle_printk(LOG_DEBUG, "%s::calling shrink on cep "cep_fmt_str_nl,
                             __FUNCTION__, cep2str(merge->serdes.shrinkable_cep[i]));
