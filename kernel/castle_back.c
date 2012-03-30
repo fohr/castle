@@ -26,11 +26,6 @@
 #include "castle_ring.h"
 #include "castle_systemtap.h"
 
-static int castle_3016_debug = 0;
-module_param(castle_3016_debug, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
-MODULE_PARM_DESC(castle_3016_debug, "Extra BUG_ON in order to debug trac-3016.");
-
-
 DEFINE_RING_TYPES(castle, castle_request_t, castle_response_t);
 
 #define MAX_BUFFER_PAGES  (256)
@@ -498,15 +493,8 @@ static struct castle_back_stateful_op *castle_back_find_stateful_op(struct castl
         spin_unlock(&stateful_op->lock);
         return stateful_op;
     }
-
-    if(castle_3016_debug)
-    {
-        castle_printk(LOG_WARN, "Token not found 0x%x, conn=%p, stateful_op=%p, crashing.\n",
-                        token, conn, stateful_op);
-        BUG();
-    }
-
     spin_unlock(&stateful_op->lock);
+
     return NULL;
 }
 
@@ -662,12 +650,6 @@ static void _castle_back_stateful_op_timeout_check(void *data)
         {
             castle_printk(LOG_INFO, "stateful_op index %u, token %u has expired.\n",
                     i, stateful_ops[i].token);
-            if(castle_3016_debug)
-            {
-                castle_printk(LOG_ERROR, "Expiring token %u, on conn %p. #3016 debug BUG().\n",
-                    stateful_ops[i].token, conn);
-                BUG();
-            }
             /*
              * We may have already queued up this stateful_op to expire. Be sure to not
              * take a reference more than once. It is safe to increment the reference count
@@ -749,12 +731,6 @@ static int castle_back_stateful_op_queue_op(struct castle_back_stateful_op *stat
             || stateful_op->cancel_on_op_complete)
     {
         error("Token expired 0x%x\n", token);
-        if(castle_3016_debug)
-        {
-            castle_printk(LOG_WARN, "%s Token not found 0x%x, stateful_op=%p, op=%p\n",
-                    __FUNCTION__, op->req.get_chunk.token, stateful_op, op);
-            BUG();
-        }
         return -EBADFD;
     }
 
@@ -3159,12 +3135,6 @@ static void castle_back_put_chunk(void *data)
     {
         castle_printk(LOG_INFO, "%s Token not found 0x%x\n",
                 __FUNCTION__, op->req.put_chunk.token);
-        if(castle_3016_debug)
-        {
-            castle_printk(LOG_WARN, "%s Token not found 0x%x, conn=%p, op=%p\n",
-                    __FUNCTION__, op->req.get_chunk.token, conn, op);
-            BUG();
-        }
         err = -EBADFD;
         goto err0;
     }
@@ -3436,12 +3406,6 @@ static void castle_back_get_chunk(void *data)
     {
         castle_printk(LOG_INFO, "%s Token not found 0x%x\n",
                 __FUNCTION__, op->req.get_chunk.token);
-        if(castle_3016_debug)
-        {
-            castle_printk(LOG_WARN, "%s Token not found 0x%x, conn=%p, op=%p\n",
-                    __FUNCTION__, op->req.get_chunk.token, conn, op);
-            BUG();
-        }
         err = -EBADFD;
         goto err0;
     }
