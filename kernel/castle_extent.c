@@ -5828,12 +5828,11 @@ static int rebuild_required(void)
 static void initialise_extent_state(c_ext_t * ext)
 {
     int k_factor = ext->k_factor;
-    int map_size;
+    unsigned int map_size;
     int chunkno;
     int i;
 
-    map_size =
-        (ext->shadow_map_range.end-ext->shadow_map_range.start)*k_factor*sizeof(c_disk_chk_t);
+    map_size = ext->size * k_factor * sizeof(c_disk_chk_t);
     ext->shadow_map = castle_vmalloc(map_size);
     if (!ext->shadow_map)
     {
