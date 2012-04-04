@@ -41,9 +41,9 @@
 #endif
 
 
-/**********************************************************************************************
- * Cache descriptor structures (c2b & c2p), and related accessor functions.
- */
+/************************************************************************************************
+ * Cache descriptor structures (c2b & c2p), and related accessor functions.                     *
+ ************************************************************************************************/
 enum c2b_state_bits {
     C2B_uptodate,           /**< Block is uptodate within the cache.                            */
     C2B_dirty,              /**< Block is dirty within the cache.                               */
@@ -57,6 +57,9 @@ enum c2b_state_bits {
     C2B_in_flight,          /**< Block is currently in-flight (un-set in c2b_multi_io_end()).   */
     C2B_barrier,            /**< Block in write IO, and should be used as a barrier write.      */
     C2B_eio,                /**< Block failed to write to slave(s)                              */
+    C2B_t0,                 /**< Block is from a T0.                                            */
+    C2B_merge_in,           /**< Block is to be input to merge.                                 */
+    C2B_merge_out,          /**< Block is output from merge.                                    */
 };
 
 #define INIT_C2B_BITS (0)
@@ -99,6 +102,9 @@ C2B_FNS(remap, remap)
 C2B_FNS(in_flight, in_flight)
 C2B_FNS(barrier, barrier)
 C2B_FNS(eio, eio)
+C2B_FNS(t0, t0)
+C2B_FNS(merge_in, merge_in)
+C2B_FNS(merge_out, merge_out)
 
 /* c2p encapsulates multiple memory pages (in order to reduce overheads).
    NOTE: In order for this to work, c2bs must necessarily be allocated in
