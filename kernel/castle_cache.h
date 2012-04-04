@@ -15,13 +15,13 @@ typedef struct castle_cache_block {
     struct castle_cache_page **c2ps;            /**< Array of c2ps backing the buffer             */
     void                      *buffer;          /**< Linear mapping of the pages                  */
 
-    struct hlist_node          hlist;           /**< Hash-list node                               */
+    struct hlist_node          hlist;           /**< Entry in castle_cache_block_hash[]           */
     union {
-        struct list_head       free;            /**< Position on freelist.                        */
-        struct list_head       clean;           /**< Position on freelist.                        */
-        struct list_head       reserve;         /**< Position on meta-extent reserve freelist.    */
-        struct rb_node         rb_dirtytree;    /**< Per-extent dirtytree RB-node.                */
+        struct list_head       free;            /**< Position on castle_cache_block_freelist.     */
+        struct list_head       lru;             /**< Position on castle_cache_block_lru.          */
+        struct list_head       reserve;         /**< Position on castle_cache_block_reservelist.  */
     };
+    struct rb_node             rb_dirtytree;    /**< Per-extent dirtytree RB-node.                */
     c_ext_dirtytree_t         *dirtytree;       /**< Dirtytree c2b is a member of.                */
 
     struct c2b_state {

@@ -297,15 +297,23 @@ static struct kmem_cache      *castle_flush_cache = NULL;
 /* Following LIST_HEADs are protected by castle_cache_block_lru_lock. */
 static struct list_head        castle_cache_extent_dirtylists[NR_EXTENT_FLUSH_PRIOS];
                                                                     /**< Lists of dirtytrees      */
-static               LIST_HEAD(castle_cache_cleanlist);             /**< Clean c2bs               */
 static atomic_t                castle_cache_extent_dirtylist_sizes[NR_EXTENT_FLUSH_PRIOS];
                                                                     /**< Number of dirty extents  */
-static atomic_t                castle_cache_cleanlist_size;         /**< Blocks on the cleanlist  */
-static atomic_t                castle_cache_cleanlist_softpin_size; /**< Softpin blks on cleanlist*/
-static atomic_t                castle_cache_block_victims;          /**< #clean blocks evicted    */
-static atomic_t                castle_cache_softpin_block_victims;  /**< #softpin blocks evicted  */
-static atomic_t                castle_cache_dirty_pages;
-static atomic_t                castle_cache_clean_pages;
+
+static               LIST_HEAD(castle_cache_block_lru);             /**< List of all c2bs in LRU  */
+static atomic_t                castle_cache_block_lru_size;         /**< Number of c2bs in LRU    */
+
+static atomic_t                castle_cache_dirty_blks;             /**< Dirty blocks in cache    */
+static atomic_t                castle_cache_clean_blks;             /**< Clean blocks in cache    */
+static atomic_t                castle_cache_clean_softpin_blks;     /**< Clean softpin blocks     */
+
+static atomic_t                castle_cache_dirty_pgs;              /**< Dirty pages in cache     */
+static atomic_t                castle_cache_clean_pgs;              /**< Clean pages in cache     */
+static atomic_t                castle_cache_clean_softpin_pgs;      /**< Clean softpin pages      */
+
+static atomic_t                castle_cache_block_victims;          /**< Clean blocks evicted     */
+static atomic_t                castle_cache_softpin_block_victims;  /**< Clean softpins evicted   */
+
 
 /* Extent related stats */
 typedef struct castle_cache_extent_stats {
@@ -397,16 +405,16 @@ void castle_cache_stats_print(int verbose)
 
     if (verbose)
         castle_printk(LOG_PERF, "castle_cache_stats_timer_tick: %d, %d, %d, %d, %d\n",
-            atomic_read(&castle_cache_dirty_pages),
-            atomic_read(&castle_cache_clean_pages),
+            atomic_read(&castle_cache_dirty_pgs),
+            atomic_read(&castle_cache_clean_pgs),
             castle_cache_page_freelist_size * PAGES_PER_C2P,
             reads, writes);
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_CLEAN_PGS_ID,
-                       atomic_read(&castle_cache_clean_pages), 0);
+                       atomic_read(&castle_cache_clean_pgs), 0);
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_DIRTY_PGS_ID,
-                       atomic_read(&castle_cache_dirty_pages), 0);
+                       atomic_read(&castle_cache_dirty_pgs), 0);
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_FREE_PGS_ID,
                        castle_cache_page_freelist_size * PAGES_PER_C2P, 0);
@@ -415,7 +423,7 @@ void castle_cache_stats_print(int verbose)
                        atomic_read(&castle_cache_page_reservelist_size), 0);
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_CLEAN_BLKS_ID,
-                       atomic_read(&castle_cache_cleanlist_size), 0);
+                       atomic_read(&castle_cache_clean_blks), 0);
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_FREE_BLKS_ID,
                        castle_cache_block_freelist_size, 0);
@@ -424,7 +432,7 @@ void castle_cache_stats_print(int verbose)
                        atomic_read(&castle_cache_block_reservelist_size), 0);
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_SOFTPIN_BLKS_ID,
-                       atomic_read(&castle_cache_cleanlist_softpin_size), 0);
+                       atomic_read(&castle_cache_clean_softpin_blks), 0);
     count1 = atomic_read(&castle_cache_block_victims);
     atomic_sub(count1, &castle_cache_block_victims);
     castle_trace_cache(TRACE_VALUE, TRACE_CACHE_BLOCK_VICTIMS_ID, count1, 0);
@@ -595,8 +603,8 @@ static void dirty_c2p(c2_page_t *c2p)
 #endif
     if(!test_set_c2p_dirty(c2p))
     {
-        atomic_sub(PAGES_PER_C2P, &castle_cache_clean_pages);
-        atomic_add(PAGES_PER_C2P, &castle_cache_dirty_pages);
+        atomic_sub(PAGES_PER_C2P, &castle_cache_clean_pgs);
+        atomic_add(PAGES_PER_C2P, &castle_cache_dirty_pgs);
     }
 }
 
@@ -604,8 +612,8 @@ static void clean_c2p(c2_page_t *c2p)
 {
     if(test_clear_c2p_dirty(c2p))
     {
-        atomic_sub(PAGES_PER_C2P, &castle_cache_dirty_pages);
-        atomic_add(PAGES_PER_C2P, &castle_cache_clean_pages);
+        atomic_sub(PAGES_PER_C2P, &castle_cache_dirty_pgs);
+        atomic_add(PAGES_PER_C2P, &castle_cache_clean_pgs);
     }
 }
 
@@ -874,7 +882,7 @@ void castle_cache_block_softpin(c2_block_t *c2b)
     /* Increment softpin cleanlist if it wasn't already softpinnined and
      * if it is a clean block.  We use a stored state so we don't race! */
     if ((p_old->softpin_cnt == 0) && !test_bit(C2B_dirty, p_old))
-        atomic_inc(&castle_cache_cleanlist_softpin_size);
+        atomic_inc(&castle_cache_clean_softpin_blks);
 }
 
 /**
@@ -911,7 +919,7 @@ static int _unsoftpin_c2b(c2_block_t *c2b, int clear)
         /* Decrement softpin cleanlist if we decremented the last
          * softpin hold on a clean block. */
         if ((p_new->softpin_cnt == 0) && !test_bit(C2B_dirty, p_old))
-            atomic_dec(&castle_cache_cleanlist_softpin_size);
+            atomic_dec(&castle_cache_clean_softpin_blks);
         else
             return p_new->softpin_cnt;
     }
@@ -1129,10 +1137,10 @@ void castle_cache_dirtytree_demote(c_ext_dirtytree_t *dirtytree)
  */
 void dirty_c2b(c2_block_t *c2b)
 {
-    unsigned long flags;
     int i, nr_c2ps;
 
-    BUG_ON(!c2b_write_locked(c2b));
+    BUG_ON(!c2b_write_locked(c2b)); /* ensures we are serialised */
+
     /* With overlapping c2bs we cannot rely on this c2b being dirty.
      * We have to dirty all c2ps. */
     nr_c2ps = castle_cache_pages_to_c2ps(c2b->nr_pages);
@@ -1142,22 +1150,12 @@ void dirty_c2b(c2_block_t *c2b)
     /* Place c2b on per-extent dirtytree if it is not already dirty. */
     if (!c2b_dirty(c2b))
     {
-        spin_lock_irqsave(&castle_cache_block_lru_lock, flags);
-
-        /* Don't continue if we've raced another thread. */
-        if (c2b_dirty(c2b))
-        {
-            spin_unlock_irqrestore(&castle_cache_block_lru_lock, flags);
-            return;
-        }
-
         /* Remove from cleanlist and do cachelist accounting. */
-        list_del(&c2b->clean);
-        BUG_ON(atomic_dec_return(&castle_cache_cleanlist_size) < 0);
-        set_c2b_dirty(c2b);
+        BUG_ON(atomic_dec_return(&castle_cache_clean_blks) < 0);
         if (c2b_softpin(c2b))
-            atomic_dec(&castle_cache_cleanlist_softpin_size);
-        spin_unlock_irqrestore(&castle_cache_block_lru_lock, flags);
+            atomic_dec(&castle_cache_clean_softpin_blks);
+        set_c2b_dirty(c2b);
+        atomic_inc(&castle_cache_dirty_blks);
 
         /* Place dirty c2b onto per-extent dirtytree. */
         c2_dirtytree_insert(c2b);
@@ -1175,13 +1173,17 @@ void dirty_c2b(c2_block_t *c2b)
  * - Update cleanlist accounting.
  * - Handles special case of remap c2bs which can have a clean c2b but dirty c2ps
  *
+ * NOTE: This function is not serialised in any way.  It's possible that two
+ *       threads could race to clean a c2b, which would cause problems with
+ *       dirtytrees and accounting.  Our caching strategy relies on the consumer
+ *       doing "the right thing".
+ *
  * @also castle_cache_block_hash_insert()
  * @also c2_dirtytree_remove()
  * @also I/O callback handlers (callers)
  */
 void clean_c2b(c2_block_t *c2b)
 {
-    unsigned long flags;
     int i, nr_c2ps;
 
     BUG_ON(!c2b_locked(c2b));
@@ -1199,14 +1201,12 @@ void clean_c2b(c2_block_t *c2b)
     c2_dirtytree_remove(c2b);
 
     /* Insert onto cleanlist and do cache list accounting. */
-    spin_lock_irqsave(&castle_cache_block_lru_lock, flags);
     BUG_ON(atomic_read(&c2b->count) == 0);
-    list_add_tail(&c2b->clean, &castle_cache_cleanlist);
-    atomic_inc(&castle_cache_cleanlist_size);
+    atomic_inc(&castle_cache_clean_blks);
     if (c2b_softpin(c2b))
-        atomic_inc(&castle_cache_cleanlist_softpin_size);
+        atomic_inc(&castle_cache_clean_softpin_blks);
     clear_c2b_dirty(c2b);
-    spin_unlock_irqrestore(&castle_cache_block_lru_lock, flags);
+    BUG_ON(atomic_dec_return(&castle_cache_dirty_blks) < 0);
 }
 
 void update_c2b(c2_block_t *c2b)
@@ -2445,7 +2445,7 @@ static inline void castle_cache_c2p_put(c2_page_t *c2p, struct list_head *accumu
             atomic_sub(PAGES_PER_C2P, &castle_cache_logical_ext_pages);
         debug("Freeing c2p for cep="cep_fmt_str_nl, cep2str(c2p->cep));
         BUG_ON(c2p_dirty(c2p));
-        atomic_sub(PAGES_PER_C2P, &castle_cache_clean_pages);
+        atomic_sub(PAGES_PER_C2P, &castle_cache_clean_pgs);
         hlist_del(&c2p->hlist);
         list_add(&c2p->list, accumulator);
     }
@@ -2485,7 +2485,7 @@ void put_c2b_and_demote(c2_block_t *c2b)
 {
     spin_lock_irq(&castle_cache_block_lru_lock);
     if(!c2b_dirty(c2b)) {
-        list_move(&c2b->clean, &castle_cache_cleanlist);
+        list_move(&c2b->lru, &castle_cache_block_lru);
     }
     spin_unlock_irq(&castle_cache_block_lru_lock);
     put_c2b(c2b);
@@ -2530,7 +2530,7 @@ static inline c2_block_t* _castle_cache_block_hash_get(c_ext_pos_t cep,
              * reference for them so it doesn't get removed. */
             spin_lock_irq(&castle_cache_block_lru_lock);
             if (!c2b_dirty(c2b))
-                list_move_tail(&c2b->clean, &castle_cache_cleanlist);
+                list_move_tail(&c2b->lru, &castle_cache_block_lru);
             spin_unlock_irq(&castle_cache_block_lru_lock);
         }
         else
@@ -2542,7 +2542,7 @@ static inline c2_block_t* _castle_cache_block_hash_get(c_ext_pos_t cep,
                  * If clean: demote so it gets reused next
                  * If dirty: don't touch it - let LRU mechanism handle it */
                 if (!c2b_dirty(c2b))
-                    list_move(&c2b->clean, &castle_cache_cleanlist);
+                    list_move(&c2b->lru, &castle_cache_block_lru);
             }
             spin_unlock_irq(&castle_cache_block_lru_lock);
             /* demote callers do not need a reference to the block */
@@ -2625,11 +2625,12 @@ static int castle_cache_block_hash_insert(c2_block_t *c2b, int transient)
     spin_lock_irq(&castle_cache_block_lru_lock);
     write_unlock(&castle_cache_block_hash_lock);
     if (transient)
-        list_add(&c2b->clean, &castle_cache_cleanlist);
+        list_add(&c2b->lru, &castle_cache_block_lru);
     else
-        list_add_tail(&c2b->clean, &castle_cache_cleanlist);
+        list_add_tail(&c2b->lru, &castle_cache_block_lru);
     /* Cleanlist accounting. */
-    atomic_inc(&castle_cache_cleanlist_size);
+    atomic_inc(&castle_cache_block_lru_size);
+    atomic_inc(&castle_cache_clean_blks);
     spin_unlock_irq(&castle_cache_block_lru_lock);
 
 out:
@@ -2899,7 +2900,7 @@ static int castle_cache_pages_get(c_ext_pos_t cep,
         }
         else
         {
-            atomic_add(PAGES_PER_C2P, &castle_cache_clean_pages);
+            atomic_add(PAGES_PER_C2P, &castle_cache_clean_pgs);
             if (LOGICAL_EXTENT(cep.ext_id))
                 atomic_add(PAGES_PER_C2P, &castle_cache_logical_ext_pages);
         }
@@ -3139,15 +3140,15 @@ static int castle_cache_block_hash_clean(void)
      * as much as we can to the freelist so the active flush can progress. */
     if (likely(current != castle_cache_flush_thread))
     {
-        clean = atomic_read(&castle_cache_clean_pages);
-        dirty = atomic_read(&castle_cache_dirty_pages);
+        clean = atomic_read(&castle_cache_clean_pgs);
+        dirty = atomic_read(&castle_cache_dirty_pgs);
         if (clean < (clean + dirty) / 10)
             return 2;
     }
 
     /* Victimise softpin blocks if they make up more than half the cleanlist. */
-    clean   = atomic_read(&castle_cache_cleanlist_size);
-    softpin = atomic_read(&castle_cache_cleanlist_softpin_size);
+    clean   = atomic_read(&castle_cache_clean_blks);
+    softpin = atomic_read(&castle_cache_clean_softpin_blks);
     /* Sanitise the softpin count as it is possible the counter could go
      * negative due to a transitory race dirtying a 'being-softpinned' c2b. */
     if (softpin < 0)
@@ -3165,35 +3166,37 @@ static int castle_cache_block_hash_clean(void)
 
     do
     {
-        list_for_each_safe(lh, th, &castle_cache_cleanlist)
+        list_for_each_safe(lh, th, &castle_cache_block_lru)
         {
-            c2b = list_entry(lh, c2_block_t, clean);
+            c2b = list_entry(lh, c2_block_t, lru);
             nr_pages += c2b->nr_pages;
 
             /* Blocks that match the following criteria are evicted:
              *
-             * (1) Not actively referenced by cache consumers (e.g. only non-busy blocks).
-             * (2) Softpin blocks are prioritised (see comment above).
-             * (3) Are marked as blocks that sit at the beginning of a prefetch window for an extent
+             * (1) Not dirty.
+             * (2) Not actively referenced by cache consumers (e.g. only non-busy blocks).
+             * (3) Softpin blocks are prioritised (see comment above).
+             * (4) Are marked as blocks that sit at the beginning of a prefetch window for an extent
              *     that no longer exists.  This allows us to correctly evict softpinned blocks from
              *     extents that have now been removed - by targeting the start of window block we
              *     unpin and demote those other blocks from the window.
-             * (4) Must be transient or from an evictable extent (i.e. not from the super, micro or
+             * (5) Must be transient or from an evictable extent (i.e. not from the super, micro or
              *     mstore extents).  @TODO longer term solution: pools. */
-            if (!c2b_busy(c2b, 0) /* (1) */
-                    && (victimise_softpin || !c2b_softpin(c2b) /* (2) */
-                        || (c2b_windowstart(c2b) && !castle_extent_exists(c2b->cep.ext_id))) /*(3)*/
-                    && (c2b_transient(c2b) || EVICTABLE_EXTENT(c2b->cep.ext_id))) /* (4) */
+            if (!c2b_dirty(c2b) /* (1) */
+                    && !c2b_busy(c2b, 0) /* (2) */
+                    && (victimise_softpin || !c2b_softpin(c2b) /* (3) */
+                        || (c2b_windowstart(c2b) && !castle_extent_exists(c2b->cep.ext_id))) /*(4)*/
+                    && (c2b_transient(c2b) || EVICTABLE_EXTENT(c2b->cep.ext_id))) /* (5) */
             {
                 debug("Found a %svictim.\n", c2b_softpin(c2b) ? "softpin " : "");
 
                 hlist_del(&c2b->hlist);
-                list_del(&c2b->clean);
+                list_del(&c2b->lru);
                 hlist_add_head(&c2b->hlist, &victims);
 
                 /* Cleanlist accounting and victimisation stats. */
-                BUG_ON(atomic_read(&castle_cache_cleanlist_size) == 0);
-                atomic_dec(&castle_cache_cleanlist_size);
+                BUG_ON(atomic_dec_return(&castle_cache_block_lru_size) < 0);
+                BUG_ON(atomic_dec_return(&castle_cache_clean_blks) < 0);
                 if (c2b_softpin(c2b))
                 {
                     clearsoftpin_c2b(c2b);
@@ -3209,15 +3212,15 @@ static int castle_cache_block_hash_clean(void)
                    at the end of the list. This will prevent the clean list accumulating
                    unevictable blocks at the start, and this function having to go
                    through them every time. */
-                list_del(&c2b->clean);
-                list_add(&c2b->clean, &unevictable);
+                list_del(&c2b->lru);
+                list_add(&c2b->lru, &unevictable);
             }
 
             if (nr_victims >= BATCH_FREE)
                 break;
         }
         /* Put all the unevictable pages back on the clean list, but at the tail of the list. */
-        list_splice_init(&unevictable, castle_cache_cleanlist.prev);
+        list_splice_init(&unevictable, castle_cache_block_lru.prev);
     }
     /* If we weren't able to clean BATCH_FREE c2bs to the freelist then begin
      * victimising softpin c2bs if we have not already done so. */
@@ -3271,9 +3274,10 @@ int castle_cache_block_destroy(c2_block_t *c2b)
     {
         spin_lock_irq(&castle_cache_block_lru_lock);
         hlist_del(&c2b->hlist);
-        list_del(&c2b->clean);
+        list_del(&c2b->lru);
         /* Update bookkeeping info. */
-        atomic_dec(&castle_cache_cleanlist_size);
+        BUG_ON(atomic_dec_return(&castle_cache_block_lru_size) < 0);
+        BUG_ON(atomic_dec_return(&castle_cache_clean_blks) < 0);
         if (c2b_softpin(c2b))
         {
             clearsoftpin_c2b(c2b);
@@ -3384,7 +3388,7 @@ static void castle_cache_freelists_grow(int nr_c2bs, int nr_pages)
         wait_event(castle_cache_flush_wq,
                 (atomic_read(&castle_cache_flush_seq) != flush_seq));
         debug("We think there is some free memory now (clean pages: %d).\n",
-                atomic_read(&castle_cache_clean_pages));
+                atomic_read(&castle_cache_clean_pgs));
     }
     debug("Grown the list.\n");
 }
@@ -4730,8 +4734,8 @@ void castle_cache_debug(void)
     if(!castle_cache_debug_counts)
         return;
 
-    dirty = atomic_read(&castle_cache_dirty_pages);
-    clean = atomic_read(&castle_cache_clean_pages);
+    dirty = atomic_read(&castle_cache_dirty_pgs);
+    clean = atomic_read(&castle_cache_clean_pgs);
     free  = PAGES_PER_C2P * castle_cache_page_freelist_size;
 
     diff = castle_cache_size - (dirty + clean + free);
@@ -5221,11 +5225,11 @@ static int castle_cache_flush(void *unused)
         /* Wait until we have a worthwhile number of pages to flush.
          * This limits us to a min of 10 MIN_BATCHES/s. */
         wait_event_interruptible_timeout(castle_cache_flush_wq,
-                exiting || (atomic_read(&castle_cache_dirty_pages)
+                exiting || (atomic_read(&castle_cache_dirty_pgs)
                     - target_dirty_pgs >= MIN_FLUSH_SIZE),
                 HZ/MIN_FLUSH_FREQ);
 
-        dirty_pgs = atomic_read(&castle_cache_dirty_pages);
+        dirty_pgs = atomic_read(&castle_cache_dirty_pgs);
 
         /* Exit if we've finished waiting for all outstanding IOs. */
         if (unlikely(exiting))
@@ -5459,20 +5463,22 @@ static void castle_cache_hashes_fini(void)
 #endif
             }
             BUG_ON(c2b_dirty(c2b));
-            list_del(&c2b->clean);
+            list_del(&c2b->lru);
 
             /* Cleanlist accounting. */
-            atomic_dec(&castle_cache_cleanlist_size);
+            atomic_dec(&castle_cache_block_lru_size);
+            atomic_dec(&castle_cache_clean_blks);
             if (c2b_softpin(c2b))
-                atomic_dec(&castle_cache_cleanlist_softpin_size);
+                atomic_dec(&castle_cache_clean_softpin_blks);
 
             castle_cache_block_free(c2b);
         }
     }
 
     /* Ensure cleanlist accounting is in order. */
-    BUG_ON(atomic_read(&castle_cache_cleanlist_size) != 0);
-    BUG_ON(atomic_read(&castle_cache_cleanlist_softpin_size) != 0);
+    BUG_ON(atomic_read(&castle_cache_dirty_blks) != 0);
+    BUG_ON(atomic_read(&castle_cache_clean_blks) != 0);
+    BUG_ON(atomic_read(&castle_cache_clean_softpin_blks) != 0);
     BUG_ON(atomic_read(&c2_pref_active_window_size) != 0);
     BUG_ON(c2_pref_total_window_size != 0);
     BUG_ON(!RB_EMPTY_ROOT(&c2p_rb_root));
@@ -6128,14 +6134,23 @@ int castle_cache_init(void)
         INIT_LIST_HEAD(&castle_cache_extent_dirtylists[j]);
         atomic_set(&castle_cache_extent_dirtylist_sizes[j], 0);
     }
-    atomic_set(&castle_cache_dirty_pages, 0);
-    atomic_set(&castle_cache_clean_pages, 0);
-    atomic_set(&castle_cache_flush_seq, 0);
-    atomic_set(&castle_cache_cleanlist_size, 0);
-    atomic_set(&castle_cache_cleanlist_softpin_size, 0);
+
+    atomic_set(&castle_cache_block_lru_size, 0);
+
+    atomic_set(&castle_cache_dirty_blks, 0);
+    atomic_set(&castle_cache_clean_blks, 0);
+    atomic_set(&castle_cache_clean_softpin_blks, 0);
+
+    atomic_set(&castle_cache_dirty_pgs, 0);
+    atomic_set(&castle_cache_clean_pgs, 0);
+    atomic_set(&castle_cache_clean_softpin_pgs, 0);
+
     atomic_set(&castle_cache_block_victims, 0);
     atomic_set(&castle_cache_softpin_block_victims, 0);
+
+    atomic_set(&castle_cache_flush_seq, 0);
     atomic_set(&c2_pref_active_window_size, 0);
+
     atomic_set(&merge_misses, 0);
     atomic_set(&merge_hits, 0);
     atomic_set(&non_merge_misses, 0);
