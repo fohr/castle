@@ -45,19 +45,18 @@
  * Cache descriptor structures (c2b & c2p), and related accessor functions.
  */
 enum c2b_state_bits {
-    C2B_uptodate,           /**< Block is uptodate within the cache.                              */
-    C2B_dirty,              /**< Block is dirty within the cache.                                 */
-    C2B_flushing,           /**< Block is being flushed out to disk.                              */
-    C2B_transient,
-    C2B_prefetch,           /**< Block is part of an active prefetch window.                      */
-    C2B_prefetched,         /**< Block was prefetched.                                            */
-    C2B_windowstart,        /**< Block is the first chunk of an active prefetch window.           */
-    C2B_bio_error,          /**< Block had at least one bio I/O error.                            */
-    C2B_no_resubmit,        /**< Block must not be resubmitted after I/O error.                   */
-    C2B_remap,              /**< Block is for a remap.                                            */
-    C2B_in_flight,          /**< Block is currently in-flight (un-set in c2b_multi_io_end()).     */
-    C2B_barrier,            /**< Block in write IO, and should be used as a barrier write.        */
-    C2B_eio,                /**< Block failed to write to slave(s)                                */
+    C2B_uptodate,           /**< Block is uptodate within the cache.                            */
+    C2B_dirty,              /**< Block is dirty within the cache.                               */
+    C2B_flushing,           /**< Block is being flushed out to disk.                            */
+    C2B_prefetch,           /**< Block is part of an active prefetch window.                    */
+    C2B_prefetched,         /**< Block was prefetched.                                          */
+    C2B_windowstart,        /**< Block is the first chunk of an active prefetch window.         */
+    C2B_bio_error,          /**< Block had at least one bio I/O error.                          */
+    C2B_no_resubmit,        /**< Block must not be resubmitted after I/O error.                 */
+    C2B_remap,              /**< Block is for a remap.                                          */
+    C2B_in_flight,          /**< Block is currently in-flight (un-set in c2b_multi_io_end()).   */
+    C2B_barrier,            /**< Block in write IO, and should be used as a barrier write.      */
+    C2B_eio,                /**< Block failed to write to slave(s)                              */
 };
 
 #define INIT_C2B_BITS (0)
@@ -90,8 +89,6 @@ C2B_FNS(dirty, dirty)
 C2B_TAS_FNS(dirty, dirty)
 C2B_FNS(flushing, flushing)
 C2B_TAS_FNS(flushing, flushing)
-C2B_FNS(transient, transient)
-C2B_TAS_FNS(transient, transient)
 C2B_FNS(prefetch, prefetch)
 C2B_TAS_FNS(prefetch, prefetch)
 C2B_FNS(prefetched, prefetched)
@@ -2600,7 +2597,7 @@ static inline int castle_cache_block_hash_demote(c_ext_pos_t cep,
  * @return >0   on success
  * @return  0   on failure
  */
-static int castle_cache_block_hash_insert(c2_block_t *c2b, int transient)
+static int castle_cache_block_hash_insert(c2_block_t *c2b)
 {
     int idx, success;
 
@@ -2624,10 +2621,7 @@ static int castle_cache_block_hash_insert(c2_block_t *c2b, int transient)
     BUG_ON(c2b_softpin(c2b));
     spin_lock_irq(&castle_cache_block_lru_lock);
     write_unlock(&castle_cache_block_hash_lock);
-    if (transient)
-        list_add(&c2b->lru, &castle_cache_block_lru);
-    else
-        list_add_tail(&c2b->lru, &castle_cache_block_lru);
+    list_add_tail(&c2b->lru, &castle_cache_block_lru);
     /* Cleanlist accounting. */
     atomic_inc(&castle_cache_block_lru_size);
     atomic_inc(&castle_cache_clean_blks);
@@ -3180,13 +3174,13 @@ static int castle_cache_block_hash_clean(void)
              *     that no longer exists.  This allows us to correctly evict softpinned blocks from
              *     extents that have now been removed - by targeting the start of window block we
              *     unpin and demote those other blocks from the window.
-             * (5) Must be transient or from an evictable extent (i.e. not from the super, micro or
-             *     mstore extents).  @TODO longer term solution: pools. */
+             * (5) Must be from an evictable extent (i.e. not from the super,
+             *     micro or mstore extents).  @TODO longer term solution: pools. */
             if (!c2b_dirty(c2b) /* (1) */
                     && !c2b_busy(c2b, 0) /* (2) */
                     && (victimise_softpin || !c2b_softpin(c2b) /* (3) */
                         || (c2b_windowstart(c2b) && !castle_extent_exists(c2b->cep.ext_id))) /*(4)*/
-                    && (c2b_transient(c2b) || EVICTABLE_EXTENT(c2b->cep.ext_id))) /* (5) */
+                    && EVICTABLE_EXTENT(c2b->cep.ext_id)) /* (5) */
             {
                 debug("Found a %svictim.\n", c2b_softpin(c2b) ? "softpin " : "");
 
@@ -3458,9 +3452,12 @@ out:
     return ret;
 }
 
-static c2_block_t* _castle_cache_block_get(c_ext_pos_t cep,
-                                           int nr_pages,
-                                           int transient)
+/**
+ * Get block starting at cep, size nr_pages.
+ *
+ * @return  Block matching cep, nr_pages.
+ */
+c2_block_t* castle_cache_block_get(c_ext_pos_t cep, int nr_pages)
 {
     int grown_block_freelist = 0, grown_page_freelist = 0;
 #ifdef CASTLE_PERF_DEBUG
@@ -3545,7 +3542,7 @@ static c2_block_t* _castle_cache_block_get(c_ext_pos_t cep,
         get_c2b(c2b);
         /* Try to insert into the hash, can fail if it is already there */
         debug("Trying to insert\n");
-        if (!castle_cache_block_hash_insert(c2b, transient))
+        if (!castle_cache_block_hash_insert(c2b))
         {
             put_c2b(c2b);
             castle_cache_block_free(c2b);
@@ -3553,9 +3550,6 @@ static c2_block_t* _castle_cache_block_get(c_ext_pos_t cep,
         else
         {
             BUG_ON(c2b->nr_pages != nr_pages);
-            /* Mark c2b as transient, if required. */
-            if (transient)
-                set_c2b_transient(c2b);
 
             goto out;
         }
@@ -3581,16 +3575,6 @@ out:
 #endif
 
     return c2b;
-}
-
-/**
- * Get block starting at cep, size nr_pages.
- *
- * @return  Block matching cep, nr_pages.
- */
-c2_block_t* castle_cache_block_get(c_ext_pos_t cep, int nr_pages)
-{
-    return _castle_cache_block_get(cep, nr_pages, 0 /*transient*/);
 }
 
 /**
