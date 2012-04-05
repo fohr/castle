@@ -5466,6 +5466,7 @@ static void castle_cache_hashes_fini(void)
     }
 
     /* Ensure cache list accounting is in order. */
+    BUG_ON(atomic_read(&castle_cache_block_lru_size) != 0);
     BUG_ON(atomic_read(&castle_cache_dirty_blks) != 0);
     BUG_ON(atomic_read(&castle_cache_clean_blks) != 0);
     BUG_ON(atomic_read(&castle_cache_clean_softpin_blks) != 0);
