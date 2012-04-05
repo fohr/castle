@@ -863,10 +863,10 @@ void castle_cache_block_unhardpin(c2_block_t *c2b)
 }
 
 /**
- * Increment c2b softpin count and do cleanlist accounting.
+ * Increment c2b softpin count and do cache list accounting.
  *
  * - Atomically increment softpin count
- * - Do softpin cleanlist accounting if necessary
+ * - Do clean softpin block accounting, if necessary
  *
  * @also c2_pref_window_submit() (our primary caller)
  */
@@ -882,14 +882,14 @@ void castle_cache_block_softpin(c2_block_t *c2b)
         p_new->softpin_cnt++;
     } while (cmpxchg((unsigned long*)&c2b->state, old, new) != old);
 
-    /* Increment softpin cleanlist if it wasn't already softpinnined and
-     * if it is a clean block.  We use a stored state so we don't race! */
+    /* Increment clean block softpin count if it wasn't already softpinnined
+     * and if it is a clean block.  We use a stored state so we don't race! */
     if ((p_old->softpin_cnt == 0) && !test_bit(C2B_dirty, p_old))
         atomic_inc(&castle_cache_clean_softpin_blks);
 }
 
 /**
- * Decrement or clear c2b softpin count and do cleanlist accounting.
+ * Decrement or clear c2b softpin count and do cache list accounting.
  *
  * @param clear Set clears count, otherwise decrements
  *
@@ -902,7 +902,7 @@ static int _unsoftpin_c2b(c2_block_t *c2b, int clear)
         /* The block is currently softpinned but this could change while
          * we're attempting to either clear or decrement the count.  If
          * this happens we must detect it and return immediately, without
-         * making any adjustments to the softpin cleanlist. */
+         * making any adjustments to the clean block softpin count. */
 
         unsigned long old, new;
         struct c2b_state *p_old, *p_new;
@@ -919,7 +919,7 @@ static int _unsoftpin_c2b(c2_block_t *c2b, int clear)
                 return 0;
         } while (cmpxchg((unsigned long*)&c2b->state, old, new) != old);
 
-        /* Decrement softpin cleanlist if we decremented the last
+        /* Decrement clean block softpin count if we decremented the last
          * softpin hold on a clean block. */
         if ((p_new->softpin_cnt == 0) && !test_bit(C2B_dirty, p_old))
             atomic_dec(&castle_cache_clean_softpin_blks);
@@ -931,10 +931,10 @@ static int _unsoftpin_c2b(c2_block_t *c2b, int clear)
 }
 
 /**
- * Decrement c2b softpin count and do cleanlist accounting.
+ * Decrement c2b softpin count and do cache list accounting.
  *
  * - Decrement softpin count
- * - Does cleanlist accounting if necessary
+ * - Does cache list accounting if necessary
  */
 int castle_cache_block_unsoftpin(c2_block_t *c2b)
 {
@@ -942,10 +942,10 @@ int castle_cache_block_unsoftpin(c2_block_t *c2b)
 }
 
 /**
- * Unsoftpin a c2b from the cache and do cleanlist accounting.
+ * Unsoftpin a c2b from the cache and do cache list accounting.
  *
  * - Zeroes the c2b softpin count
- * - Does cleanlist accounting (necessary if block is clean)
+ * - Does cache list accounting (necessary if block is clean)
  */
 static void clearsoftpin_c2b(c2_block_t *c2b)
 {
@@ -1129,9 +1129,7 @@ void castle_cache_dirtytree_demote(c_ext_dirtytree_t *dirtytree)
  * @param c2b   c2b to mark as dirty.
  *
  * - Insert c2b into per-extent RB-tree dirtytree
- * - Move c2b from cleanlist to dirtytree
- *   (also occurs when we free blocks in hash_clean())
- * - Update cleanlist accounting.
+ * - Update cache list accounting.
  *
  * By maintaining a per-extent list of dirty c2bs we can flush dirty data out
  * in a contiguous fashion to reduce disk seeks.
@@ -1153,7 +1151,7 @@ void dirty_c2b(c2_block_t *c2b)
     /* Place c2b on per-extent dirtytree if it is not already dirty. */
     if (!c2b_dirty(c2b))
     {
-        /* Remove from cleanlist and do cachelist accounting. */
+        /* Do cachelist accounting. */
         BUG_ON(atomic_dec_return(&castle_cache_clean_blks) < 0);
         if (c2b_softpin(c2b))
             atomic_dec(&castle_cache_clean_softpin_blks);
@@ -1166,14 +1164,12 @@ void dirty_c2b(c2_block_t *c2b)
 }
 
 /**
- * Mark c2b and associated c2ps clean and place on cleanlist.
+ * Mark c2b and associated c2ps clean.
  *
  * @param c2b   c2b to mark as clean.
  *
  * - Remove c2b from per-extent RB-tree dirtytree
- * - Place c2b onto cache cleanlist
- *   (also occurs in hash_insert() for new c2bs)
- * - Update cleanlist accounting.
+ * - Update cache list accounting.
  * - Handles special case of remap c2bs which can have a clean c2b but dirty c2ps
  *
  * NOTE: This function is not serialised in any way.  It's possible that two
@@ -1203,7 +1199,7 @@ void clean_c2b(c2_block_t *c2b)
     /* Remove from per-extent dirtytree. */
     c2_dirtytree_remove(c2b);
 
-    /* Insert onto cleanlist and do cache list accounting. */
+    /* Do cache list accounting. */
     BUG_ON(atomic_read(&c2b->count) == 0);
     atomic_inc(&castle_cache_clean_blks);
     if (c2b_softpin(c2b))
@@ -2596,7 +2592,7 @@ static inline int castle_cache_block_hash_demote(c_ext_pos_t cep,
  * Insert a clean block into the hash.
  *
  * - Insert the block into the hash
- * - Cleanlist accounting
+ * - Cache list accounting
  *
  * @warning The block must not be dirty.
  *
@@ -2628,7 +2624,7 @@ static int castle_cache_block_hash_insert(c2_block_t *c2b)
     spin_lock_irq(&castle_cache_block_lru_lock);
     write_unlock(&castle_cache_block_hash_lock);
     list_add_tail(&c2b->lru, &castle_cache_block_lru);
-    /* Cleanlist accounting. */
+    /* Cache list accounting. */
     atomic_inc(&castle_cache_block_lru_size);
     atomic_inc(&castle_cache_clean_blks);
     spin_unlock_irq(&castle_cache_block_lru_lock);
@@ -3015,7 +3011,7 @@ static void castle_cache_block_init(c2_block_t *c2b,
  * - Drop reference on each c2p
  * - Place on the freelist
  *
- * NOTE: Cleanlist and softpin accounting must have already been done prior to
+ * NOTE: Cache list and softpin accounting must have already been done prior to
  * calling this function.  It is therefore safe to free the c2b with a non-zero
  * softpin_cnt.
  */
@@ -3090,29 +3086,35 @@ static void castle_cache_block_free(c2_block_t *c2b)
     castle_free(c2ps);
 }
 
+/**
+ * Is the block busy?
+ *
+ * Busy blocks are those where the use count does not match expected_count or
+ * where the block is dirty or locked.
+ */
 static inline int c2b_busy(c2_block_t *c2b, int expected_count)
 {
     /* If the lock can be read locked it means that lock isn't writelocked
        (which is expected when calling c2b_busy). */
     BUG_ON(read_can_lock(&castle_cache_block_hash_lock));
     /* c2b_locked() implies (c2b->count > 0) */
-    return (atomic_read(&c2b->count) != expected_count) ||
-          (c2b->state.bits & (1 << C2B_dirty)) ||
-           c2b_locked(c2b);
+    return (atomic_read(&c2b->count) != expected_count)
+                || c2b_dirty(c2b)
+                || c2b_locked(c2b);
 }
 
 /**
- * Pick c2bs (and associated c2ps) to move from the cleanlist to freelist.
+ * Pick c2bs (and associated c2ps) to move from the LRU to freelist.
  *
  * - Return immediately if clean blocks make up < 10% of the cache.
- * - Evict softpin blocks if softpin blocks make up 1/2 of the cleanlist.
- * - Iterate through the cleanlist looking for evictable blocks.
+ * - Evict softpin blocks if softpin blocks make up 1/2 of clean blocks.
+ * - Iterate through the LRU looking for evictable blocks.
  * - If we weren't able to evict BATCH_FREE blocks then victimise softpin blocks
  *   and try again.
  *
  * @return 0    Victims found
  * @return 1    No victims found
- * @return 2    Cleanlist too small (caller to force flush)
+ * @return 2    Too few clean blocks (caller to force flush)
  *
  * @also _castle_cache_block_get()
  * @also castle_cache_freelists_grow()
@@ -3134,7 +3136,7 @@ static int castle_cache_block_hash_clean(void)
     /* Return immediately if the c2p cleanlist is < 10% of the cache.
      *
      * By doing this we expect the caller to wake the flush thread to write back
-     * dirty c2ps to disk and placing them onto the cleanlist.
+     * dirty c2ps to disk.
      *
      * If we are the flush thread, skip this check and instead attempt to return
      * as much as we can to the freelist so the active flush can progress. */
@@ -3146,7 +3148,7 @@ static int castle_cache_block_hash_clean(void)
             return 2;
     }
 
-    /* Victimise softpin blocks if they make up more than half the cleanlist. */
+    /* Victimise softpins if they are more than half of all clean blocks. */
     clean   = atomic_read(&castle_cache_clean_blks);
     softpin = atomic_read(&castle_cache_clean_softpin_blks);
     /* Sanitise the softpin count as it is possible the counter could go
@@ -3173,20 +3175,18 @@ static int castle_cache_block_hash_clean(void)
 
             /* Blocks that match the following criteria are evicted:
              *
-             * (1) Not dirty.
-             * (2) Not actively referenced by cache consumers (e.g. only non-busy blocks).
-             * (3) Softpin blocks are prioritised (see comment above).
-             * (4) Are marked as blocks that sit at the beginning of a prefetch window for an extent
+             * (1) Non-busy blocks (e.g. not referenced by consumers, not locked, not dirty).
+             * (2) Softpin blocks are prioritised (see comment above).
+             * (3) Are marked as blocks that sit at the beginning of a prefetch window for an extent
              *     that no longer exists.  This allows us to correctly evict softpinned blocks from
              *     extents that have now been removed - by targeting the start of window block we
              *     unpin and demote those other blocks from the window.
-             * (5) Must be from an evictable extent (i.e. not from the super,
+             * (4) Must be from an evictable extent (i.e. not from the super,
              *     micro or mstore extents).  @TODO longer term solution: pools. */
-            if (!c2b_dirty(c2b) /* (1) */
-                    && !c2b_busy(c2b, 0) /* (2) */
-                    && (victimise_softpin || !c2b_softpin(c2b) /* (3) */
-                        || (c2b_windowstart(c2b) && !castle_extent_exists(c2b->cep.ext_id))) /*(4)*/
-                    && EVICTABLE_EXTENT(c2b->cep.ext_id)) /* (5) */
+            if (!c2b_busy(c2b, 0) /* (1) */
+                    && (victimise_softpin || !c2b_softpin(c2b) /* (2) */
+                        || (c2b_windowstart(c2b) && !castle_extent_exists(c2b->cep.ext_id))) /*(3)*/
+                    && EVICTABLE_EXTENT(c2b->cep.ext_id)) /* (4) */
             {
                 debug("Found a %svictim.\n", c2b_softpin(c2b) ? "softpin " : "");
 
@@ -3194,7 +3194,7 @@ static int castle_cache_block_hash_clean(void)
                 list_del(&c2b->lru);
                 hlist_add_head(&c2b->hlist, &victims);
 
-                /* Cleanlist accounting and victimisation stats. */
+                /* Cache list accounting and victimisation stats. */
                 BUG_ON(atomic_dec_return(&castle_cache_block_lru_size) < 0);
                 BUG_ON(atomic_dec_return(&castle_cache_clean_blks) < 0);
                 if (c2b_softpin(c2b))
@@ -3208,10 +3208,10 @@ static int castle_cache_block_hash_clean(void)
             }
             else
             {
-                /* Remove the unevictable block from its current location, and stick it
-                   at the end of the list. This will prevent the clean list accumulating
-                   unevictable blocks at the start, and this function having to go
-                   through them every time. */
+                /* Remove the unevictable block from its current location, and
+                 * stick it at the end of the list. This will prevent the LRU
+                 * accumulating unevictable blocks at the start, and this
+                 * function having to go through them every time. */
                 list_del(&c2b->lru);
                 list_add(&c2b->lru, &unevictable);
             }
@@ -3219,7 +3219,7 @@ static int castle_cache_block_hash_clean(void)
             if (nr_victims >= BATCH_FREE)
                 break;
         }
-        /* Put all the unevictable pages back on the clean list, but at the tail of the list. */
+        /* Put all the unevictable pages back on the LRU, but at the tail of the list. */
         list_splice_init(&unevictable, castle_cache_block_lru.prev);
     }
     /* If we weren't able to clean BATCH_FREE c2bs to the freelist then begin
@@ -3294,7 +3294,8 @@ int castle_cache_block_destroy(c2_block_t *c2b)
         put_c2b(c2b);
         return ret;
     }
-    /* Succeeded deleting the c2b from the hash, and cleanlist. Decrement the ref count. */
+    /* Succeeded deleting the c2b from the hash, LRU (and evictlist).
+     * Decrement the ref count. */
     put_c2b(c2b);
     BUG_ON(atomic_read(&c2b->count) != 0);
     BUG_ON(c2b_dirty(c2b));
@@ -3380,8 +3381,7 @@ static void castle_cache_freelists_grow(int nr_c2bs, int nr_pages)
             }
         }
 
-        /* If there are still no clean c2bs then wake the flush thread so any
-         * dirty c2bs get written back to disk and placed on the cleanlist. */
+        /* If there are still no clean c2bs, wake the flush thread. */
         debug("Could not clean the hash table. Waking flush.\n");
         castle_cache_flush_wakeup();
         /* Make sure at least one extra IO is done */
@@ -5157,7 +5157,7 @@ out:
 }
 
 /**
- * Flush dirty blocks to disk and place them on the cleanlist.
+ * Flush dirty blocks to disk.
  *
  * Fundamentally this function walks castle_cache_extent_dirtylist (the global
  * list of dirty extents) and calls __castle_cache_extent_flush() on each dirty
@@ -5455,7 +5455,7 @@ static void castle_cache_hashes_fini(void)
             BUG_ON(c2b_dirty(c2b));
             list_del(&c2b->lru);
 
-            /* Cleanlist accounting. */
+            /* Cache list accounting. */
             atomic_dec(&castle_cache_block_lru_size);
             atomic_dec(&castle_cache_clean_blks);
             if (c2b_softpin(c2b))
@@ -5465,7 +5465,7 @@ static void castle_cache_hashes_fini(void)
         }
     }
 
-    /* Ensure cleanlist accounting is in order. */
+    /* Ensure cache list accounting is in order. */
     BUG_ON(atomic_read(&castle_cache_dirty_blks) != 0);
     BUG_ON(atomic_read(&castle_cache_clean_blks) != 0);
     BUG_ON(atomic_read(&castle_cache_clean_softpin_blks) != 0);
