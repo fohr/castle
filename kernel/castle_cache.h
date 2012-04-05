@@ -147,6 +147,12 @@ void set_c2b_in_flight      (c2_block_t *c2b);
 void set_c2b_eio            (c2_block_t *c2b);
 void clear_c2b_eio          (c2_block_t *c2b);
 int  c2b_eio                (c2_block_t *c2b);
+void set_c2b_t0             (c2_block_t *c2b);
+int  c2b_t0                 (c2_block_t *c2b);
+void set_c2b_merge_in       (c2_block_t *c2b);
+int  c2b_merge_in           (c2_block_t *c2b);
+void set_c2b_merge_out      (c2_block_t *c2b);
+int  c2b_merge_out          (c2_block_t *c2b);
 void castle_cache_extent_dirtytree_remove(c_ext_dirtytree_t *dirtytree);
 
 /**********************************************************************************************
