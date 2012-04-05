@@ -16,10 +16,11 @@ typedef struct castle_cache_block {
     void                      *buffer;          /**< Linear mapping of the pages                  */
 
     struct hlist_node          hlist;           /**< Entry in castle_cache_block_hash[]           */
+    struct list_head           lru;             /**< Position on castle_cache_block_lru.          */
     union {
         struct list_head       free;            /**< Position on castle_cache_block_freelist.     */
-        struct list_head       lru;             /**< Position on castle_cache_block_lru.          */
         struct list_head       reserve;         /**< Position on castle_cache_block_reservelist.  */
+        struct list_head       evict;           /**< Position on castle_cache_block_evictlist.    */
     };
     struct rb_node             rb_dirtytree;    /**< Per-extent dirtytree RB-node.                */
     c_ext_dirtytree_t         *dirtytree;       /**< Dirtytree c2b is a member of.                */

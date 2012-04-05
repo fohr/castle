@@ -60,6 +60,7 @@ enum c2b_state_bits {
     C2B_t0,                 /**< Block is from a T0.                                            */
     C2B_merge_in,           /**< Block is to be input to merge.                                 */
     C2B_merge_out,          /**< Block is output from merge.                                    */
+    C2B_evictlist,          /**< Block is on castle_cache_block_evictlist.                      */
 };
 
 #define INIT_C2B_BITS (0)
@@ -105,6 +106,7 @@ C2B_FNS(eio, eio)
 C2B_FNS(t0, t0)
 C2B_FNS(merge_in, merge_in)
 C2B_FNS(merge_out, merge_out)
+C2B_FNS(evictlist, evictlist)
 
 /* c2p encapsulates multiple memory pages (in order to reduce overheads).
    NOTE: In order for this to work, c2bs must necessarily be allocated in
@@ -341,11 +343,14 @@ static int                     c2_pref_total_window_size;   /**< Sum of all wind
                                                     times.  Protected by c2_prefetch_lock.        */
 static int                     castle_cache_allow_hardpinning;      /**< Is hardpinning allowed?  */
 
-static         DEFINE_SPINLOCK(castle_cache_freelist_lock);     /**< Lock for page/block freelists*/
+static         DEFINE_SPINLOCK(castle_cache_freelist_lock);     /**< Page/block freelist lock     */
 static int                     castle_cache_page_freelist_size; /**< Num c2ps on freelist         */
 static               LIST_HEAD(castle_cache_page_freelist);     /**< Freelist of c2ps             */
 static int                     castle_cache_block_freelist_size;/**< Num c2bs on freelist         */
 static               LIST_HEAD(castle_cache_block_freelist);    /**< Freelist of c2bs             */
+static         DEFINE_SPINLOCK(castle_cache_block_evictlist_lock);  /**< Evictlist lock           */
+static atomic_t                castle_cache_block_evictlist_size;   /**< c2bs on eviction list    */
+static               LIST_HEAD(castle_cache_block_evictlist);   /**< Eviction list of c2bs        */
 
 /* The reservelist is an additional list of free c2bs and c2ps that are held
  * for the exclusive use of the flush thread.  The flush thread gets single c2p
@@ -1155,6 +1160,17 @@ void dirty_c2b(c2_block_t *c2b)
         BUG_ON(atomic_dec_return(&castle_cache_clean_blks) < 0);
         if (c2b_softpin(c2b))
             atomic_dec(&castle_cache_clean_softpin_blks);
+        if (c2b_evictlist(c2b))
+        {
+            unsigned long flags;
+
+            BUG_ON(!c2b_merge_out(c2b));
+            spin_lock_irqsave(&castle_cache_block_evictlist_lock, flags);
+            list_del(&c2b->evict);
+            atomic_dec(&castle_cache_block_evictlist_size);
+            spin_unlock_irqrestore(&castle_cache_block_evictlist_lock, flags);
+            clear_c2b_evictlist(c2b);
+        }
         set_c2b_dirty(c2b);
         atomic_inc(&castle_cache_dirty_blks);
 
@@ -1204,6 +1220,17 @@ void clean_c2b(c2_block_t *c2b)
     atomic_inc(&castle_cache_clean_blks);
     if (c2b_softpin(c2b))
         atomic_inc(&castle_cache_clean_softpin_blks);
+    if (c2b_merge_out(c2b))
+    {
+        unsigned long flags;
+
+        BUG_ON(c2b_evictlist(c2b));
+        spin_lock_irqsave(&castle_cache_block_evictlist_lock, flags);
+        list_add(&c2b->evict, &castle_cache_block_evictlist);
+        atomic_inc(&castle_cache_block_evictlist_size);
+        spin_unlock_irqrestore(&castle_cache_block_evictlist_lock, flags);
+        set_c2b_evictlist(c2b);
+    }
     clear_c2b_dirty(c2b);
     BUG_ON(atomic_dec_return(&castle_cache_dirty_blks) < 0);
 }
@@ -3058,6 +3085,16 @@ static void castle_cache_block_free(c2_block_t *c2b)
     /* Call deallocator function for all prefetch window start c2bs. */
     if (c2b_windowstart(c2b))
         c2_pref_c2b_destroy(c2b);
+    if (c2b_merge_out(c2b))
+    {
+        unsigned long flags;
+
+        BUG_ON(!c2b_evictlist(c2b)); /* only clean blocks can be freed */
+        spin_lock_irqsave(&castle_cache_block_evictlist_lock, flags);
+        list_del(&c2b->evict);
+        BUG_ON(atomic_dec_return(&castle_cache_block_evictlist_size) < 0);
+        spin_unlock_irqrestore(&castle_cache_block_evictlist_lock, flags);
+    }
 
     /* Add the pages back to the freelist */
     for(i=0; i<nr_c2ps; i++)
@@ -4754,8 +4791,10 @@ void castle_cache_debug_fini(void)
 /**
  * IO completion callback handler for castle_cache_extent_flush().
  *
- * Doubles as IO completion CB handler for castle_cache_flush() as this calls
- * __castle_cache_extent_flush() to do the dirty work.
+ * Also used as IO completion callback for castle_cache_extent_evict() as this
+ * calls __castle_cache_extent_flush().
+ *
+ * This is the primary callback for checkpoint-related flushes.
  *
  * @param c2b   c2b that has been flushed to disk
  *
@@ -5106,6 +5145,11 @@ int castle_cache_dirtytree_compare(struct list_head *l1, struct list_head *l2)
         return 0;
 }
 
+/**
+ * I/O completion callback for castle_cache_flush().
+ *
+ * @also castle_cache_flush()
+ */
 static void castle_cache_flush_endio(c2_block_t *c2b, int did_io)
 {
     c_ext_inflight_t *data = c2b->private;
@@ -5467,6 +5511,7 @@ static void castle_cache_hashes_fini(void)
 
     /* Ensure cache list accounting is in order. */
     BUG_ON(atomic_read(&castle_cache_block_lru_size) != 0);
+    BUG_ON(atomic_read(&castle_cache_block_evictlist_size) != 0);
     BUG_ON(atomic_read(&castle_cache_dirty_blks) != 0);
     BUG_ON(atomic_read(&castle_cache_clean_blks) != 0);
     BUG_ON(atomic_read(&castle_cache_clean_softpin_blks) != 0);
@@ -6127,6 +6172,7 @@ int castle_cache_init(void)
     }
 
     atomic_set(&castle_cache_block_lru_size, 0);
+    atomic_set(&castle_cache_block_evictlist_size, 0);
 
     atomic_set(&castle_cache_dirty_blks, 0);
     atomic_set(&castle_cache_clean_blks, 0);
