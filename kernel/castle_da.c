@@ -4535,7 +4535,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     if( (MERGE_CHECKPOINTABLE(merge)) &&
         (depth == PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL) &&
         (!merge->completing))
-        castle_da_merge_new_partition_update(merge, node_c2b, last_key);
+        castle_da_merge_new_partition_update(merge, node_c2b, key);
 
     put_c2b(node_c2b);
 
