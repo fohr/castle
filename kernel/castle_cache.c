@@ -3288,6 +3288,62 @@ static int castle_cache_block_hash_clean(void)
 }
 
 /**
+ * Return blocks from the evictlist to the freelist.
+ */
+USED static int castle_cache_block_evictlist_process(void)
+{
+#define BATCH_FREE  200
+    struct list_head *lh, *th;
+    LIST_HEAD(victims);
+    c2_block_t *c2b;
+    int nr_victims = 0;
+
+    spin_lock_irq(&castle_cache_block_evictlist_lock);
+    write_lock(&castle_cache_block_hash_lock);
+    spin_lock(&castle_cache_block_lru_lock);
+
+    list_for_each_safe(lh, th, &castle_cache_block_evictlist)
+    {
+        c2b = list_entry(lh, c2_block_t, evict);
+        BUG_ON(!c2b_merge_out(c2b));
+
+        if (c2b_busy(c2b, 0))
+        {
+            /* TODO: check if c2b used by user, do something */
+            continue;
+        }
+
+        /* Return c2b to freelist, update budgets. */
+        hlist_del(&c2b->hlist);
+        list_del(&c2b->lru);
+        list_move_tail(&c2b->evict, &victims);
+        clear_c2b_evictlist(c2b);
+        clear_c2b_merge_out(c2b);
+        BUG_ON(atomic_dec_return(&castle_cache_block_evictlist_size) < 0);
+
+        nr_victims++;
+        if (nr_victims >= BATCH_FREE)
+            break;
+    }
+
+    spin_unlock(&castle_cache_block_lru_lock);
+    write_unlock(&castle_cache_block_hash_lock);
+    spin_unlock_irq(&castle_cache_block_evictlist_lock);
+
+    if (list_empty(&victims))
+        return 1;
+
+    list_for_each_safe(lh, th, &victims)
+    {
+        c2b = list_entry(lh, c2_block_t, evict);
+        list_del(&c2b->evict);
+        castle_cache_block_free(c2b);
+    }
+
+    return 0;
+}
+
+/**
  * Frees up the c2b specified. Only succeeds if the c2b there is precisely one
  * outstanding reference to the c2b (held by the caller), it is not dirty, and
  * it is not locked.
