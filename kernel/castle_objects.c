@@ -1399,8 +1399,9 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
         if (!err)
             castle_da_cts_proxy_put(c_bvec->cts_proxy);
 
-        if (CVT_TOMBSTONE(cvt) && (get->flags & CASTLE_RING_FLAG_RET_TOMBSTONE))
+        if (!err && CVT_TOMBSTONE(cvt) && (get->flags & CASTLE_RING_FLAG_RET_TOMBSTONE))
         {
+            /* got a tombstone and user asked for it back */
             castle_object_bvec_attach_key_dealloc(c_bvec);
             castle_utils_bio_free(c_bvec->c_bio);
             get->reply_start(get,
@@ -1411,6 +1412,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
         }
         else
         {
+            /* got (an error), or (an inval cvt), or (a tombstone and user didn't ask for it back) */
             /* Turn tombstones into invalid CVTs. */
             CVT_INVALID_INIT(get->cvt);
             castle_object_bvec_attach_key_dealloc(c_bvec);

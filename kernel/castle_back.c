@@ -1647,7 +1647,11 @@ int castle_back_get_reply_continue(struct castle_object_get *get,
             u_ts = get->cvt.user_timestamp;
 
         if (CVT_TOMBSTONE(get->cvt))
+        {
+            /* if we got this far, it must be because the objects layer saw the flag: */
+            BUG_ON(!(get->flags & CASTLE_RING_FLAG_RET_TOMBSTONE));
             resp_flags |= CASTLE_RESPONSE_FLAG_TOMBSTONE;
+        }
 
         castle_back_buffer_put(op->conn, op->buf);
 
