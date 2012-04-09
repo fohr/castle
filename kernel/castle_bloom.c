@@ -464,7 +464,10 @@ void castle_bloom_destroy(castle_bloom_t *bf)
     debug("castle_bloom_destroy.\n");
     BUG_ON(bf->private);
 
-    castle_cache_advise_clear((c_ext_pos_t){bf->ext_id, 0}, C2_ADV_EXTENT|C2_ADV_SOFTPIN, -1,-1,0);
+    castle_cache_advise_clear((c_ext_pos_t){bf->ext_id, 0},
+                              C2_ADV_EXTENT|C2_ADV_SOFTPIN,
+                              -1,
+                              -1);
 
     castle_extent_unlink(bf->ext_id);
 }
@@ -1068,7 +1071,7 @@ void castle_bloom_unmarshall(castle_bloom_t *bf, struct castle_clist_entry *ctm)
          * the number of chunks we need to prefetch & pin. */
         int chunks = CHUNK(bf->chunks_offset + bf->num_chunks * BLOOM_CHUNK_SIZE) + 1;
         castle_cache_advise((c_ext_pos_t){bf->ext_id, 0},
-                C2_ADV_EXTENT|C2_ADV_PREFETCH|C2_ADV_SOFTPIN, chunks, -1, 0);
+                C2_ADV_EXTENT|C2_ADV_PREFETCH|C2_ADV_SOFTPIN, chunks, -1);
     }
 
 #ifdef CASTLE_BLOOM_FP_STATS

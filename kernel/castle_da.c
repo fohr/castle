@@ -643,7 +643,7 @@ static void castle_ct_immut_iter_next_node_find(c_immut_iter_t *iter,
             put_c2b(c2b);
         /* Get cache block for the current c2b */
         c2b = castle_cache_block_get(cep, node_size);
-        castle_cache_advise(c2b->cep, C2_ADV_PREFETCH, -1, -1, 0);
+        castle_cache_advise(c2b->cep, C2_ADV_PREFETCH, -1, -1);
         BUG_ON(castle_cache_block_sync_read(c2b));
         node = c2b_bnode(c2b);
         /* Determine if this is a leaf-node with entries */
@@ -4037,7 +4037,7 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
 
         s_c2b = castle_cache_block_get(old_cep, blocks);
         c_c2b = castle_cache_block_get(new_cep, blocks);
-        castle_cache_advise(s_c2b->cep, C2_ADV_PREFETCH|C2_ADV_SOFTPIN, -1, -1, 0);
+        castle_cache_advise(s_c2b->cep, C2_ADV_PREFETCH|C2_ADV_SOFTPIN, -1, -1);
         BUG_ON(castle_cache_block_sync_read(s_c2b));
         read_lock_c2b(s_c2b);
         write_lock_c2b(c_c2b);
@@ -5702,7 +5702,7 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge,
         /* Hard-pin T1s in the cache. */
         for (i=0; i<merge->nr_trees; i++)
             castle_cache_advise((c_ext_pos_t){merge->in_trees[i]->data_ext_free.ext_id, 0},
-                    C2_ADV_EXTENT|C2_ADV_HARDPIN, -1, -1, 0);
+                    C2_ADV_EXTENT|C2_ADV_HARDPIN, -1, -1);
     }
 
     ret = merge->tv_resolver ?
@@ -5714,7 +5714,7 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge,
         /* Unhard-pin T1s in the cache. Do this before we deallocate the merge and extents. */
         for (i=0; i<merge->nr_trees; i++)
             castle_cache_advise_clear((c_ext_pos_t){merge->in_trees[i]->data_ext_free.ext_id, 0},
-                    C2_ADV_EXTENT|C2_ADV_HARDPIN, -1, -1, 0);
+                    C2_ADV_EXTENT|C2_ADV_HARDPIN, -1, -1);
     }
 
     return ret;
@@ -8733,7 +8733,7 @@ static struct castle_component_tree * castle_da_ct_unmarshall(struct castle_clis
         int chunks = (nr_bytes)? (CHUNK(nr_bytes - 1) + 1): 0;
 
         castle_cache_advise((c_ext_pos_t){ct->tree_ext_free.ext_id, 0},
-                C2_ADV_EXTENT|C2_ADV_PREFETCH, chunks, -1, 0);
+                C2_ADV_EXTENT|C2_ADV_PREFETCH, chunks, -1);
     }
 
     atomic64_set(&ct->max_user_timestamp, ctm->max_user_timestamp);

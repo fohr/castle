@@ -3754,12 +3754,6 @@ void castle_cache_page_block_unreserve(c2_block_t *c2b)
  *    When a window is moved forward chunks that fall off the front of
  *    the window are deprecated in the LRU cache if their softpin count reaches 0.
  *
- * Debug:
- *    Many prefetcher functions take a debug argument that is propagated to the
- *    functions they call.  This should make it straightforward to debug
- *    individual prefetch requests or specific sections of code by setting the
- *    debug flag in the correct place.  PREF_DEBUG needs to be defined.
- *
  * General rules / observations:
  *
  * 1. All changes to a window (e.g. modifying start_off, end_off, state, etc.)
@@ -3863,7 +3857,7 @@ static USED char* c2_pref_window_to_str(c2_pref_window_t *window)
  *
  * @return c2b
  */
-static c2_block_t* c2_pref_block_chunk_get(c_ext_pos_t cep, c2_pref_window_t *window, int debug)
+static c2_block_t* c2_pref_block_chunk_get(c_ext_pos_t cep, c2_pref_window_t *window)
 {
     c2_block_t *c2b;
 
@@ -3895,7 +3889,7 @@ static c2_block_t* c2_pref_block_chunk_get(c_ext_pos_t cep, c2_pref_window_t *wi
     }
 #endif
 
-    pref_debug(debug, "ext_id==%lld chunk %lld/%u softpin_cnt=%d\n",
+    debug("ext_id==%lld chunk %lld/%u softpin_cnt=%d\n",
             cep.ext_id, CHUNK(cep.offset), castle_extent_size_get(cep.ext_id)-1,
             atomic_read(&c2b->softpin_cnt));
 
@@ -3911,7 +3905,7 @@ static c2_block_t* c2_pref_block_chunk_get(c_ext_pos_t cep, c2_pref_window_t *wi
  * - Handle softpin blocks
  * - Position for eviction in LRU if prefetch & softpin counts reach 0
  */
-static void c2_pref_block_chunk_put(c_ext_pos_t cep, c2_pref_window_t *window, int debug)
+static void c2_pref_block_chunk_put(c_ext_pos_t cep, c2_pref_window_t *window)
 {
     c2_block_t *c2b;
     int demote = 0;
@@ -3927,7 +3921,7 @@ static void c2_pref_block_chunk_put(c_ext_pos_t cep, c2_pref_window_t *window, i
         if (window->state & PREF_WINDOW_SOFTPIN)
             demote = demote || castle_cache_block_unsoftpin(c2b);
 
-        pref_debug(debug, "ext_id==%lld chunk %lld/%u softpin_cnt=%d\n",
+        debug("ext_id==%lld chunk %lld/%u softpin_cnt=%d\n",
                 cep.ext_id, CHUNK(cep.offset), castle_extent_size_get(cep.ext_id)-1,
                 atomic_read(&c2b->softpin_cnt));
 
@@ -3956,14 +3950,14 @@ static void c2_pref_block_chunk_put(c_ext_pos_t cep, c2_pref_window_t *window, i
  *
  * @also c2_pref_block_chunk_put()
  */
-static void c2_pref_window_falloff(c_ext_pos_t cep, int pages, c2_pref_window_t *window, int debug)
+static void c2_pref_window_falloff(c_ext_pos_t cep, int pages, c2_pref_window_t *window)
 {
     BUG_ON(CHUNK_OFFSET(cep.offset));
     BUG_ON(pages % BLKS_PER_CHK);
 
     while (pages)
     {
-        c2_pref_block_chunk_put(cep, window, debug);
+        c2_pref_block_chunk_put(cep, window);
 
         pages -= BLKS_PER_CHK;
         cep.offset += C_CHK_SIZE;
@@ -4072,8 +4066,8 @@ static c2_pref_window_t *c2_pref_window_find_and_remove(c_ext_pos_t cep, int exa
     c2_pref_window_t *window;
     int cmp;
 
-    pref_debug(0, "Looking for pref window cep="cep_fmt_str", exact_match=%d\n",
-            cep2str(cep), exact_match);
+//    debug(0, "Looking for pref window cep="cep_fmt_str", exact_match=%d\n",
+//            cep2str(cep), exact_match);
     spin_lock(&c2_prefetch_lock);
     n = c2p_rb_root.rb_node;
     while (n)
@@ -4128,7 +4122,7 @@ static c2_pref_window_t *c2_pref_window_find_and_remove(c_ext_pos_t cep, int exa
     }
     spin_unlock(&c2_prefetch_lock);
 
-    pref_debug(0, "No existing prefetch window found.\n");
+//    debug("No existing prefetch window found.\n");
 
     return NULL;
 }
@@ -4149,7 +4143,7 @@ static int c2_pref_window_insert(c2_pref_window_t *window)
     c2_block_t *start_c2b;
     int cmp;
 
-    pref_debug(0, "Asked to insert %s\n", c2_pref_window_to_str(window));
+//    debug("Asked to insert %s\n", c2_pref_window_to_str(window));
 
     cep.ext_id = window->ext_id;
     cep.offset = window->start_off;
@@ -4176,7 +4170,7 @@ static int c2_pref_window_insert(c2_pref_window_t *window)
         {
             /* We found an identical starting point.  Do not insert. */
             spin_unlock(&c2_prefetch_lock);
-            pref_debug(0, "Starting point already exists.  Not inserting.\n");
+//            debug("Starting point already exists.  Not inserting.\n");
             /* Release start_c2b ref. */
             put_c2b(start_c2b);
 
@@ -4237,14 +4231,14 @@ static void c2_pref_window_dump(void)
     while(parent)
     {
         cur_window = rb_entry(parent, c2_pref_window_t, rb_node);
-        pref_debug(0, "%s\n", c2_pref_window_to_str(cur_window));
+//        debug("%s\n", c2_pref_window_to_str(cur_window));
         parent = rb_next(parent);
 
         /* Record how many entries we find. */
         entries++;
     }
 
-    pref_debug(0, "Found %d prefetch window(s).\n", entries);
+//    debug("Found %d prefetch window(s).\n", entries);
 
     /* Release the lock. */
     spin_unlock(&c2_prefetch_lock);
@@ -4282,7 +4276,7 @@ static c2_pref_window_t * c2_pref_window_alloc(c2_pref_window_t *window,
     if (advise & C2_ADV_SOFTPIN)
         window->state  |= PREF_WINDOW_SOFTPIN;
 
-    pref_debug(0, "Allocated a new window.\n");
+//    debug("Allocated a new window.\n");
 
     return window;
 }
@@ -4301,16 +4295,16 @@ static c2_pref_window_t* c2_pref_window_get(c_ext_pos_t cep, c2_advise_t advise)
     c2_pref_window_t *window;
 
     /* Look for existing prefetch window. */
-    pref_debug(0, "Looking for window for cep="cep_fmt_str_nl, cep2str(cep));
+//    debug("Looking for window for cep="cep_fmt_str_nl, cep2str(cep));
     if ((window = c2_pref_window_find_and_remove(cep, 0)))
     {
         /* Found a matching prefetch window. */
-        pref_debug(0, "Found %s\n", c2_pref_window_to_str(window));
+//        debug("Found %s\n", c2_pref_window_to_str(window));
         return window;
     }
 
     /* No matching prefetch windows exist.  Allocate one. */
-    pref_debug(0, "Failed to find window for cep="cep_fmt_str_nl, cep2str(cep));
+//    debug("Failed to find window for cep="cep_fmt_str_nl, cep2str(cep));
 #ifdef PREF_DEBUG
     c2_pref_window_dump();
 #endif
@@ -4318,7 +4312,7 @@ static c2_pref_window_t* c2_pref_window_get(c_ext_pos_t cep, c2_advise_t advise)
     if ((window = c2_pref_window_alloc(window, cep, advise)) == NULL)
     {
         /* Failed to allocate a new window. */
-        pref_debug(0, "Failed to allocate new window.\n");
+//        debug("Failed to allocate new window.\n");
         return NULL;
     }
 
@@ -4337,10 +4331,10 @@ static c2_pref_window_t* c2_pref_window_get(c_ext_pos_t cep, c2_advise_t advise)
 static void c2_pref_io_end(c2_block_t *c2b, int did_io)
 {
     if (did_io)
-        pref_debug(debug, "ext_id==%lld chunk %lld/%u I/O completed\n",
+        debug("ext_id==%lld chunk %lld/%u I/O completed\n",
                 cep.ext_id, CHUNK(cep.offset), castle_extent_size_get(cep.ext_id)-1);
     else
-        pref_debug(debug, "ext_id==%lld chunk %lld/%u already up-to-date\n",
+        debug("ext_id==%lld chunk %lld/%u already up-to-date\n",
                 cep.ext_id, CHUNK(cep.offset), castle_extent_size_get(cep.ext_id)-1);
 
     write_unlock_c2b(c2b);
@@ -4365,7 +4359,7 @@ static void c2_pref_window_drop(c2_pref_window_t *window)
     c_ext_pos_t cep;
     int pages;
 
-    pref_debug(0, "Deleting %s\n", c2_pref_window_to_str(window));
+//    debug("Deleting %s\n", c2_pref_window_to_str(window));
 
     debug("Performing falloff for to-be-deallocated prefetch window %s.\n",
             c2_pref_window_to_str(window));
@@ -4374,7 +4368,7 @@ static void c2_pref_window_drop(c2_pref_window_t *window)
     /* Construct cep corresponding to window start. */
     cep.ext_id = window->ext_id;
     cep.offset = window->start_off;
-    c2_pref_window_falloff(cep, pages, window, 0);
+    c2_pref_window_falloff(cep, pages, window);
 
     /* Free up the window structure. */
     castle_free(window);
@@ -4396,18 +4390,18 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b)
 
     BUG_ON(!c2b_windowstart(c2b));
 
-    pref_debug(0, "Destroying a prefetch c2b->cep"cep_fmt_str", nr_pages=%d.\n",
-            cep2str(c2b->cep), c2b->nr_pages);
+//    debug("Destroying a prefetch c2b->cep"cep_fmt_str", nr_pages=%d.\n",
+//            cep2str(c2b->cep), c2b->nr_pages);
 
     /* Try and find a window matching c2b. */
     if (!(window = c2_pref_window_find_and_remove(c2b->cep, 1 /*exact_match*/)))
     {
-        pref_debug(0, "No window found for c2b->ceb="cep_fmt_str_nl, cep2str(c2b->cep));
+//        debug("No window found for c2b->ceb="cep_fmt_str_nl, cep2str(c2b->cep));
         return;
     }
 
     /* Window found and removed from the tree. Clean up and destroy it. */
-    pref_debug(0, "Found %s\n", c2_pref_window_to_str(window));
+//    debug("Found %s\n", c2_pref_window_to_str(window));
 
     /* Drop the window. */
     c2_pref_window_drop(window);
@@ -4454,14 +4448,16 @@ void castle_cache_prefetch_pin(c_ext_pos_t cep, int chunks, c2_advise_t advise)
         chunks--;
     }
 
+#if 0
     if (advise & C2_ADV_HARDPIN)
     {
-        pref_debug(0, "Hardpinning for ext_id %llu\n", cep.ext_id);
+        debug("Hardpinning for ext_id %llu\n", cep.ext_id);
     }
     else if (advise & C2_ADV_SOFTPIN)
     {
-        pref_debug(0, "Softpinning for ext_id %llu\n", cep.ext_id);
+        debug("Softpinning for ext_id %llu\n", cep.ext_id);
     }
+#endif
 }
 
 /**
@@ -4502,14 +4498,16 @@ static void castle_cache_prefetch_unpin(c_ext_pos_t cep, int chunks, c2_advise_t
         chunks--;
     }
 
+#if 0
     if (advise & C2_ADV_HARDPIN)
     {
-        pref_debug(0, "Unhardpinning for ext_id %llu\n", cep.ext_id);
+        debug("Unhardpinning for ext_id %llu\n", cep.ext_id);
     }
     else if (advise & C2_ADV_SOFTPIN)
     {
-        pref_debug(0, "Unsoftpinning for ext_id %llu\n", cep.ext_id);
+        debug("Unsoftpinning for ext_id %llu\n", cep.ext_id);
     }
+#endif
 }
 
 /**
@@ -4526,7 +4524,7 @@ static void castle_cache_prefetch_unpin(c_ext_pos_t cep, int chunks, c2_advise_t
  * @also c2_pref_io_end()
  * @also c2_pref_block_chunk_get()
  */
-static void c2_pref_window_submit(c2_pref_window_t *window, c_ext_pos_t cep, int pages, int debug)
+static void c2_pref_window_submit(c2_pref_window_t *window, c_ext_pos_t cep, int pages)
 {
     c2_block_t *c2b;
 
@@ -4535,7 +4533,7 @@ static void c2_pref_window_submit(c2_pref_window_t *window, c_ext_pos_t cep, int
 
     while (pages && CHUNK(cep.offset) < castle_extent_size_get(cep.ext_id))
     {
-        c2b = c2_pref_block_chunk_get(cep, window, debug);
+        c2b = c2_pref_block_chunk_get(cep, window);
         atomic_inc(&castle_cache_prefetch_in_flight);
         BUG_ON(castle_cache_block_read(c2b, c2_pref_io_end, NULL));
         pages -= BLKS_PER_CHK;
@@ -4561,8 +4559,7 @@ static int c2_pref_window_advance(c2_pref_window_t *window,
                                   c_ext_pos_t cep,
                                   c2_advise_t advise,
                                   int chunks,
-                                  int priority,
-                                  int debug)
+                                  int priority)
 {
     int ret = EXIT_SUCCESS;
     int pages, size, adv_pos, falloff_pages;
@@ -4590,7 +4587,7 @@ static int c2_pref_window_advance(c2_pref_window_t *window,
     if (size && CHUNK(cep.offset) < CHUNK(window->end_off - adv_pos * PAGE_SIZE))
         goto dont_advance;
 
-    pref_debug(debug, "window=%p cep=%llu pages=%d size=%d end_off=%llu "
+    debug("window=%p cep=%llu pages=%d size=%d end_off=%llu "
             "start_off=%llu pref_pages=%u adv_thresh=%u\n",
             window, cep.offset, pages, size, window->end_off,
             window->start_off, window->pref_pages, window->adv_thresh);
@@ -4615,12 +4612,12 @@ static int c2_pref_window_advance(c2_pref_window_t *window,
         window->pref_pages *= 2;
         if (window->pref_pages > PREF_ADAP_MAX)
             window->pref_pages = PREF_ADAP_MAX;
-        pref_debug(debug, "Window pref_pages %d->%d chunks for next advance.\n",
+        debug("Window pref_pages %d->%d chunks for next advance.\n",
                 old_pref_pages / BLKS_PER_CHK, window->pref_pages / BLKS_PER_CHK);
     }
     /* End of operations on window while not in tree. */
-    c2_pref_window_falloff(start_cep, falloff_pages, window, debug);
-    c2_pref_window_submit(window, submit_cep, pages, debug);
+    c2_pref_window_falloff(start_cep, falloff_pages, window);
+    c2_pref_window_submit(window, submit_cep, pages);
 
 dont_advance:
     BUG_ON(cep.ext_id != window->ext_id);
@@ -4656,7 +4653,6 @@ dont_advance:
  * @param advise    Hints for the prefetcher
  * @param chunks    For future use
  * @param priority  For future use
- * @param debug     Whether to print debug info
  *
  * @return ENOMEM: Failed to allocate a new prefetch window.
  * @return See c2_pref_window_advance().
@@ -4667,15 +4663,14 @@ dont_advance:
 static int castle_cache_prefetch_advise(c_ext_pos_t cep,
                                         c2_advise_t advise,
                                         int chunks,
-                                        int priority,
-                                        int debug)
+                                        int priority)
 {
     c2_pref_window_t *window;
 
     /* Must be block aligned. */
     BUG_ON(BLOCK_OFFSET(cep.offset));
 
-    pref_debug(debug, "Prefetch advise: "cep_fmt_str_nl, cep2str(cep));
+//    debug("Prefetch advise: "cep_fmt_str_nl, cep2str(cep));
 
     /* Prefetching is chunk-aligned.  Align cep to start of its chunk. */
     cep.offset = CHUNK(cep.offset) * C_CHK_SIZE;
@@ -4694,8 +4689,7 @@ static int castle_cache_prefetch_advise(c_ext_pos_t cep,
         castle_printk(LOG_WARN, "WARNING: Failed to allocate prefetch window.\n");
         return -ENOMEM;
     }
-    pref_debug(debug, "%sfor cep="cep_fmt_str"\n",
-            c2_pref_window_to_str(window), cep2str(cep));
+//    debug("%sfor cep="cep_fmt_str"\n", c2_pref_window_to_str(window), cep2str(cep));
     /* cep must be within the window. */
     BUG_ON(c2_pref_window_compare(window, cep));
 
@@ -4705,7 +4699,7 @@ static int castle_cache_prefetch_advise(c_ext_pos_t cep,
         window->state |= PREF_WINDOW_SOFTPIN;
 
     /* Advance the window if necessary. */
-    return c2_pref_window_advance(window, cep, advise, chunks, priority, debug);
+    return c2_pref_window_advance(window, cep, advise, chunks, priority);
 }
 
 /**
@@ -4715,14 +4709,13 @@ static int castle_cache_prefetch_advise(c_ext_pos_t cep,
  * @param advise    Advise for the cache
  * @param chunks    For future use
  * @param priority  For future use
- * @param debug     Whether to print debug info
  *
  * - If operating on an extent (advise & C2_ADV_EXTENT) manipulate cep and
  *   chunks to span the whole extent.
  *
  * @also castle_cache_prefetch_advise()
  */
-int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, int chunks, int priority, int debug)
+int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, int chunks, int priority)
 {
     /* Downgrade to softpin if hardpinning is disabled. */
     if (!castle_cache_allow_hardpinning && (advise & C2_ADV_HARDPIN))
@@ -4733,7 +4726,7 @@ int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, int chunks, int pri
 
     /* Prefetching is handled via a _prefetch_advise() call. */
     if ((advise & C2_ADV_PREFETCH) && !(advise & C2_ADV_EXTENT))
-        return castle_cache_prefetch_advise(cep, advise, chunks, priority, 0);
+        return castle_cache_prefetch_advise(cep, advise, chunks, priority);
 
     /* Pinning, etc. is handled via _prefetch_pin() call. */
     if (advise & C2_ADV_EXTENT)
@@ -4755,7 +4748,6 @@ int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, int chunks, int pri
  * @param advise    Advise for the cache
  * @param chunks    For future use
  * @param priority  For future use
- * @param debug     Whether to print debug info
  *
  * - If operating on an extent (advise & C2_ADV_EXTENT) manipulate cep and
  *   chunks to span the whole extent.
@@ -4764,8 +4756,7 @@ int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, int chunks, int pri
  *
  * @also castle_cache_prefetch_unpin()
  */
-int castle_cache_advise_clear(c_ext_pos_t cep, c2_advise_t advise, int chunks,
-                              int priority, int debug)
+int castle_cache_advise_clear(c_ext_pos_t cep, c2_advise_t advise, int chunks, int priority)
 {
     /* Downgrade to softpin if hardpinning is disabled. */
     if (!castle_cache_allow_hardpinning && (advise & C2_ADV_HARDPIN))

@@ -207,10 +207,8 @@ typedef uint32_t c2_advise_t;
 #define C2_ADV_STATIC       ((c2_advise_t) (1<<C2_ADV_static))
 #define C2_ADV_ADAPTIVE     ((c2_advise_t) (1<<C2_ADV_adaptive))
 
-int castle_cache_advise (c_ext_pos_t s_cep, c2_advise_t advise, int chunks,
-                         int priority, int debug);
-int castle_cache_advise_clear (c_ext_pos_t s_cep, c2_advise_t advise, int chunks,
-                               int priority, int debug);
+int castle_cache_advise (c_ext_pos_t s_cep, c2_advise_t advise, int chunks, int priority);
+int castle_cache_advise_clear (c_ext_pos_t s_cep, c2_advise_t advise, int chunks, int priority);
 void castle_cache_prefetch_pin(c_ext_pos_t cep, int chunks, c2_advise_t advise);
 void castle_cache_extent_flush(c_ext_id_t ext_id,
                                uint64_t start,

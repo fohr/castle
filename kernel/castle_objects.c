@@ -1633,7 +1633,7 @@ void castle_object_chunk_pull(struct castle_object_pull *pull, void *buf, size_t
     debug("Locking cdb (0x%x, 0x%x)\n", cep.ext_id, cep.offset);
     pull->buf      = buf;
     pull->curr_c2b = castle_cache_block_get(cep, (pull->to_copy - 1) / PAGE_SIZE + 1);
-    castle_cache_advise(pull->curr_c2b->cep, C2_ADV_PREFETCH, -1, -1, 0);
+    castle_cache_advise(pull->curr_c2b->cep, C2_ADV_PREFETCH, -1, -1);
     BUG_ON(castle_cache_block_read(pull->curr_c2b,
                                    castle_object_chunk_pull_io_end,
                                    pull));
