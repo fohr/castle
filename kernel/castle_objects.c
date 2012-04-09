@@ -645,13 +645,15 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     if(!CVT_INVALID(ancestral_cvt))
         existing_object_user_timestamp = ancestral_cvt.user_timestamp;
 
+    debug("%s::existing timestamp: %llu, new timestamp: %llu\n",
+        __FUNCTION__, existing_object_user_timestamp, replace->user_timestamp);
     if(existing_object_user_timestamp > replace->user_timestamp)
     {
         *cvt = INVAL_VAL_TUP;
         atomic64_inc(&c_bvec->tree->da->stats.user_timestamps.t0_discards);
-        debug("%s::dropping an insert because it's timestamp (%llu) "
+        debug("%s::dropping an insert (of cvt type %d) because it's timestamp (%llu) "
                 "is \"older\" than the timestamp of an existing entry (%llu).\n",
-                __FUNCTION__, replace->user_timestamp, existing_object_user_timestamp);
+                __FUNCTION__, new_cvt->type, replace->user_timestamp, existing_object_user_timestamp);
         return -EEXIST; /* existential crisis */
     }
     /* this object passed the timestamp smell test...proceed with replace. */
@@ -1128,8 +1130,6 @@ int castle_object_iter_next(castle_object_iterator_t *iterator,
             debug_rq("Getting an entry for the range query.\n");
             castle_objects_rq_iter.next(iterator, &k, &v, &val);
             debug_rq("Got an entry for the range query.\n");
-            if (CVT_TOMBSTONE(val))
-                continue;
 
             if (!k || !(key = iterator->btree->key_unpack(k, NULL, NULL)))
             {
@@ -1399,14 +1399,27 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
         if (!err)
             castle_da_cts_proxy_put(c_bvec->cts_proxy);
 
-        /* Turn tombstones into invalid CVTs. */
-        CVT_INVALID_INIT(get->cvt);
-        castle_object_bvec_attach_key_dealloc(c_bvec);
-        castle_utils_bio_free(c_bvec->c_bio);
-        /* WARNING: after reply_start() its unsafe to access the attachment
-           (since the ref may be dropped). Its also unsafe to bvec_attach_key_dealloc()
-           since that function uses the attachment. */
-        get->reply_start(get, err, 0, NULL, 0);
+        if (CVT_TOMBSTONE(cvt) && (get->flags & CASTLE_RING_FLAG_RET_TOMBSTONE))
+        {
+            castle_object_bvec_attach_key_dealloc(c_bvec);
+            castle_utils_bio_free(c_bvec->c_bio);
+            get->reply_start(get,
+                             0,
+                             cvt.length,
+                             CVT_TOMBSTONE_VAL_PTR(cvt),
+                             cvt.length);
+        }
+        else
+        {
+            /* Turn tombstones into invalid CVTs. */
+            CVT_INVALID_INIT(get->cvt);
+            castle_object_bvec_attach_key_dealloc(c_bvec);
+            castle_utils_bio_free(c_bvec->c_bio);
+            /* WARNING: after reply_start() its unsafe to access the attachment
+               (since the ref may be dropped). Its also unsafe to bvec_attach_key_dealloc()
+               since that function uses the attachment. */
+            get->reply_start(get, err, 0, NULL, 0);
+        }
     }
 
     /* Inline values and local (all) counters. */

@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 36 /* last updated by TR */
+#define CASTLE_PROTOCOL_VERSION 37 /* last updated by TR */
 
 #ifdef SWIG
 #define PACKED               //override gcc intrinsics for SWIG
@@ -190,6 +190,7 @@ typedef uint32_t c_slave_uuid_t;
 typedef uint32_t c_collection_id_t;
 typedef uint32_t c_ver_t;           /**< Version ID type, unique across all Doubling Arrays.    */
 typedef uint32_t c_da_t;
+typedef uint8_t  castle_resp_flags_t;
 #define INVAL_VERSION       ((c_ver_t)-1)
 #define VERSION_INVAL(_v)   ((_v) == INVAL_VERSION)
 
@@ -913,7 +914,8 @@ enum {
     CASTLE_RING_FLAG_NO_CACHE         = (1 << 2),        /**< Don't evict other data to cache this request.  */
     CASTLE_RING_FLAG_ITER_NO_VALUES   = (1 << 3),        /**< Iterator to return only keys, not values.      */
     CASTLE_RING_FLAG_ITER_GET_OOL     = (1 << 4),        /**< Return out-of-line values inline.              */
-    CASTLE_RING_FLAG_RET_TIMESTAMP    = (1 << 5),
+    CASTLE_RING_FLAG_RET_TIMESTAMP    = (1 << 5),        /**< Return value timestamps.                       */
+    CASTLE_RING_FLAG_RET_TOMBSTONE    = (1 << 6),        /**< Return tombstones (instead of ENOENT).         */
 };
 
 typedef struct castle_response {
@@ -921,18 +923,25 @@ typedef struct castle_response {
     uint32_t                 err;
     uint64_t                 length;
     castle_interface_token_t token;
-    castle_user_timestamp_t  user_timestamp;   /** For non-timestamped collections, this will be
-                                                   undefined. If the request flag did not specify
-                                                   CASTLE_RING_FLAG_RET_TIMESTAMP, this is
-                                                   undefined. Undefined on non-get ops.       */
+    castle_user_timestamp_t  user_timestamp;   /**< For non-timestamped collections, this will be
+                                                    undefined. If the request flag did not specify
+                                                    CASTLE_RING_FLAG_RET_TIMESTAMP, this is
+                                                    undefined. Undefined on non-get ops.     */
+    castle_resp_flags_t      flags;            /**< See e.g. CASTLE_RESPONSE_FLAG_TOMBSTONE. */
 } castle_response_t;
+
+enum {
+    CASTLE_RESPONSE_FLAG_NONE             = (0     ),  /**< No flags specified.                   */
+    CASTLE_RESPONSE_FLAG_TOMBSTONE        = (1 << 0),  /**< Value is a tombstone.                 */
+};
 
 /* Value types used in struct castle_iter_val. */
 enum {
     CASTLE_VALUE_TYPE_INVALID         = 0,
     CASTLE_VALUE_TYPE_INLINE          = 1,
     CASTLE_VALUE_TYPE_OUT_OF_LINE     = 2,
-    CASTLE_VALUE_TYPE_INLINE_COUNTER  = 3
+    CASTLE_VALUE_TYPE_INLINE_COUNTER  = 3,
+    CASTLE_VALUE_TYPE_TOMBSTONE       = 4
 };
 
 struct castle_iter_val {

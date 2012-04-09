@@ -781,6 +781,13 @@ STATIC_BUG_ON(sizeof(struct castle_value_tuple) != 32);
         _ptr = (_cvt).val_p;                                                  \
     _ptr;                                                                     \
 })
+#define CVT_TOMBSTONE_VAL_PTR(_cvt)                                           \
+({                                                                            \
+    void *_ptr;                                                               \
+    BUG_ON(!CVT_TOMBSTONE(_cvt));                                             \
+    _ptr = (_cvt).val_p;                                                      \
+    _ptr;                                                                     \
+})
 #define CVT_INLINE_FREE(_cvt)                                                 \
 {                                                                             \
     if(CVT_INLINE(_cvt) && !CVT_LOCAL_COUNTER(_cvt))                          \
