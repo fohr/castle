@@ -319,8 +319,17 @@ static atomic_t                castle_cache_clean_softpin_pgs;      /**< Clean s
 static atomic_t                castle_cache_block_victims;          /**< Clean blocks evicted     */
 static atomic_t                castle_cache_softpin_block_victims;  /**< Clean softpins evicted   */
 
+/**
+ * Castle cache partition definitions.
+ */
+static struct {
+    atomic_t        max_pgs;                /**< Total pages available for this partition         */
+    atomic_t        cur_pgs;                /**< Current pages used by this partition             */
+} castle_cache_partition[NR_CACHE_PARTITIONS];
 
-/* Extent related stats */
+/**
+ * Extent-related stats.
+ */
 typedef struct castle_cache_extent_stats {
     atomic_t        hits;                   /**< c2b_get() where c2b_uptodate(c2b)                */
     atomic_t        misses;                 /**< c2b_get() where !c2b_uptodate(c2b)               */
@@ -3552,11 +3561,13 @@ out:
 }
 
 /**
- * Get block starting at cep, size nr_pages.
+ * Get block starting at cep, size nr_pages from specified partition.
  *
  * @return  Block matching cep, nr_pages.
  */
-c2_block_t* castle_cache_block_get(c_ext_pos_t cep, int nr_pages)
+c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
+                                   int nr_pages,
+                                   c2_partition_t partition)
 {
     int grown_block_freelist = 0, grown_page_freelist = 0;
 #ifdef CASTLE_PERF_DEBUG
@@ -3857,11 +3868,13 @@ static USED char* c2_pref_window_to_str(c2_pref_window_t *window)
  *
  * @return c2b
  */
-static c2_block_t* c2_pref_block_chunk_get(c_ext_pos_t cep, c2_pref_window_t *window)
+static c2_block_t* c2_pref_block_chunk_get(c_ext_pos_t cep,
+                                           c2_pref_window_t *window,
+                                           c2_partition_t partition)
 {
     c2_block_t *c2b;
 
-    if ((c2b = castle_cache_block_get(cep, BLKS_PER_CHK)))
+    if ((c2b = castle_cache_block_get(cep, BLKS_PER_CHK, partition)))
     {
         /* Set c2b status bits. */
         if (!test_set_c2b_prefetch(c2b))
@@ -4135,7 +4148,7 @@ static c2_pref_window_t *c2_pref_window_find_and_remove(c_ext_pos_t cep, int exa
  * @also c2_pref_window_advance()
  * @also castle_cache_block_free().
  */
-static int c2_pref_window_insert(c2_pref_window_t *window)
+static int c2_pref_window_insert(c2_pref_window_t *window, c2_partition_t partition)
 {
     struct rb_node **p, *parent = NULL;
     c2_pref_window_t *tree_window;
@@ -4148,7 +4161,7 @@ static int c2_pref_window_insert(c2_pref_window_t *window)
     cep.ext_id = window->ext_id;
     cep.offset = window->start_off;
     /* The c2b at the start of the window must be held when inserting into the rbtree. */
-    start_c2b = castle_cache_block_get(cep, BLKS_PER_CHK);
+    start_c2b = castle_cache_block_get(cep, BLKS_PER_CHK, partition);
 
     /* We must hold the prefetch tree lock while manipulating the tree. */
     spin_lock(&c2_prefetch_lock);
@@ -4411,13 +4424,18 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b)
  * Hard/soft pin 'chunks' chunk-sized c2bs from cep.
  *
  * @param cep       Extent and offset to pin
+ * @param advise    Advice for the cache
+ * @param partition Cache partition to allocate from
  * @param chunks    Number of chunks from cep to pin
  *
  * WARNING: There must be an accompanying _unpin() call for every _pin().
  *
  * @also castle_cache_prefetch_unpin()
  */
-void castle_cache_prefetch_pin(c_ext_pos_t cep, int chunks, c2_advise_t advise)
+void castle_cache_prefetch_pin(c_ext_pos_t cep,
+                               c2_advise_t advise,
+                               c2_partition_t partition,
+                               int chunks)
 {
     c2_block_t *c2b;
 
@@ -4426,7 +4444,7 @@ void castle_cache_prefetch_pin(c_ext_pos_t cep, int chunks, c2_advise_t advise)
     while (chunks > 0)
     {
         /* Get block, lock it and update offset. */
-        c2b = castle_cache_block_get(cep, BLKS_PER_CHK);
+        c2b = castle_cache_block_get(cep, BLKS_PER_CHK, partition);
 
         if (advise & C2_ADV_PREFETCH)
         {
@@ -4464,6 +4482,8 @@ void castle_cache_prefetch_pin(c_ext_pos_t cep, int chunks, c2_advise_t advise)
  * Un-hard/soft pin 'chunks' chunk-sized c2bs from cep allowing them to be evicted.
  *
  * @param cep       Extent and offset to unpin from
+ * @param advise    Advice for the cache
+ * @param partition Cache partition to (de)allocate from
  * @param chunks    Number of chunks from cep to unpin
  *
  * @warning If unhardpinning the extent must previously have
@@ -4471,7 +4491,10 @@ void castle_cache_prefetch_pin(c_ext_pos_t cep, int chunks, c2_advise_t advise)
  *
  * @also castle_cache_prefetch_pin()
  */
-static void castle_cache_prefetch_unpin(c_ext_pos_t cep, int chunks, c2_advise_t advise)
+static void castle_cache_prefetch_unpin(c_ext_pos_t cep,
+                                        c2_advise_t advise,
+                                        c2_partition_t partition,
+                                        int chunks)
 {
     c2_block_t *c2b;
 
@@ -4487,7 +4510,7 @@ static void castle_cache_prefetch_unpin(c_ext_pos_t cep, int chunks, c2_advise_t
         }
         else //if (advise & C2_ADV_HARDPIN)
         {
-            c2b = castle_cache_block_get(cep, BLKS_PER_CHK);
+            c2b = castle_cache_block_get(cep, BLKS_PER_CHK, partition);
             BUG_ON(!c2b);
             put_c2b(c2b); /* will cause problems if they weren't prefetch-locked. */
         }
@@ -4524,7 +4547,10 @@ static void castle_cache_prefetch_unpin(c_ext_pos_t cep, int chunks, c2_advise_t
  * @also c2_pref_io_end()
  * @also c2_pref_block_chunk_get()
  */
-static void c2_pref_window_submit(c2_pref_window_t *window, c_ext_pos_t cep, int pages)
+static void c2_pref_window_submit(c2_pref_window_t *window,
+                                  c_ext_pos_t cep,
+                                  c2_partition_t partition,
+                                  int pages)
 {
     c2_block_t *c2b;
 
@@ -4533,7 +4559,7 @@ static void c2_pref_window_submit(c2_pref_window_t *window, c_ext_pos_t cep, int
 
     while (pages && CHUNK(cep.offset) < castle_extent_size_get(cep.ext_id))
     {
-        c2b = c2_pref_block_chunk_get(cep, window);
+        c2b = c2_pref_block_chunk_get(cep, window, partition);
         atomic_inc(&castle_cache_prefetch_in_flight);
         BUG_ON(castle_cache_block_read(c2b, c2_pref_io_end, NULL));
         pages -= BLKS_PER_CHK;
@@ -4548,8 +4574,7 @@ static void c2_pref_window_submit(c2_pref_window_t *window, c_ext_pos_t cep, int
  * @param window    Window to advance
  * @param cep       User-requested offset
  * @param advise    User-specified prefetch parameters
- * @param chunks    Unused
- * @param priority  Unused
+ * @param partition Cache partition to allocate from
  *
  * @return 0        Window not advanced (cep already satisfied by window)
  * @return 1        Window advanced (cep now satisfied by window)
@@ -4558,8 +4583,7 @@ static void c2_pref_window_submit(c2_pref_window_t *window, c_ext_pos_t cep, int
 static int c2_pref_window_advance(c2_pref_window_t *window,
                                   c_ext_pos_t cep,
                                   c2_advise_t advise,
-                                  int chunks,
-                                  int priority)
+                                  c2_partition_t partition)
 {
     int ret = EXIT_SUCCESS;
     int pages, size, adv_pos, falloff_pages;
@@ -4617,11 +4641,11 @@ static int c2_pref_window_advance(c2_pref_window_t *window,
     }
     /* End of operations on window while not in tree. */
     c2_pref_window_falloff(start_cep, falloff_pages, window);
-    c2_pref_window_submit(window, submit_cep, pages);
+    c2_pref_window_submit(window, submit_cep, partition, pages);
 
 dont_advance:
     BUG_ON(cep.ext_id != window->ext_id);
-    if (c2_pref_window_insert(window) != EXIT_SUCCESS)
+    if (c2_pref_window_insert(window, partition) != EXIT_SUCCESS)
     {
         /* A window covering the same range already exists.
          * This is a race but no major deal: the data for cep will already have
@@ -4651,8 +4675,7 @@ dont_advance:
  *
  * @param cep       Requested offset within extent
  * @param advise    Hints for the prefetcher
- * @param chunks    For future use
- * @param priority  For future use
+ * @param partition Cache partition to allocate from
  *
  * @return ENOMEM: Failed to allocate a new prefetch window.
  * @return See c2_pref_window_advance().
@@ -4662,8 +4685,7 @@ dont_advance:
  */
 static int castle_cache_prefetch_advise(c_ext_pos_t cep,
                                         c2_advise_t advise,
-                                        int chunks,
-                                        int priority)
+                                        c2_partition_t partition)
 {
     c2_pref_window_t *window;
 
@@ -4699,23 +4721,23 @@ static int castle_cache_prefetch_advise(c_ext_pos_t cep,
         window->state |= PREF_WINDOW_SOFTPIN;
 
     /* Advance the window if necessary. */
-    return c2_pref_window_advance(window, cep, advise, chunks, priority);
+    return c2_pref_window_advance(window, cep, advise, partition);
 }
 
 /**
  * Advise the cache of intention to perform specific operation on an extent.
  *
  * @param cep       Extent/offset to operate on/from
- * @param advise    Advise for the cache
- * @param chunks    For future use
- * @param priority  For future use
+ * @param advise    Advice for the cache
+ * @param partition Cache partition to allocate from
+ * @param chunks    Chunks to pin from cep (for !(advise & C2_ADV_EXTENT))
  *
  * - If operating on an extent (advise & C2_ADV_EXTENT) manipulate cep and
  *   chunks to span the whole extent.
  *
  * @also castle_cache_prefetch_advise()
  */
-int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, int chunks, int priority)
+int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, c2_partition_t partition, int chunks)
 {
     /* Downgrade to softpin if hardpinning is disabled. */
     if (!castle_cache_allow_hardpinning && (advise & C2_ADV_HARDPIN))
@@ -4726,7 +4748,7 @@ int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, int chunks, int pri
 
     /* Prefetching is handled via a _prefetch_advise() call. */
     if ((advise & C2_ADV_PREFETCH) && !(advise & C2_ADV_EXTENT))
-        return castle_cache_prefetch_advise(cep, advise, chunks, priority);
+        return castle_cache_prefetch_advise(cep, advise, partition);
 
     /* Pinning, etc. is handled via _prefetch_pin() call. */
     if (advise & C2_ADV_EXTENT)
@@ -4736,7 +4758,7 @@ int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, int chunks, int pri
         cep.offset = 0;
         chunks = castle_extent_size_get(cep.ext_id);
     }
-    castle_cache_prefetch_pin(cep, chunks, advise);
+    castle_cache_prefetch_pin(cep, advise, partition, chunks);
 
     return EXIT_SUCCESS;
 }
@@ -4745,9 +4767,9 @@ int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, int chunks, int pri
  * Advise the cache to clear prior requests on a given extent/offset.
  *
  * @param cep       Extent/offset to operate on/from
- * @param advise    Advise for the cache
- * @param chunks    For future use
- * @param priority  For future use
+ * @param advise    Advice for the cache
+ * @param partition Cache partition to (de)allocate from
+ * @param chunks    Chunks to unpin from cep (for !(advise & C2_ADV_EXTENT))
  *
  * - If operating on an extent (advise & C2_ADV_EXTENT) manipulate cep and
  *   chunks to span the whole extent.
@@ -4756,7 +4778,10 @@ int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, int chunks, int pri
  *
  * @also castle_cache_prefetch_unpin()
  */
-int castle_cache_advise_clear(c_ext_pos_t cep, c2_advise_t advise, int chunks, int priority)
+int castle_cache_advise_clear(c_ext_pos_t cep,
+                              c2_advise_t advise,
+                              c2_partition_t partition,
+                              int chunks)
 {
     /* Downgrade to softpin if hardpinning is disabled. */
     if (!castle_cache_allow_hardpinning && (advise & C2_ADV_HARDPIN))
@@ -4777,7 +4802,7 @@ int castle_cache_advise_clear(c_ext_pos_t cep, c2_advise_t advise, int chunks, i
         cep.offset = 0;
         chunks = castle_extent_size_get(cep.ext_id);
     }
-    castle_cache_prefetch_unpin(cep, chunks, advise);
+    castle_cache_prefetch_unpin(cep, advise, partition, chunks);
 
     return EXIT_SUCCESS;
 }
@@ -5919,7 +5944,7 @@ int castle_slaves_superblock_invalidate(void)
         cep.offset = length * slot;
 
         /* Get c2b for superblock. */
-        c2b = castle_cache_block_get(cep, 2);
+        c2b = castle_cache_block_get(cep, 2, USER);
         if (castle_cache_block_sync_read(c2b))
         {
             /* If the read failed due to the slave now being OOS, then we don't
@@ -6211,6 +6236,16 @@ int castle_cache_init(void)
                                            sizeof(c2_block_t));
     castle_cache_pgs        = castle_alloc(castle_cache_page_freelist_size  *
                                            sizeof(c2_page_t));
+
+    /* Initialise cache partitions */
+    for (j = 0; j < NR_CACHE_PARTITIONS; j++)
+    {
+        atomic_set(&castle_cache_partition[j].max_pgs, 0);
+        atomic_set(&castle_cache_partition[j].cur_pgs, 0);
+    }
+    atomic_set(&castle_cache_partition[USER].max_pgs,
+               castle_cache_page_freelist_size);
+
     /* Init other variables */
     for(j=0; j<NR_EXTENT_FLUSH_PRIOS; j++)
     {

@@ -1180,8 +1180,8 @@ static void castle_back_iter_fetch_object(c_val_tup_t *cvt, char *buf)
     debug("%s: cvt->cep="cep_fmt_str", len=%d\n", cep2str(cvt->cep), cvt->length);
 
     nr_blocks = (cvt->length - 1) / C_BLK_SIZE + 1;
-    c2b = castle_cache_block_get(cvt->cep, nr_blocks);
-    castle_cache_advise(c2b->cep, C2_ADV_PREFETCH, -1, -1);
+    c2b = castle_cache_block_get(cvt->cep, nr_blocks, USER);
+    castle_cache_advise(c2b->cep, C2_ADV_PREFETCH, USER, 0);
     BUG_ON(castle_cache_block_sync_read(c2b));
     read_lock_c2b(c2b);
     memcpy(buf, c2b->buffer, cvt->length);

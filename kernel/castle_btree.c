@@ -412,7 +412,7 @@ c2_block_t* castle_btree_node_create(struct castle_component_tree *ct,
 
     /* Bet the cache block. */
     node_size = ct->node_sizes[rev_level];
-    c2b = castle_cache_block_get(cep, node_size);
+    c2b = castle_cache_block_get(cep, node_size, MERGE_OUT);
     write_lock_c2b(c2b);
     update_c2b(c2b);
     dirty_c2b(c2b);
@@ -1369,11 +1369,12 @@ static void __castle_btree_submit(c_bvec_t *c_bvec,
 
     /* On writes we can drop the lock on the grandparent node _before_ acquiring lock
        on the child. */
-    if(write)
+    if (write)
         castle_btree_c2b_forget(c_bvec);
     /* Get the cache block for the next node. */
     c2b = castle_cache_block_get(node_cep,
-                                 ct->node_sizes[c_bvec->btree_levels - c_bvec->btree_depth]);
+                                 ct->node_sizes[c_bvec->btree_levels - c_bvec->btree_depth],
+                                 write ? MERGE_OUT : USER);
     castle_btree_c2b_lock(c_bvec, c2b);
     /* On reads, the parent can only be unlocked _after_ child got locked. */
     if(!write)
@@ -1817,7 +1818,8 @@ static int castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_ce
     /* If we haven't found node_cep in path, get it from the cache instead */
     if(c2b == NULL)
         c2b = castle_cache_block_get(node_cep,
-                                     c_iter->tree->node_sizes[c_iter->btree_levels - c_iter->depth - 1]);
+                c_iter->tree->node_sizes[c_iter->btree_levels - c_iter->depth - 1],
+                USER);
 
     iter_debug("iter %p locking cep "cep_fmt_str"\n", c_iter, cep2str(c2b->cep));
 

@@ -1360,7 +1360,7 @@ int castle_slave_superblocks_writeback(struct castle_slave *cs, uint32_t version
     cep.ext_id = cs->sup_ext;
     cep.offset = length * slot;
 
-    c2b = castle_cache_block_get(cep, 2);
+    c2b = castle_cache_block_get(cep, 2, USER);
     if (!c2b)
         return -ENOMEM;
 
@@ -1943,7 +1943,7 @@ static void castle_bio_data_io_do(c_bvec_t *c_bvec, c_ext_pos_t cep)
         return;
     }
 
-    c2b = castle_cache_block_get(cep, 1);
+    c2b = castle_cache_block_get(cep, 1, USER);
     castle_debug_bvec_update(c_bvec, C_BVEC_DATA_C2B_GOT);
 #ifdef CASTLE_DEBUG
     c_bvec->locking = c2b;

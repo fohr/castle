@@ -1590,7 +1590,7 @@ void castle_extent_micro_ext_update(struct castle_slave * cs)
     cep.ext_id = MICRO_EXT_ID;
     cep.offset = 0;
 
-    c2b = castle_cache_block_get(cep, BLKS_PER_CHK);
+    c2b = castle_cache_block_get(cep, BLKS_PER_CHK, USER);
     BUG_ON(castle_cache_block_sync_read(c2b));
     write_lock_c2b(c2b);
 
@@ -2152,8 +2152,8 @@ static int castle_extent_meta_copy(c_ext_t *ext, void *compactor_p)
         d_cep.ext_id = new_maps_cep.ext_id;
         d_cep.offset = new_maps_cep.offset + i * PAGE_SIZE;
 
-        s_c2b = castle_cache_block_get(s_cep, 1);
-        d_c2b = castle_cache_block_get(d_cep, 1);
+        s_c2b = castle_cache_block_get(s_cep, 1, USER);
+        d_c2b = castle_cache_block_get(d_cep, 1, USER);
 
         BUG_ON(castle_cache_block_sync_read(s_c2b));
         read_lock_c2b(s_c2b);
@@ -2721,7 +2721,7 @@ static void _castle_extent_space_free(c_ext_t *ext, c_chk_cnt_t start, c_chk_cnt
         /* Get page-worth of extent map. */
         debug("Processing map page at cep: "cep_fmt_str_nl, cep2str(map_cep));
         map_cep = PG_ALIGN_CEP(map_cep);
-        map_c2b = castle_cache_block_get(map_cep, 1);
+        map_c2b = castle_cache_block_get(map_cep, 1, USER);
         BUG_ON(castle_cache_block_sync_read(map_c2b));
         read_lock_c2b(map_c2b);
         map_buf = c2b_buffer(map_c2b);
@@ -2958,7 +2958,7 @@ retry:
             }
             /* Get the next map_c2b. */
             debug("Getting map c2b, for cep: "cep_fmt_str_nl, cep2str(map_cep));
-            map_c2b = castle_cache_block_get(map_cep, 1);
+            map_c2b = castle_cache_block_get(map_cep, 1, USER);
             /* Read old maps, if we're allocating from in-between. */
             if (map_page_idx)
             {
@@ -3623,7 +3623,7 @@ static void __castle_extent_map_get(c_ext_t *ext, c_chk_t chk_idx, c_disk_chk_t 
         memcpy(&map_page_cep, &map_cep, sizeof(c_ext_pos_t));
         map_page_cep.offset = MASK_BLK_OFFSET(map_page_cep.offset);
         /* Get the c2b corresponding to map_page_cep. */
-        map_c2b = castle_cache_block_get(map_page_cep, 1);
+        map_c2b = castle_cache_block_get(map_page_cep, 1, USER);
         /* Issue read I/O for map_c2b if it is not already uptodate. */
         set_c2b_no_resubmit(map_c2b);
         castle_cache_block_sync_read(map_c2b);
@@ -5580,7 +5580,7 @@ int submit_async_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_chunks,
         // No free entries. Return error so caller can throttle
         return -ENOENT;
 
-    c2b = castle_cache_block_get(cep, BLKS_PER_CHK);
+    c2b = castle_cache_block_get(cep, BLKS_PER_CHK, USER);
     write_lock_c2b(c2b);
 
     /*
@@ -5724,8 +5724,8 @@ static void writeback_rebuild_chunk(writeback_info_t *writeback_info)
              * for the flush thread, make a single page c2b reservation and
              * release it once we've finished dirtying the map_c2b.
              */
-            reserve_c2b = castle_cache_page_block_reserve();
-            map_c2b = castle_cache_block_get(map_cep, 1);
+            reserve_c2b = castle_cache_page_block_reserve(USER);
+            map_c2b = castle_cache_block_get(map_cep, 1, USER);
 
             /*
              * If this is the last page for the shadow map range, and we are only writing back a

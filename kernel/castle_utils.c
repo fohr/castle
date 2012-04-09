@@ -480,14 +480,14 @@ void castle_component_tree_prefetch(struct castle_component_tree *ct)
     cep.ext_id = ct->internal_ext_free.ext_id;
     castle_extent_mask_read_all(cep.ext_id, &start, &end);
     cep.offset = start * C_CHK_SIZE;
-    castle_cache_prefetch_pin(cep, end-start, C2_ADV_PREFETCH);
+    castle_cache_prefetch_pin(cep, C2_ADV_PREFETCH, USER, end-start);
 
     /* Leaf btree nodes. */
     start = end = 0;
     cep.ext_id = ct->tree_ext_free.ext_id;
     castle_extent_mask_read_all(cep.ext_id, &start, &end);
     cep.offset = start * C_CHK_SIZE;
-    castle_cache_prefetch_pin(cep, end-start, C2_ADV_PREFETCH);
+    castle_cache_prefetch_pin(cep, C2_ADV_PREFETCH, USER, end-start);
 
     /* Data extents. */
     for (i = 0; i < ct->nr_data_exts; i++)
@@ -496,7 +496,7 @@ void castle_component_tree_prefetch(struct castle_component_tree *ct)
         cep.ext_id = ct->data_exts[i];
         castle_extent_mask_read_all(cep.ext_id, &start, &end);
         cep.offset = start * C_CHK_SIZE;
-        castle_cache_prefetch_pin(cep, end-start, C2_ADV_PREFETCH);
+    castle_cache_prefetch_pin(cep, C2_ADV_PREFETCH, USER, end-start);
     }
 
     /* Waits for all outstanding prefetch IOs to complete. */

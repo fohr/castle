@@ -283,7 +283,7 @@ static c2_block_t* castle_object_write_buffer_alloc(c_ext_pos_t new_data_cep,
                                     OBJ_IO_MAX_BUFFER_SIZE * C_BLK_SIZE :
                                     data_length;
     nr_blocks = (data_c2b_length - 1) / C_BLK_SIZE + 1;
-    new_data_c2b = castle_cache_block_get(new_data_cep, nr_blocks);
+    new_data_c2b = castle_cache_block_get(new_data_cep, nr_blocks, MERGE_OUT);
 #ifdef CASTLE_DEBUG
     write_lock_c2b(new_data_c2b);
     update_c2b(new_data_c2b);
@@ -1357,7 +1357,7 @@ void castle_object_get_continue(struct castle_bio_vec *c_bvec,
     }
 
     debug("Reading cep "cep_fmt_str_nl, cep2str(data_cep));
-    c2b = castle_cache_block_get(data_cep, nr_blocks);
+    c2b = castle_cache_block_get(data_cep, nr_blocks, USER);
     get->data_c2b        = c2b;
     get->data_c2b_length = data_c2b_length;
     get->data_length     = data_length;
@@ -1632,8 +1632,10 @@ void castle_object_chunk_pull(struct castle_object_pull *pull, void *buf, size_t
 
     debug("Locking cdb (0x%x, 0x%x)\n", cep.ext_id, cep.offset);
     pull->buf      = buf;
-    pull->curr_c2b = castle_cache_block_get(cep, (pull->to_copy - 1) / PAGE_SIZE + 1);
-    castle_cache_advise(pull->curr_c2b->cep, C2_ADV_PREFETCH, -1, -1);
+    pull->curr_c2b = castle_cache_block_get(cep,
+                                            (pull->to_copy - 1) / PAGE_SIZE + 1,
+                                            USER);
+    castle_cache_advise(pull->curr_c2b->cep, C2_ADV_PREFETCH, USER, 0);
     BUG_ON(castle_cache_block_read(pull->curr_c2b,
                                    castle_object_chunk_pull_io_end,
                                    pull));
