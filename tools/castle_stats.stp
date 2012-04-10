@@ -1,0 +1,148 @@
+// NOTE! This does not currently work as it depends on a number of additional
+//       patches in lewis' patch queue.  Speak to him for more info.
+
+
+
+/************************************************************************************
+ *                                                                                  *
+ * Run with the following:                                                          *
+ *                                                                                  *
+ *   -DMAXSKIPPED=0         Exit if any probes are skipped                          *
+ *   -DSTP_NO_OVERLOAD      Extend probe handler time                               *
+ *   -u                     Unoptimised mode (includes elided code)                 *
+ *                                                                                  *
+ ************************************************************************************/
+
+global debug = 0;           /**< Whether to debug request claims/yields.            */
+global tid_to_sid[500];     /**< Map thread ID to active identifier.                */
+
+/**
+ * Calculate chunk for a given offset.
+ */
+//function offset_to_chunk:long (offset:long)
+//{
+//    return offset / 1024 / 1024;
+//}
+
+/*************************************************
+ *************************************************/
+
+probe begin
+{
+    printf("Ready\n");
+}
+
+probe end
+{
+    printf("Listing outstanding requests (none expected if all requested completed)\n");
+    foreach (tid in tid_to_sid)
+    {
+        if (tid_to_sid[tid] != 0)
+            printf("seq_id=%d active for thread %d\n", tid_to_sid[tid], tid);
+    }
+}
+
+/*************************************************
+ *************************************************/
+
+/**
+ * Uptodate c2b requested.
+ *
+ * @param   submitted_c2ps  Number of c2ps that required I/O
+ *                          0 => hit
+ * @param   ext_id          ID of extent that required I/O
+ * @param   ext_type        Extent type
+ * @param   offset          c2b->cep.offset
+ * @param   nr_pages        c2b->cep.nr_pages
+ * @param   async           Was this an async hit/miss?
+ */
+probe kernel.trace("CASTLE_CACHE_BLOCK_READ")
+{
+    if (tid_to_sid[tid()] != 0)
+        printf("%d: %-4d %-5s %-4s (%-3d c2ps) ext_id=%-6d offset=%-12u nr_pages=%d\n",
+            cpu(),
+            tid_to_sid[tid()],
+            $async ? "ASYNC" : "SYNC",
+            $submitted_c2ps ? "MISS" : "HIT",
+            $submitted_c2ps,
+            $ext_id,
+            $offset,
+            $nr_pages);
+}
+
+/*************************************************
+ *************************************************/
+
+/**
+ * Existing request has completed.
+ *
+ * @param   seq_id  Unique value first passed to CASTLE_REQUEST_BEGIN
+ */
+probe kernel.trace("CASTLE_REQUEST_END")
+{
+    if (tid_to_sid[tid()] != 0 && tid_to_sid[tid()] != $seq_id)
+    {
+        printf("%d: %20s: found %-4d expected %-4d tid=%d(%s)\n",
+                cpu(), $$name, tid_to_sid[tid()], $seq_id, tid(), task_execname(task_current()));
+        exit();
+    }
+    if (debug)
+        printf("%d: %20s: %-4d tid=%d(%s)\n",
+                cpu(), $$name, $seq_id, tid(), task_execname(task_current()));
+    tid_to_sid[tid()] = 0;
+}
+
+//probe kernel.trace("workqueue_pre_run"),
+/**
+ * Workqueue has finished processing a request.
+ */
+probe kernel.trace("workqueue_post_run")
+{
+    if (tid_to_sid[tid()] == 0)
+        next;
+    if (debug)
+        printf("%d: %20s: %-4d tid=%d(%s)\n",
+                cpu(), $$name, tid_to_sid[tid()], tid(), task_execname(task_current()));
+    tid_to_sid[tid()] = 0;
+}
+
+/**
+ * Existing request has come back on CPU.
+ *
+ * @param   seq_id  Unique value first passed to CASTLE_REQUEST_BEGIN
+ */
+probe kernel.trace("CASTLE_REQUEST_CLAIM")
+{
+    if (tid_to_sid[tid()] == $seq_id)
+        next;
+    else if (tid_to_sid[tid()] != 0 && tid_to_sid[tid()] != $seq_id)
+    {
+        printf("%d: %20s: found %-4d expected %-4d tid=%d(%s)\n",
+                cpu(), $$name, tid_to_sid[tid()], $seq_id, tid(), task_execname(task_current()));
+        exit();
+    }
+    if (debug)
+        printf("%d: %20s: %-4d tid=%d(%s)\n",
+                cpu(), $$name, $seq_id, tid(), task_execname(task_current()));
+    tid_to_sid[tid()] = $seq_id;
+}
+
+/**
+ * Begin handling new request from the ring.
+ *
+ * @param   seq_id  Unique value for future CLAIMS, etc.
+ * @param   tag     Type of request, e.g. CASTLE_RING_ITER_START, etc.
+ */
+probe kernel.trace("CASTLE_REQUEST_BEGIN")
+{
+    if (tid_to_sid[tid()] != 0)
+    {
+        printf("%d: %20s: found %-4d expected 0 for seq_id=%-4d tid=%d(%s)\n",
+                cpu(), $$name, tid_to_sid[tid()], $seq_id, tid(), task_execname(task_current()));
+        exit();
+    }
+    if (debug)
+        printf("%d: %20s: %-4d tid=%d(%s)\n",
+                cpu(), $$name, $seq_id, tid(), task_execname(task_current()));
+    tid_to_sid[tid()] = $seq_id;
+}
