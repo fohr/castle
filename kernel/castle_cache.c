@@ -320,12 +320,14 @@ static atomic_t                castle_cache_block_victims;          /**< Clean b
 static atomic_t                castle_cache_softpin_block_victims;  /**< Clean softpins evicted   */
 
 /**
- * Castle cache partition definitions.
+ * Castle cache partition states.
  */
-static struct {
+typedef struct {
     atomic_t        max_c2ps;               /**< Total c2ps available for this partition          */
     atomic_t        cur_c2ps;               /**< Current c2ps used by this partition              */
-} castle_cache_partition[NR_CACHE_PARTITIONS];
+} c2_partition_t;
+
+static c2_partition_t           castle_cache_partition[NR_CACHE_PARTITIONS];/**< Cache partitions */
 
 /**
  * Extent-related stats.
@@ -3567,7 +3569,7 @@ out:
  */
 c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
                                    int nr_pages,
-                                   c2_partition_t partition)
+                                   c2_partition_id_t partition)
 {
     int grown_block_freelist = 0, grown_page_freelist = 0;
 #ifdef CASTLE_PERF_DEBUG
@@ -3870,7 +3872,7 @@ static USED char* c2_pref_window_to_str(c2_pref_window_t *window)
  */
 static c2_block_t* c2_pref_block_chunk_get(c_ext_pos_t cep,
                                            c2_pref_window_t *window,
-                                           c2_partition_t partition)
+                                           c2_partition_id_t partition)
 {
     c2_block_t *c2b;
 
@@ -4148,7 +4150,7 @@ static c2_pref_window_t *c2_pref_window_find_and_remove(c_ext_pos_t cep, int exa
  * @also c2_pref_window_advance()
  * @also castle_cache_block_free().
  */
-static int c2_pref_window_insert(c2_pref_window_t *window, c2_partition_t partition)
+static int c2_pref_window_insert(c2_pref_window_t *window, c2_partition_id_t partition)
 {
     struct rb_node **p, *parent = NULL;
     c2_pref_window_t *tree_window;
@@ -4434,7 +4436,7 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b)
  */
 void castle_cache_prefetch_pin(c_ext_pos_t cep,
                                c2_advise_t advise,
-                               c2_partition_t partition,
+                               c2_partition_id_t partition,
                                int chunks)
 {
     c2_block_t *c2b;
@@ -4493,7 +4495,7 @@ void castle_cache_prefetch_pin(c_ext_pos_t cep,
  */
 static void castle_cache_prefetch_unpin(c_ext_pos_t cep,
                                         c2_advise_t advise,
-                                        c2_partition_t partition,
+                                        c2_partition_id_t partition,
                                         int chunks)
 {
     c2_block_t *c2b;
@@ -4549,7 +4551,7 @@ static void castle_cache_prefetch_unpin(c_ext_pos_t cep,
  */
 static void c2_pref_window_submit(c2_pref_window_t *window,
                                   c_ext_pos_t cep,
-                                  c2_partition_t partition,
+                                  c2_partition_id_t partition,
                                   int pages)
 {
     c2_block_t *c2b;
@@ -4583,7 +4585,7 @@ static void c2_pref_window_submit(c2_pref_window_t *window,
 static int c2_pref_window_advance(c2_pref_window_t *window,
                                   c_ext_pos_t cep,
                                   c2_advise_t advise,
-                                  c2_partition_t partition)
+                                  c2_partition_id_t partition)
 {
     int ret = EXIT_SUCCESS;
     int pages, size, adv_pos, falloff_pages;
@@ -4685,7 +4687,7 @@ dont_advance:
  */
 static int castle_cache_prefetch_advise(c_ext_pos_t cep,
                                         c2_advise_t advise,
-                                        c2_partition_t partition)
+                                        c2_partition_id_t partition)
 {
     c2_pref_window_t *window;
 
@@ -4737,7 +4739,7 @@ static int castle_cache_prefetch_advise(c_ext_pos_t cep,
  *
  * @also castle_cache_prefetch_advise()
  */
-int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, c2_partition_t partition, int chunks)
+int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, c2_partition_id_t partition, int chunks)
 {
     /* Downgrade to softpin if hardpinning is disabled. */
     if (!castle_cache_allow_hardpinning && (advise & C2_ADV_HARDPIN))
@@ -4780,7 +4782,7 @@ int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, c2_partition_t part
  */
 int castle_cache_advise_clear(c_ext_pos_t cep,
                               c2_advise_t advise,
-                              c2_partition_t partition,
+                              c2_partition_id_t partition,
                               int chunks)
 {
     /* Downgrade to softpin if hardpinning is disabled. */

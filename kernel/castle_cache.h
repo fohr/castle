@@ -43,12 +43,12 @@ typedef struct castle_cache_block {
 /**
  * Castle cache partition descriptors.
  */
-typedef enum castle_cache_partitions {
+typedef enum {
     USER = 0,                               /**< Direct user-accessed data                        */
     MERGE_IN,                               /**< Cache used for merge input                       */
     MERGE_OUT,                              /**< Cache used for merge output                      */
     NR_CACHE_PARTITIONS,                    /**< Counter; must always be last                     */
-} c2_partition_t;
+} c2_partition_id_t;
 
 /**********************************************************************************************
  * Locking.
@@ -216,9 +216,9 @@ typedef uint32_t c2_advise_t;
 #define C2_ADV_STATIC       ((c2_advise_t) (1<<C2_ADV_static))
 #define C2_ADV_ADAPTIVE     ((c2_advise_t) (1<<C2_ADV_adaptive))
 
-int  castle_cache_advise      (c_ext_pos_t cep, c2_advise_t advise, c2_partition_t partition, int chunks);
-int  castle_cache_advise_clear(c_ext_pos_t cep, c2_advise_t advise, c2_partition_t partition, int chunks);
-void castle_cache_prefetch_pin(c_ext_pos_t cep, c2_advise_t advise, c2_partition_t partition, int chunks);
+int  castle_cache_advise      (c_ext_pos_t cep, c2_advise_t advise, c2_partition_id_t partition, int chunks);
+int  castle_cache_advise_clear(c_ext_pos_t cep, c2_advise_t advise, c2_partition_id_t partition, int chunks);
+void castle_cache_prefetch_pin(c_ext_pos_t cep, c2_advise_t advise, c2_partition_id_t partition, int chunks);
 void castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size, unsigned int ratelimit);
 void castle_cache_extent_evict(c_ext_dirtytree_t *dirtytree, c_chk_cnt_t start, c_chk_cnt_t count);
 void castle_cache_prefetches_wait(void);
@@ -249,7 +249,7 @@ int         castle_cache_block_sync_read(c2_block_t *c2b);
             castle_cache_block_get    ((c_ext_pos_t){RESERVE_EXT_ID, 0}, 1, _partition)
 c2_block_t* castle_cache_block_get    (c_ext_pos_t cep,
                                        int nr_pages,
-                                       c2_partition_t partition);
+                                       c2_partition_id_t partition);
 void        castle_cache_block_hardpin  (c2_block_t *c2b);
 void        castle_cache_block_unhardpin(c2_block_t *c2b);
 void        castle_cache_block_softpin  (c2_block_t *c2b);
