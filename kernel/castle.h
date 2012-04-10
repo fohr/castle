@@ -420,7 +420,7 @@ typedef struct castle_extent_freespace {
 typedef struct castle_extent_freespace_byte_stream {
     /* align:   8 */
     /* offset:  0 */ c_ext_id_t      ext_id;
-    /*          8 */ c_byte_off_t    ext_size;
+    /*          8 */ uint8_t         __unused[8];
     /*         16 */ uint64_t        used;
     /*         24 */ uint64_t        blocked;
     /*         32 */ uint8_t         _unused[32];
@@ -1276,9 +1276,7 @@ struct castle_dmserlist_entry {
                         merge SERDES state. */
     /*        941 */ c_ext_pos_t                      redirection_partition_node_cep;
     /*        957 */ int32_t                          redirection_partition_node_size;
-    /*        961 */ uint64_t                         growth_control_tree_ext_used_bytes;
-    /*        969 */ uint64_t                         growth_control_data_ext_used_bytes;
-    /*        977 */ uint8_t                          pad_to_iters[26];  /**< beyond here entries
+    /*        961 */ uint8_t                          pad_to_iters[7];  /**< beyond here entries
                                                                               are frequently
                                                                               marshalled, so
                                                                               alignment is
@@ -1286,15 +1284,15 @@ struct castle_dmserlist_entry {
     /*         */
 
     /**************** input ct seq and iters: iters potentially marshalled often *****************/
-    /*       1003 */ int32_t                          iter_err;
-    /*       1007 */ int64_t                          iter_non_empty_cnt;
-    /*       1015 */ uint64_t                         iter_src_items_completed;
-    /*       1021 */ c_merge_id_t                     merge_id;
-    /*       1027 */ uint32_t                         nr_drain_exts;
-    /*       1031 */ uint32_t                         pool_id;
-    /*       1035 */
+    /*        968 */ int32_t                          iter_err;
+    /*        972 */ int64_t                          iter_non_empty_cnt;
+    /*        980 */ uint64_t                         iter_src_items_completed;
+    /*        988 */ c_merge_id_t                     merge_id;
+    /*        992 */ uint32_t                         nr_drain_exts;
+    /*        996 */ uint32_t                         pool_id;
+    /*       1000 */
 } PACKED;
-STATIC_BUG_ON(sizeof(struct castle_dmserlist_entry) != 1035);
+STATIC_BUG_ON(sizeof(struct castle_dmserlist_entry) != 1000);
 
 /**
  * Ondisk Serialized structure for castle versions.
@@ -1991,7 +1989,8 @@ int                   castle_new_ext_freespace_init(c_ext_free_t     *ext_free,
                                                     void              *data,
                                                     c_ext_event_callback_t callback);
 void                  castle_ext_freespace_size_update
-                                                   (c_ext_free_t *ext_free);
+                                                   (c_ext_free_t *ext_free,
+                                                    int           do_checks);
 
 int                   castle_ext_freespace_consistent
                                                    (c_ext_free_t     *ext_frees);
@@ -2018,8 +2017,9 @@ void                  castle_ext_freespace_unmarshall
                                                    (c_ext_free_t     *ext_free,
                                                     c_ext_free_bs_t  *ext_free_bs);
 
-c_byte_off_t          castle_ext_freespace_summary_get
+c_byte_off_t          castle_ext_freespace_available
                                                    (c_ext_free_t     *ext_free);
+
 castle_freespace_t *  freespace_sblk_get           (struct castle_slave *cs);
 void                  freespace_sblk_put           (struct castle_slave *cs);
 

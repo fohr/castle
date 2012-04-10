@@ -234,16 +234,19 @@ void castle_fs_superblocks_put(struct castle_fs_superblock *sb, int dirty)
     mutex_unlock(&castle_sblk_lock);
 }
 
-void castle_ext_freespace_size_update(c_ext_free_t *ext_free)
+void castle_ext_freespace_size_update(c_ext_free_t *ext_free, int do_checks)
 {
     c_chk_cnt_t start, end;
 
     castle_extent_latest_mask_read(ext_free->ext_id, &start, &end);
 
     /* This wrapper is written assuming that extent is not yet shrunk. */
-    BUG_ON(start);
+    BUG_ON(do_checks && start);
 
     ext_free->ext_size = end * C_CHK_SIZE;
+    BUG_ON(atomic64_read(&ext_free->used) > ext_free->ext_size);
+
+    wmb();
 }
 
 /**
@@ -261,11 +264,11 @@ void castle_ext_freespace_init(c_ext_free_t *ext_free,
     /* Init the structure. */
     ext_free->ext_id = ext_id;
 
-    /* Get it from extent layer and update. */
-    castle_ext_freespace_size_update(ext_free);
-
     atomic64_set(&ext_free->used, 0);
     atomic64_set(&ext_free->blocked, 0);
+
+    /* Get it from extent layer and update. */
+    castle_ext_freespace_size_update(ext_free, 1 /* Do checks. */);
 }
 
 /**
@@ -435,20 +438,20 @@ int castle_ext_freespace_get(c_ext_free_t *ext_free,
 void castle_ext_freespace_marshall(c_ext_free_t *ext_free, c_ext_free_bs_t *ext_free_bs)
 {
     ext_free_bs->ext_id    = ext_free->ext_id;
-    ext_free_bs->ext_size  = ext_free->ext_size;
     ext_free_bs->used      = atomic64_read(&ext_free->used);
     ext_free_bs->blocked   = atomic64_read(&ext_free->blocked);
 }
 
 void castle_ext_freespace_unmarshall(c_ext_free_t *ext_free, c_ext_free_bs_t *ext_free_bs)
 {
-    ext_free->ext_id       = ext_free_bs->ext_id;
-    ext_free->ext_size     = ext_free_bs->ext_size;
+    ext_free->ext_id    = ext_free_bs->ext_id;
     atomic64_set(&ext_free->used, ext_free_bs->used);
     atomic64_set(&ext_free->blocked, ext_free_bs->blocked);
+    if (!EXT_ID_INVAL(ext_free->ext_id))
+        castle_ext_freespace_size_update(ext_free, 0 /* No checks. */);
 }
 
-c_byte_off_t castle_ext_freespace_summary_get(c_ext_free_t *ext_free)
+c_byte_off_t castle_ext_freespace_available(c_ext_free_t *ext_free)
 {
     return (ext_free->ext_size - atomic64_read(&ext_free->used));
 }

@@ -1981,9 +1981,6 @@ int castle_extents_read(void)
 
     ext_sblk = castle_extents_super_block_get();
 
-    /* Read maps freespace structure from extents superblock. */
-    castle_ext_freespace_unmarshall(&meta_ext_free, &ext_sblk->meta_ext_free_bs);
-
     if ((ret = load_extent_from_mentry(&ext_sblk->meta_ext)))
         goto out;
 
@@ -1992,6 +1989,9 @@ int castle_extents_read(void)
 
     if ((ret = load_extent_from_mentry(&ext_sblk->mstore_ext[1])))
         goto out;
+
+    /* Read maps freespace structure from extents superblock. */
+    castle_ext_freespace_unmarshall(&meta_ext_free, &ext_sblk->meta_ext_free_bs);
 
     atomic_set(&current_rebuild_seqno, ext_sblk->current_rebuild_seqno);
 

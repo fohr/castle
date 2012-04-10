@@ -9,11 +9,6 @@
 
 #define FOR_EACH_MERGE_TREE(_i, _merge) for((_i)=0; (_i)<(_merge)->nr_trees; (_i)++)
 
-typedef struct {
-    uint64_t    ext_used_bytes;       /* bytes currently used */
-    uint64_t    ext_avail_bytes;      /* byets available from extent_grow calls */
-} growth_control_state_t;
-
 struct castle_dfs_resolver;
 
 /* A package of all the material needed to checkpoint a merge; i.e. merge_state packed structure
@@ -91,10 +86,6 @@ struct castle_da_merge {
     c_ext_pos_t                  *in_tree_shrink_activatable_cep;
     /* partition activate copies the above into... */
     c_ext_pos_t                  *in_tree_shrinkable_cep;
-
-    /* extent growth control */
-    growth_control_state_t        growth_control_tree; /* btree leaf node extent growth control */
-    growth_control_state_t        growth_control_data; /* medium objects extent growth control */
 
     /* partition key update pipeline */
     struct castle_key_ptr_t       redirection_partition; /**< The key used to decide if a query

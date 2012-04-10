@@ -3899,59 +3899,31 @@ __again:
  * This function wouldn't increase the count of used bytes. If grow fails, just respond back
  * as failure. Doesn't block on low freespace.
  */
-static int castle_da_merge_extent_grow(struct castle_da_merge *merge,
-                                       c_ext_id_t ext_id,
-                                       growth_control_state_t *state,
-                                       uint64_t space_needed_bytes,
-                                       int growth_rate_chunks)
+static int castle_da_merge_extent_grow(c_ext_free_t     *ext_free,
+                                       uint64_t          space_needed_bytes,
+                                       int               growth_rate_chunks)
 {
-    uint64_t space_remaining_bytes = state->ext_avail_bytes - state->ext_used_bytes;
-
-    debug("%s::[da %d level %d] ext %llu, bytes currently allocated: %llu, bytes used: %llu; bytes needed %llu\n",
+    debug("%s:: ext %llu, bytes currently allocated: %llu, bytes used: %llu; bytes needed %llu\n",
             __FUNCTION__,
-            merge->da->id,
-            merge->level,
-            ext_id,
-            state->ext_avail_bytes,
-            state->ext_used_bytes,
+            ext_free->ext_id,
+            ext_free->ext_size,
+            atomic64_read(ext_free->used),
             space_needed_bytes);
 
-    while (space_remaining_bytes < space_needed_bytes)
+    while (castle_ext_freespace_available(ext_free) < space_needed_bytes)
     {
-        c_chk_cnt_t start, end;
         int ret;
-        uint64_t old_avail_bytes = state->ext_avail_bytes;
+        uint64_t old_avail_bytes = ext_free->ext_size;
 
-        if ((ret = castle_extent_grow(ext_id, growth_rate_chunks)))
+        if ((ret = castle_extent_grow(ext_free->ext_id, growth_rate_chunks)))
             return ret;
 
-        state->ext_avail_bytes  += growth_rate_chunks * C_CHK_SIZE;
-        BUG_ON(state->ext_avail_bytes < old_avail_bytes); /* overflow? */
+        castle_ext_freespace_size_update(ext_free, 1 /* Do checks. */);
 
-        space_remaining_bytes    = state->ext_avail_bytes - state->ext_used_bytes;
-
-        /* sanity check extent */
-        castle_extent_mask_read_all(ext_id, &start, &end);
-        BUG_ON(start!=0);
-        BUG_ON(state->ext_avail_bytes != (end+1) * C_CHK_SIZE);
+        BUG_ON(ext_free->ext_size < old_avail_bytes); /* overflow? */
     }
 
     return 0;
-}
-
-/**
- * Mark space as used. Extent should be big enough to accommodate the space. Somebody must
- * have already called the castle_da_merge_extent_grow(). BUG_ON if the space is not enough.
- */
-static void castle_da_merge_extent_space_consume(struct castle_da_merge  *merge,
-                                                growth_control_state_t  *state,
-                                                uint64_t                 space_needed_bytes)
-{
-    /* By this time we should have done grow, space should always be available. */
-    BUG_ON(state->ext_avail_bytes - state->ext_used_bytes < space_needed_bytes);
-
-    /* Update counters. */
-    state->ext_used_bytes += space_needed_bytes;
 }
 
 static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
@@ -3997,10 +3969,6 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
     ext_space_needed = total_blocks * C_BLK_SIZE;
     debug("%s::[da %d level %d] new object consuming %d blocks (%llu bytes)\n",
         __FUNCTION__, merge->da->id, merge->level, total_blocks, ext_space_needed);
-
-    if (MERGE_CHECKPOINTABLE(merge))
-        castle_da_merge_extent_space_consume(merge, &merge->growth_control_data,
-                                             ext_space_needed);
 
     BUG_ON(castle_ext_freespace_get(&merge->out_tree->data_ext_free,
                                      ext_space_needed,
@@ -4175,12 +4143,6 @@ static c_val_tup_t _castle_da_entry_add(struct castle_da_merge *merge,
         BUG_ON(level->valid_end_idx >= 0);
 
         debug("Allocating a new node at depth: %d\n", depth);
-
-        /* If this is a checkpointable merge and we are trying to add leaf node, make sure
-         * we got space for it and update counters. */
-        if (MERGE_CHECKPOINTABLE(merge) && (depth == 0))
-            castle_da_merge_extent_space_consume(merge, &merge->growth_control_tree,
-                                                 new_node_size * C_BLK_SIZE);
 
         if (castle_ext_freespace_get(ext_free,
                                         new_node_size * C_BLK_SIZE,
@@ -4576,9 +4538,7 @@ static void castle_da_merge_package(struct castle_da_merge *merge, c_ext_pos_t r
     if(MERGE_CHECKPOINTABLE(merge))
     {
         /* ... if there is at least one unused chunk */
-        if(merge->growth_control_tree.ext_avail_bytes -
-                merge->growth_control_tree.ext_used_bytes
-                    > C_CHK_SIZE)
+        if (castle_ext_freespace_available(&out_tree->tree_ext_free) > C_CHK_SIZE)
         {
             castle_printk(LOG_DEBUG, "%s::[da %d level %d] truncating tree ext %u beyond chunk %u,"
                     " after %llu bytes used and %llu bytes allocated (grown)\n",
@@ -4586,16 +4546,14 @@ static void castle_da_merge_package(struct castle_da_merge *merge, c_ext_pos_t r
                     merge->da->id,
                     merge->level,
                     out_tree->tree_ext_free.ext_id,
-                    USED_CHUNK(merge->growth_control_tree.ext_used_bytes),
-                    merge->growth_control_tree.ext_used_bytes,
-                    merge->growth_control_tree.ext_avail_bytes);
+                    USED_CHUNK(atomic64_read(&out_tree->tree_ext_free.used)),
+                    atomic64_read(&out_tree->tree_ext_free.used),
+                    out_tree->tree_ext_free.ext_size);
             castle_extent_truncate(out_tree->tree_ext_free.ext_id,
-                                   USED_CHUNK(merge->growth_control_tree.ext_used_bytes));
+                                   USED_CHUNK(atomic64_read(&out_tree->tree_ext_free.used)));
         }
 
-        if(merge->growth_control_data.ext_avail_bytes -
-                merge->growth_control_data.ext_used_bytes
-                    > C_CHK_SIZE)
+        if (castle_ext_freespace_available(&merge->out_tree->data_ext_free) > C_CHK_SIZE)
         {
             castle_printk(LOG_DEBUG, "%s::[da %d level %d] truncating data ext %u beyond chunk %u,"
                     " after %llu bytes used and %llu bytes allocated (grown)\n",
@@ -4603,11 +4561,11 @@ static void castle_da_merge_package(struct castle_da_merge *merge, c_ext_pos_t r
                     merge->da->id,
                     merge->level,
                     out_tree->data_ext_free.ext_id,
-                    USED_CHUNK(merge->growth_control_data.ext_used_bytes),
-                    merge->growth_control_data.ext_used_bytes,
-                    merge->growth_control_data.ext_avail_bytes);
+                    USED_CHUNK(atomic64_read(&out_tree->data_ext_free.used)),
+                    atomic64_read(&out_tree->data_ext_free.used),
+                    out_tree->data_ext_free.ext_size);
             castle_extent_truncate(out_tree->data_ext_free.ext_id,
-                                   USED_CHUNK(merge->growth_control_data.ext_used_bytes));
+                                   USED_CHUNK(atomic64_read(&out_tree->data_ext_free.used)));
         }
     }
 
@@ -5339,9 +5297,7 @@ static int castle_da_merge_space_reserve(struct castle_da_merge *merge, c_val_tu
     space_needed = castle_da_merge_node_size_get(merge, 0) * C_BLK_SIZE;
 
     /* This functions checks whether we got enough space, if not grows the extent. */
-    ret = castle_da_merge_extent_grow(merge,
-                                      merge->out_tree->tree_ext_free.ext_id,
-                                     &merge->growth_control_tree,
+    ret = castle_da_merge_extent_grow(&merge->out_tree->tree_ext_free,
                                       space_needed,
                                       MERGE_OUTPUT_TREE_GROWTH_RATE);
     if (ret)
@@ -5350,8 +5306,6 @@ static int castle_da_merge_space_reserve(struct castle_da_merge *merge, c_val_tu
                                      merge->out_tree->tree_ext_free.ext_id, merge->id);
         return ret;
     }
-    /* Inefficient as it calls for every key, just temporary cosmetic change. */
-    castle_ext_freespace_size_update(&merge->out_tree->tree_ext_free);
 
     /* If not a medium object or if this extent nor marked to drain, nothing else to be
      * done, just return. */
@@ -5362,9 +5316,7 @@ static int castle_da_merge_space_reserve(struct castle_da_merge *merge, c_val_tu
     space_needed = ((cvt.length - 1) / C_BLK_SIZE + 1) * C_BLK_SIZE;
 
     /* Grow data extent. */
-    ret = castle_da_merge_extent_grow(merge,
-                                      merge->out_tree->data_ext_free.ext_id,
-                                     &merge->growth_control_data,
+    ret = castle_da_merge_extent_grow(&merge->out_tree->data_ext_free,
                                       space_needed,
                                       MERGE_OUTPUT_DATA_GROWTH_RATE);
     if (ret)
@@ -5373,8 +5325,6 @@ static int castle_da_merge_space_reserve(struct castle_da_merge *merge, c_val_tu
                                      merge->out_tree->data_ext_free.ext_id, merge->id);
         return ret;
     }
-    /* Inefficient as it calls for every key, just temporary cosmetic change. */
-    castle_ext_freespace_size_update(&merge->out_tree->data_ext_free);
 
     return 0;
 }
@@ -6202,8 +6152,6 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
             goto error_out;
     }
 
-    merge->growth_control_tree.ext_used_bytes  = 0;
-    merge->growth_control_data.ext_used_bytes  = 0;
     merge->serdes.des                          = 0;
 
     atomic_set(&merge->serdes.live.state, NULL_DAM_SERDES);
@@ -6701,9 +6649,6 @@ static void castle_da_merge_marshall(struct castle_da_merge *merge,
         merge_mstore->skipped_count      = merge->skipped_count;
         merge_mstore->last_leaf_node_cep = INVAL_EXT_POS;
 
-        merge_mstore->growth_control_tree_ext_used_bytes = merge->growth_control_tree.ext_used_bytes;
-        merge_mstore->growth_control_data_ext_used_bytes = merge->growth_control_data.ext_used_bytes;
-
         if(merge->last_leaf_node_c2b)
             merge_mstore->last_leaf_node_cep = merge->last_leaf_node_c2b->cep;
 
@@ -6856,7 +6801,7 @@ static void castle_da_merge_struct_deser(struct castle_da_merge *merge,
     merge_mstore=merge->serdes.live.merge_state;
     /* recover bloom_build_params. */
     if(merge->serdes.live.merge_state->have_bbp)
-        castle_da_ct_bloom_build_param_deserialise(merge->out_tree,
+        castle_da_ct_bloom_build_param_deserialise(des_tree,
                                                   &merge->serdes.live.merge_state->out_tree_bbp);
 
     /* out_btree (type) can be assigned directly because we passed the BUG_ON() btree_type->magic
@@ -6866,11 +6811,6 @@ static void castle_da_merge_struct_deser(struct castle_da_merge *merge,
     merge->skipped_count     = merge_mstore->skipped_count;
     merge->leafs_on_ssds     = merge_mstore->leafs_on_ssds;
     merge->internals_on_ssds = merge_mstore->internals_on_ssds;
-
-    merge->growth_control_tree.ext_used_bytes =
-            merge_mstore->growth_control_tree_ext_used_bytes;
-    merge->growth_control_data.ext_used_bytes =
-            merge_mstore->growth_control_data_ext_used_bytes;
 
     /* get reference to all LOs so the extents don't get dropped when the input cct is put */
     mutex_lock(&des_tree->lo_mutex);
@@ -6987,55 +6927,6 @@ static void castle_da_merge_struct_deser(struct castle_da_merge *merge,
                 __FUNCTION__, merge, da->id, level, cep2str(merge_mstore->last_leaf_node_cep) );
     }
 
-    /* Recover current extent availability */
-    if(MERGE_CHECKPOINTABLE(merge))
-    {
-        c_chk_cnt_t start, end;
-
-        c_ext_id_t tree_ext_id = merge->out_tree->tree_ext_free.ext_id;
-        c_ext_id_t data_ext_id = merge->out_tree->data_ext_free.ext_id;
-
-        castle_extent_mask_read_all(tree_ext_id, &start, &end);
-        BUG_ON(start!=0);
-        if(end == (c_chk_cnt_t)(-1)) /* range.end==-1; the ext was never grown */
-            merge->growth_control_tree.ext_avail_bytes = 0;
-        else
-            merge->growth_control_tree.ext_avail_bytes = (end+1) * C_CHK_SIZE;
-
-        castle_printk(LOG_DEBUG, "%s::[da %d level %d] recovering sparse tree ext %lld (%lu -> %lu) with %llu bytes avail\n",
-                __FUNCTION__,
-                merge->da->id,
-                merge->level,
-                tree_ext_id,
-                start,
-                end,
-                merge->growth_control_tree.ext_avail_bytes);
-        BUG_ON(merge->growth_control_tree.ext_avail_bytes <
-                merge->growth_control_tree.ext_used_bytes);
-
-        if (EXT_ID_INVAL(data_ext_id))
-            goto done;
-
-        castle_extent_mask_read_all(data_ext_id, &start, &end);
-        BUG_ON(start!=0);
-        if(end == (c_chk_cnt_t)(-1)) /* range.end==-1; the ext was never grown */
-            merge->growth_control_data.ext_avail_bytes = 0;
-        else
-            merge->growth_control_data.ext_avail_bytes = (end+1) * C_CHK_SIZE;
-
-        castle_printk(LOG_DEBUG, "%s::[da %d level %d] recovering sparse data ext %lld (%lu -> %lu) with %llu bytes avail\n",
-                __FUNCTION__,
-                merge->da->id,
-                merge->level,
-                data_ext_id,
-                start,
-                end,
-                merge->growth_control_data.ext_avail_bytes);
-        BUG_ON(merge->growth_control_data.ext_avail_bytes <
-                merge->growth_control_data.ext_used_bytes);
-    }
-
-done:
     return;
 }
 
