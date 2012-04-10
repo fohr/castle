@@ -323,8 +323,8 @@ static atomic_t                castle_cache_softpin_block_victims;  /**< Clean s
  * Castle cache partition definitions.
  */
 static struct {
-    atomic_t        max_pgs;                /**< Total pages available for this partition         */
-    atomic_t        cur_pgs;                /**< Current pages used by this partition             */
+    atomic_t        max_c2ps;               /**< Total c2ps available for this partition          */
+    atomic_t        cur_c2ps;               /**< Current c2ps used by this partition              */
 } castle_cache_partition[NR_CACHE_PARTITIONS];
 
 /**
@@ -6241,10 +6241,10 @@ int castle_cache_init(void)
     /* Initialise cache partitions */
     for (j = 0; j < NR_CACHE_PARTITIONS; j++)
     {
-        atomic_set(&castle_cache_partition[j].max_pgs, 0);
-        atomic_set(&castle_cache_partition[j].cur_pgs, 0);
+        atomic_set(&castle_cache_partition[j].max_c2ps, 0);
+        atomic_set(&castle_cache_partition[j].cur_c2ps, 0);
     }
-    atomic_set(&castle_cache_partition[USER].max_pgs,
+    atomic_set(&castle_cache_partition[USER].max_c2ps,
                castle_cache_page_freelist_size);
 
     /* Init other variables */
