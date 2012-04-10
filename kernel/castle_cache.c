@@ -2852,13 +2852,13 @@ static c2_block_t* castle_cache_block_freelist_get(void)
     c2_block_t *c2b = NULL;
 
     spin_lock(&castle_cache_freelist_lock);
-    BUG_ON(castle_cache_block_freelist_size < 0);
     if(castle_cache_block_freelist_size > 0)
     {
         lh = castle_cache_block_freelist.next;
         list_del(lh);
         c2b = list_entry(lh, c2_block_t, free);
         castle_cache_block_freelist_size--;
+        BUG_ON(castle_cache_block_freelist_size < 0);
     }
     spin_unlock(&castle_cache_freelist_lock);
 
@@ -5711,6 +5711,7 @@ static int castle_cache_freelists_init(void)
     }
     /* Finish by adjust the freelist sizes. */
     castle_cache_block_freelist_size -= CASTLE_CACHE_RESERVELIST_QUOTA;
+    BUG_ON(castle_cache_block_freelist_size < 0);
     atomic_set(&castle_cache_block_reservelist_size, CASTLE_CACHE_RESERVELIST_QUOTA);
 
     return 0;
