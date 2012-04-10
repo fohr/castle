@@ -4344,7 +4344,7 @@ static void castle_da_entry_add(struct castle_da_merge *merge,
     } while(true); /* we rely on the ret from _castle_da_entry_add to break out of the loop */
 }
 
-static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
+static void castle_da_node_complete(struct castle_da_merge *merge, int depth, int completing)
 {
     struct castle_da_merge_level *level = merge->levels + depth;
     struct castle_btree_type *btree = merge->out_btree;
@@ -4397,7 +4397,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
 
     /* Insert correct pointer in the parent, unless we've just completed the
        root node at the end of the merge. */
-    if(!(unlikely(merge->completing) && (atomic_read(&merge->out_tree->tree_depth) == (depth+1) )))
+    if(!(unlikely(completing) && (atomic_read(&merge->out_tree->tree_depth) == (depth+1) )))
     {
         CVT_NODE_INIT(node_cvt, (node_c2b->nr_pages * C_BLK_SIZE), node_c2b->cep);
         if ( likely( atomic_read(&merge->out_tree->tree_depth) > (depth+1) ) )
@@ -4443,7 +4443,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     while(node_idx < node->used)
     {
         /* If merge is completing, there shouldn't be any splits any more. */
-        BUG_ON(merge->completing);
+        BUG_ON(completing);
         btree->entry_get(node, node_idx,  &key, &version, &cvt);
         debug("%s::[%p] splitting node at depth %d, cep "cep_fmt_str_nl,
                 __FUNCTION__, merge, depth, cep2str(node_c2b->cep));
@@ -4466,7 +4466,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     }
 
     BUG_ON(node->used != valid_end_idx + 1);
-    if(merge->completing && (atomic_read(&merge->out_tree->tree_depth) == depth + 1))
+    if(completing && (atomic_read(&merge->out_tree->tree_depth) == depth + 1))
     {
         /* Node c2b was set to NULL earlier in this function. When we are completing the merge
            we should never have to create new nodes at the same level (i.e. there shouldn't be
@@ -4500,7 +4500,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth)
     /* Update partial merge partition redirection key */
     if( (MERGE_CHECKPOINTABLE(merge)) &&
         (depth == PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL) &&
-        (!merge->completing))
+        (!completing))
         castle_da_merge_new_partition_update(merge, node_c2b, key);
 
     put_c2b(node_c2b);
@@ -4526,7 +4526,7 @@ static int castle_da_nodes_complete(struct castle_da_merge *merge)
         {
             debug("%s::merge %p tree %d completing level %d\n",
                     __FUNCTION__, merge, merge->out_tree->seq, i);
-            castle_da_node_complete(merge, i);
+            castle_da_node_complete(merge, i, 0 /* Not yet completing tree.  */);
             debug("%s::merge %p tree %d completed level %d\n",
                     __FUNCTION__, merge, merge->out_tree->seq, i);
         }
@@ -4627,7 +4627,6 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge, c_ext_pos
 
     BUG_ON(atomic_read(&merge->out_tree->tree_depth) < 1);
 
-    BUG_ON(!merge->completing);
     /* Start with the root node. */
     node_size = ct->node_sizes[atomic_read(&merge->out_tree->tree_depth) - 1];
     node_c2b = castle_cache_block_get(root_cep, node_size, MERGE_OUT);
@@ -4702,7 +4701,6 @@ static void castle_da_merge_complete(struct castle_da_merge *merge)
 
     BUG_ON(!CASTLE_IN_TRANSACTION);
 
-    merge->completing = 1;
     debug("Complete merge at level: %d|%d\n", merge->level, atomic_read(&merge->out_tree->tree_depth));
     /* Force the nodes to complete by setting next_idx negative. Valid node idx
        can be set to the last entry in the node safely, because it happens in
@@ -4738,7 +4736,7 @@ static void castle_da_merge_complete(struct castle_da_merge *merge)
             level->valid_end_idx--;
             level->valid_version = 0;
             level->next_idx = -1;
-            castle_da_node_complete(merge, i);
+            castle_da_node_complete(merge, i, 1 /* completing tree. */);
         }
     }
     /* Write out the max keys along the max path. */
@@ -6099,7 +6097,6 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
     merge->merged_iter          = NULL;
     merge->last_leaf_node_c2b   = NULL;
     merge->last_key             = NULL;
-    merge->completing           = 0;
     merge->total_nr_bytes       = 0;
     merge->nr_bytes             = 0;
     merge->is_new_key           = 1;
@@ -6692,7 +6689,6 @@ static void castle_da_merge_marshall(struct castle_da_merge *merge,
         BUG_ON(EXT_POS_INVAL(merge->out_tree->tree_ext_free));
 
         castle_da_ct_marshall(&merge_mstore->out_tree, merge->out_tree);
-        merge_mstore->completing         = merge->completing;
         merge_mstore->is_new_key         = merge->is_new_key;
         merge_mstore->skipped_count      = merge->skipped_count;
         merge_mstore->last_leaf_node_cep = INVAL_EXT_POS;
@@ -6858,7 +6854,6 @@ static void castle_da_merge_struct_deser(struct castle_da_merge *merge,
     /* out_btree (type) can be assigned directly because we passed the BUG_ON() btree_type->magic
        in da_merge_deser_check. */
     merge->out_btree         = castle_btree_type_get(da->btree_type);
-    merge->completing        = merge_mstore->completing;
     merge->is_new_key        = merge_mstore->is_new_key;
     merge->skipped_count     = merge_mstore->skipped_count;
     merge->leafs_on_ssds     = merge_mstore->leafs_on_ssds;

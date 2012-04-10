@@ -50,7 +50,6 @@ struct castle_da_merge {
     c_merged_iter_t              *merged_iter;
     c2_block_t                   *last_leaf_node_c2b; /**< Last node c2b at depth 0.            */
     void                         *last_key;           /**< Last key added to out tree, depth 0. */
-    int                           completing;
     uint64_t                      total_nr_bytes;
     uint64_t                      nr_bytes;
     int                           is_new_key;   /**< Is the current key different from the last

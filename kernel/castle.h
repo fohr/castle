@@ -1269,17 +1269,16 @@ struct castle_dmserlist_entry {
     /*        864 */ struct castle_bbp_entry          out_tree_bbp;
     /*        934 */ uint8_t                          have_bbp;
     /*        935 */ btree_t                          btree_type;
-    /*        936 */ int8_t                           completing;
-    /*        937 */ int8_t                           is_new_key;
-    /*        938 */ uint32_t                         skipped_count;
+    /*        936 */ int8_t                           is_new_key;
+    /*        937 */ uint32_t                         skipped_count;
                      /* Although the redirection partition is contained by the castle_double_array
                         struct, SERDES is left to merge because the partition is tightly linked to
                         merge SERDES state. */
-    /*        942 */ c_ext_pos_t                      redirection_partition_node_cep;
-    /*        958 */ int32_t                          redirection_partition_node_size;
-    /*        962 */ uint64_t                         growth_control_tree_ext_used_bytes;
-    /*        970 */ uint64_t                         growth_control_data_ext_used_bytes;
-    /*        978 */ uint8_t                          pad_to_iters[26];  /**< beyond here entries
+    /*        941 */ c_ext_pos_t                      redirection_partition_node_cep;
+    /*        957 */ int32_t                          redirection_partition_node_size;
+    /*        961 */ uint64_t                         growth_control_tree_ext_used_bytes;
+    /*        969 */ uint64_t                         growth_control_data_ext_used_bytes;
+    /*        977 */ uint8_t                          pad_to_iters[26];  /**< beyond here entries
                                                                               are frequently
                                                                               marshalled, so
                                                                               alignment is
@@ -1287,15 +1286,15 @@ struct castle_dmserlist_entry {
     /*         */
 
     /**************** input ct seq and iters: iters potentially marshalled often *****************/
-    /*       1004 */ int32_t                          iter_err;
-    /*       1008 */ int64_t                          iter_non_empty_cnt;
-    /*       1016 */ uint64_t                         iter_src_items_completed;
-    /*       1022 */ c_merge_id_t                     merge_id;
-    /*       1028 */ uint32_t                         nr_drain_exts;
-    /*       1032 */ uint32_t                         pool_id;
-    /*       1036 */
+    /*       1003 */ int32_t                          iter_err;
+    /*       1007 */ int64_t                          iter_non_empty_cnt;
+    /*       1015 */ uint64_t                         iter_src_items_completed;
+    /*       1021 */ c_merge_id_t                     merge_id;
+    /*       1027 */ uint32_t                         nr_drain_exts;
+    /*       1031 */ uint32_t                         pool_id;
+    /*       1035 */
 } PACKED;
-STATIC_BUG_ON(sizeof(struct castle_dmserlist_entry) != 1036);
+STATIC_BUG_ON(sizeof(struct castle_dmserlist_entry) != 1035);
 
 /**
  * Ondisk Serialized structure for castle versions.
