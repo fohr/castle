@@ -4144,6 +4144,8 @@ static c_val_tup_t _castle_da_entry_add(struct castle_da_merge *merge,
 {
     struct castle_da_merge_level *level = merge->levels + depth;
     struct castle_btree_type *btree = merge->out_btree;
+    struct castle_component_tree *out_tree = merge->out_tree;
+    struct castle_double_array *da = merge->da;
     struct castle_btree_node *node;
     int key_cmp;
     c_val_tup_t  preadoption_cvt = INVAL_VAL_TUP;
@@ -4151,44 +4153,20 @@ static c_val_tup_t _castle_da_entry_add(struct castle_da_merge *merge,
     uint16_t     new_node_size   = 0;
     c_ext_pos_t  new_cep         = INVAL_EXT_POS;
 
-    /* Deal with medium and large objects first. For medium objects, we need to copy them
-       into our new medium object extent. For large objects, we need to save the aggregate
-       size. plus take refs to extents? */
-    /* It is possible to do castle_da_entry_add() on the same entry multiple
-     * times. Don't process data again. */
-    if (!is_re_add)
-    {
-        if(CVT_MEDIUM_OBJECT(cvt))
-            cvt = castle_da_medium_obj_copy(merge, cvt);
-        if(CVT_LARGE_OBJECT(cvt))
-        {
-            atomic64_add(castle_extent_size_get(cvt.cep.ext_id), &merge->out_tree->large_ext_chk_cnt);
-            /* No need to add Large Objects under lock as merge is done in sequence. No concurrency
-             * issues on the tree. With merge serialisation, checkpoint thread uses the list on
-             * the output tree, which is only spliced in da_merge_marshall (under serdes lock) and
-             * da_merge_package (which explicitly takes serdes lock).*/
-            /* Adding LO to a temp list, wait for merge_serialise to splice when appropriate, or
-               da_merge_package to do final splice. */
-            castle_ct_large_obj_add(cvt.cep.ext_id, cvt.length, &merge->new_large_objs, NULL);
-            BUG_ON(castle_extent_link(cvt.cep.ext_id) < 0);
-            debug("%s::large object ("cep_fmt_str") for da %d level %d.\n",
-                __FUNCTION__, cep2str(cvt.cep), merge->da->id, merge->level);
-        }
-    }
-
     debug("%s::[%p] Adding an entry at depth: %u for merge id %u level %u (out tree depth: %d)\n",
-            __FUNCTION__, merge, depth, merge->id, merge->level, atomic_read(&merge->out_tree->tree_depth));
+            __FUNCTION__, merge, depth, merge->id, merge->level, atomic_read(&out_tree->tree_depth));
     BUG_ON(depth >= MAX_BTREE_DEPTH);
+
     /* Alloc a new block if we need one */
     if(!level->node_c2b)
     {
         c_ext_free_t *ext_free;
 
         castle_da_merge_node_info_get(merge, depth, &new_node_size, &ext_free);
-        if ( atomic_read(&merge->out_tree->tree_depth) < (depth+1) )
+        if ( atomic_read(&out_tree->tree_depth) < (depth+1) )
         {
             debug("%s::Creating a new root level: %d\n", __FUNCTION__, depth);
-            merge->out_tree->node_sizes[depth] = new_node_size;
+            out_tree->node_sizes[depth] = new_node_size;
             new_root_node = 1; /* actual new root node linking has to be deferred till the entry is
                                   added; use this flag */
         }
@@ -4215,14 +4193,14 @@ static c_val_tup_t _castle_da_entry_add(struct castle_da_merge *merge,
         update_c2b(level->node_c2b);
         /* Init the node properly */
         node = c2b_bnode(level->node_c2b);
-        castle_btree_node_init(merge->out_tree, node, 0, new_node_size, depth);
+        castle_btree_node_init(out_tree, node, 0, new_node_size, depth);
         if (depth > 0)
             node->flags &= ~BTREE_NODE_IS_LEAF_FLAG;
-        debug("%s::Allocating a new node at depth: %d for merge %p (da %d level %d)\n",
-            __FUNCTION__, depth, merge, merge->da->id, merge->level);
+        debug("%s::Allocating a new node at depth: %d for tree %p (da %d)\n",
+            __FUNCTION__, depth, out_tree, da->id);
 
         /* if a parent node exists, return preadoption cvt for caller to perform preadoption */
-        if ( atomic_read(&merge->out_tree->tree_depth) > (depth+1) )
+        if ( atomic_read(&out_tree->tree_depth) > (depth+1) )
         {
             BUG_ON(new_root_node);
             CVT_NODE_INIT(preadoption_cvt,
@@ -4234,8 +4212,8 @@ static c_val_tup_t _castle_da_entry_add(struct castle_da_merge *merge,
         write_lock_c2b(level->node_c2b);
 
     node = c2b_bnode(level->node_c2b);
-    debug("Adding at idx=%d depth=%d into node %p for merge on da %d level %d\n",
-        level->next_idx, depth, node, merge->da->id, merge->level);
+    debug("Adding at idx=%d depth=%d into node %p for immut tree on da %d\n",
+        level->next_idx, depth, node, da->id);
     debug("Adding an idx=%d, key=%p, *key=%d, version=%d\n",
             level->next_idx, key, *((uint32_t *)key), version);
 
@@ -4261,18 +4239,6 @@ static c_val_tup_t _castle_da_entry_add(struct castle_da_merge *merge,
                ((depth == 0)? merge->is_new_key: btree->key_compare(key, level->last_key)) :
                0;
 
-    /* Keep track of the max stream length of versions for any given key (but only for a fresh stream
-       into the output leaf nodes). */
-    if ( (!is_re_add) && (depth==0) )
-    {
-        if (merge->is_new_key)
-            merge->current_key_stream_v_count = 1;
-        else
-            merge->current_key_stream_v_count++;
-        merge->out_tree->max_versions_per_key =
-                max(merge->out_tree->max_versions_per_key, merge->current_key_stream_v_count);
-    }
-
     debug("Key cmp=%d\n", key_cmp);
     BUG_ON(key_cmp < 0);
 
@@ -4293,14 +4259,14 @@ static c_val_tup_t _castle_da_entry_add(struct castle_da_merge *merge,
     if(new_root_node)
     {
         /* only have contention on output tree if tree queriable */
-        write_lock(&merge->da->lock);
-        merge->out_tree->root_node = new_cep;
+        write_lock(&da->lock);
+        out_tree->root_node = new_cep;
         /* tree_depth is weird; it goes from -1 to 1, no 0 */
-        if (unlikely(atomic_read(&merge->out_tree->tree_depth) == -1))
-            atomic_add(2, &merge->out_tree->tree_depth);
+        if (unlikely(atomic_read(&out_tree->tree_depth) == -1))
+            atomic_add(2, &out_tree->tree_depth);
         else
-            atomic_inc(&merge->out_tree->tree_depth);
-        write_unlock(&merge->da->lock);
+            atomic_inc(&out_tree->tree_depth);
+        write_unlock(&da->lock);
     }
 
     /* Work out if the current/previous entry could be a valid node end.
@@ -4373,8 +4339,8 @@ static void castle_da_entry_add(struct castle_da_merge *merge,
         is_re_add = 0;
         depth++;
 
-        debug("%s::[%p] preadopting new orphan node for merge id %u level %d.\n",
-                __FUNCTION__, merge, merge->id, merge->level);
+        debug("%s::[%p] preadopting new orphan node for out_tree %p.\n",
+                __FUNCTION__, merge, merge->out_tree);
     } while(true); /* we rely on the ret from _castle_da_entry_add to break out of the loop */
 }
 
@@ -5437,6 +5403,7 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
                               uint64_t max_nr_bytes)
 {
     int ret;
+    struct castle_component_tree *out_tree = merge->out_tree;
 
     /* Skip entry if version marked for deletion and no descendant keys. */
     if (castle_da_entry_skip(merge, key, version))
@@ -5483,6 +5450,37 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
         castle_merge_sleep_return(merge);
     }
 
+    /* Deal with medium and large objects first. For medium objects, we need to copy them
+       into our new medium object extent. For large objects, we need to save the aggregate
+       size. plus take refs to extents? */
+    /* It is possible to do castle_da_entry_add() on the same entry multiple
+     * times. Don't process data again. */
+    if (CVT_MEDIUM_OBJECT(cvt))
+        cvt = castle_da_medium_obj_copy(merge, cvt);
+    else if (CVT_LARGE_OBJECT(cvt))
+    {
+        atomic64_add(castle_extent_size_get(cvt.cep.ext_id), &out_tree->large_ext_chk_cnt);
+        /* No need to add Large Objects under lock as merge is done in sequence. No concurrency
+         * issues on the tree. With merge serialisation, checkpoint thread uses the list on
+         * the output tree, which is only spliced in da_merge_marshall (under serdes lock) and
+         * da_merge_package (which explicitly takes serdes lock).*/
+        /* Adding LO to a temp list, wait for merge_serialise to splice when appropriate, or
+           da_merge_package to do final splice. */
+        castle_ct_large_obj_add(cvt.cep.ext_id, cvt.length, &merge->new_large_objs, NULL);
+        BUG_ON(castle_extent_link(cvt.cep.ext_id) < 0);
+        debug("%s::large object ("cep_fmt_str") for da %d level %d.\n",
+            __FUNCTION__, cep2str(cvt.cep), da->id, merge->level);
+    }
+
+    /* Keep track of the max stream length of versions for any given key. */
+    if (merge->is_new_key)
+        merge->current_key_stream_v_count = 1;
+    else
+        merge->current_key_stream_v_count++;
+
+    out_tree->max_versions_per_key =
+            max(out_tree->max_versions_per_key, merge->current_key_stream_v_count);
+
     /* Add entry to the output btree.
      *
      * - Add to level 0 node (and recurse up the tree)
@@ -5492,17 +5490,17 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
     if (castle_da_user_timestamping_check(merge->da))
     {
         castle_atomic64_max(cvt.user_timestamp,
-                            &merge->out_tree->max_user_timestamp);
+                            &out_tree->max_user_timestamp);
         castle_atomic64_min(cvt.user_timestamp,
-                            &merge->out_tree->min_user_timestamp);
+                            &out_tree->min_user_timestamp);
     }
 
-    if (merge->out_tree->bloom_exists && merge->is_new_key)
-        castle_bloom_add(&merge->out_tree->bloom, merge->out_btree, key);
+    if (out_tree->bloom_exists && merge->is_new_key)
+        castle_bloom_add(&out_tree->bloom, merge->out_btree, key);
 
     /* Update per-version and merge statistics.
      * We are starting with merged iterator stats (from above). */
-    atomic64_inc(&merge->out_tree->item_count);
+    atomic64_inc(&out_tree->item_count);
     /* Level 1 merge introduces keys/tombstones into the version stats. */
     if (merge->level == 1)
         castle_version_stats_entry_add(version,
@@ -5510,7 +5508,7 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
                                        &merge->version_states);
 
     /* Update component tree size stats. */
-    castle_tree_size_stats_update(key, &cvt, merge->out_tree, 1 /* Add. */);
+    castle_tree_size_stats_update(key, &cvt, out_tree, 1 /* Add. */);
 
     /* Try to complete node. */
     ret = castle_da_nodes_complete(merge);
