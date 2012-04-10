@@ -1990,6 +1990,8 @@ int                   castle_new_ext_freespace_init(c_ext_free_t     *ext_free,
                                                     int               in_tran,
                                                     void              *data,
                                                     c_ext_event_callback_t callback);
+void                  castle_ext_freespace_size_update
+                                                   (c_ext_free_t *ext_free);
 
 int                   castle_ext_freespace_consistent
                                                    (c_ext_free_t     *ext_frees);

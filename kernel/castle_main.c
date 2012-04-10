@@ -234,6 +234,18 @@ void castle_fs_superblocks_put(struct castle_fs_superblock *sb, int dirty)
     mutex_unlock(&castle_sblk_lock);
 }
 
+void castle_ext_freespace_size_update(c_ext_free_t *ext_free)
+{
+    c_chk_cnt_t start, end;
+
+    castle_extent_latest_mask_read(ext_free->ext_id, &start, &end);
+
+    /* This wrapper is written assuming that extent is not yet shrunk. */
+    BUG_ON(start);
+
+    ext_free->ext_size = end * C_CHK_SIZE;
+}
+
 /**
  * Initialises the freespace structure for an extent provided.
  *
@@ -248,7 +260,10 @@ void castle_ext_freespace_init(c_ext_free_t *ext_free,
 
     /* Init the structure. */
     ext_free->ext_id = ext_id;
-    ext_free->ext_size = castle_extent_size_get(ext_id) * C_CHK_SIZE;
+
+    /* Get it from extent layer and update. */
+    castle_ext_freespace_size_update(ext_free);
+
     atomic64_set(&ext_free->used, 0);
     atomic64_set(&ext_free->blocked, 0);
 }

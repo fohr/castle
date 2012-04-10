@@ -4182,10 +4182,14 @@ static c_val_tup_t _castle_da_entry_add(struct castle_da_merge *merge,
             castle_da_merge_extent_space_consume(merge, &merge->growth_control_tree,
                                                  new_node_size * C_BLK_SIZE);
 
-        BUG_ON(castle_ext_freespace_get(ext_free,
+        if (castle_ext_freespace_get(ext_free,
                                         new_node_size * C_BLK_SIZE,
                                         0,
-                                        &new_cep) < 0);
+                                        &new_cep) < 0)
+        {
+            printk("%p\n", merge);
+            BUG();
+        }
         debug("Got "cep_fmt_str_nl, cep2str(new_cep));
         level->node_c2b = castle_cache_block_get(new_cep, new_node_size, MERGE_OUT);
         debug("Locking the c2b, and setting it up to date.\n");
@@ -5346,6 +5350,8 @@ static int castle_da_merge_space_reserve(struct castle_da_merge *merge, c_val_tu
                                      merge->out_tree->tree_ext_free.ext_id, merge->id);
         return ret;
     }
+    /* Inefficient as it calls for every key, just temporary cosmetic change. */
+    castle_ext_freespace_size_update(&merge->out_tree->tree_ext_free);
 
     /* If not a medium object or if this extent nor marked to drain, nothing else to be
      * done, just return. */
@@ -5367,6 +5373,8 @@ static int castle_da_merge_space_reserve(struct castle_da_merge *merge, c_val_tu
                                      merge->out_tree->data_ext_free.ext_id, merge->id);
         return ret;
     }
+    /* Inefficient as it calls for every key, just temporary cosmetic change. */
+    castle_ext_freespace_size_update(&merge->out_tree->data_ext_free);
 
     return 0;
 }

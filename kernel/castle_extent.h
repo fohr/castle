@@ -123,6 +123,10 @@ void                castle_extent_current_mask              (c_ext_id_t     ext_
                                                              c_chk_cnt_t   *start,
                                                              c_chk_cnt_t   *end);
 #endif
+void                castle_extent_latest_mask_read          (c_ext_id_t     ext_id,
+                                                             c_chk_cnt_t   *start,
+                                                             c_chk_cnt_t   *end);
+
 void                castle_extent_mask_read_all             (c_ext_id_t     ext_id,
                                                              c_chk_cnt_t   *start,
                                                              c_chk_cnt_t   *end);

@@ -4141,12 +4141,30 @@ static void castle_extent_mask_read(c_ext_mask_id_t mask_id, c_chk_cnt_t *start,
     read_unlock_irq(&castle_extents_hash_lock);
 }
 
-static void castle_extent_latest_mask_read(c_ext_t *ext, c_chk_cnt_t *start, c_chk_cnt_t *end)
+static void _castle_extent_latest_mask_read(c_ext_t *ext, c_chk_cnt_t *start, c_chk_cnt_t *end)
 {
     c_ext_mask_t *mask;
 
     read_lock_irq(&castle_extents_hash_lock);
 
+    mask = GET_LATEST_MASK(ext);
+
+    *start = mask->range.start;
+    *end   = mask->range.end;
+
+    read_unlock_irq(&castle_extents_hash_lock);
+}
+
+/* Note: Make sure this can't race with castle_extent_free(), as we read extent pointer
+ * and other data in two different atomic blocks.*/
+void castle_extent_latest_mask_read(c_ext_id_t ext_id, c_chk_cnt_t *start, c_chk_cnt_t *end)
+{
+    c_ext_t *ext;
+    c_ext_mask_t *mask;
+
+    read_lock_irq(&castle_extents_hash_lock);
+
+    ext  = __castle_extents_hash_get(ext_id);
     mask = GET_LATEST_MASK(ext);
 
     *start = mask->range.start;
@@ -6508,7 +6526,7 @@ static int castle_extent_scan_uuid(c_ext_t *ext, uint32_t uuid)
     c_disk_chk_t chunks[ext->k_factor];
     c_chk_cnt_t ext_start, ext_end;
 
-    castle_extent_latest_mask_read(ext, &ext_start, &ext_end);
+    _castle_extent_latest_mask_read(ext, &ext_start, &ext_end);
 
     for (chunkno = ext_start; chunkno<ext_end; chunkno++)
     {
