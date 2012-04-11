@@ -44,6 +44,7 @@ typedef struct castle_cache_block {
  * Castle cache partition descriptors.
  */
 typedef enum {
+    IGNORE_PARTITION = -1,                  /**< Cache to ignore partition                        */
     USER = 0,                               /**< Direct user-accessed data                        */
     MERGE_IN,                               /**< Cache used for merge input                       */
     MERGE_OUT,                              /**< Cache used for merge output                      */

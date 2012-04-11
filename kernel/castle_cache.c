@@ -2528,102 +2528,46 @@ void put_c2b_and_demote(c2_block_t *c2b)
     put_c2b(c2b);
 }
 
-
 /**
- * Gets c2b matching (cep, nr_pages) and adjusts its dirty/freelist position.
+ * Gets c2b matching (cep, nr_pages) and adjusts its LRU position.
  *
- * @arg cep         Specifies the c2b offset and extent
- * @arg nr_pages    Specifies size of block
- * @arg promote     If set: advises LRU mechanism we will use this block
- *                  If unset: advises LRU mechanism we will free this block
- *
- * @return Matching c2b with an additional reference
- * @return NULL if no matches were found
- */
-static inline c2_block_t* _castle_cache_block_hash_get(c_ext_pos_t cep,
-                                                       uint32_t nr_pages,
-                                                       int promote)
-{
-    c2_block_t *c2b = NULL;
-
-    /* Hold the hash lock. */
-    read_lock(&castle_cache_block_hash_lock);
-
-    /* Try and get the matching block from the hash. */
-    c2b = castle_cache_block_hash_find(cep, nr_pages);
-    if (c2b)
-    {
-        /* We found a matching block. */
-        get_c2b(c2b);
-        /* we have a reference so drop the lock on the hash */
-        read_unlock(&castle_cache_block_hash_lock);
-        if(promote)
-        {
-            /* We are obtaining this block to be used.  We should push it to
-             * the end of the LRU list indicating that it is recently used
-             * and should not be freed any time soon.
-             *
-             * We're going to return this block to the caller so hold a
-             * reference for them so it doesn't get removed. */
-            spin_lock_irq(&castle_cache_block_lru_lock);
-            if (!c2b_dirty(c2b))
-                list_move_tail(&c2b->lru, &castle_cache_block_lru);
-            spin_unlock_irq(&castle_cache_block_lru_lock);
-        }
-        else
-        {
-            spin_lock_irq(&castle_cache_block_lru_lock);
-            if (atomic_read(&c2b->count) == 0)
-            {
-                /* No references on this block means it's not in use.
-                 * If clean: demote so it gets reused next
-                 * If dirty: don't touch it - let LRU mechanism handle it */
-                if (!c2b_dirty(c2b))
-                    list_move(&c2b->lru, &castle_cache_block_lru);
-            }
-            spin_unlock_irq(&castle_cache_block_lru_lock);
-            /* demote callers do not need a reference to the block */
-            put_c2b(c2b);
-        }
-    } /* if(c2b) */
-    else
-    {
-        read_unlock(&castle_cache_block_hash_lock);
-    }
-    return c2b;
-}
-
-/**
- * Get c2b matching (cep, nr_pages).
- *
- * @arg cep     Specifies the c2b offset and extent
- * @arg nr_pages    Specifies size of block
+ * @param cep       Specifies the c2b offset and extent
+ * @param nr_pages  Specifies size of block
+ * @param part_id   Cache partition block is for
+ *                  IGNORE_PARTITION => Do not adjust c2b priority in LRU
  *
  * @return Matching c2b with an additional reference
  * @return NULL if no matches were found
  */
 static inline c2_block_t* castle_cache_block_hash_get(c_ext_pos_t cep,
-                               uint32_t nr_pages)
+                                                      uint32_t nr_pages,
+                                                      c2_partition_id_t part_id)
 {
-    return _castle_cache_block_hash_get(cep, nr_pages, 1);
-}
+    c2_block_t *c2b = NULL;
 
-/**
- * Find block matching (cep, nr_pages) and demote it in the clean/dirtytree.
- *
- * NOTE: does not obtain an addition reference on any block returned.  The
- * caller is responsible for obtaining this if required.
- *
- * @arg cep         Specifies the c2b offset and extent
- * @arg nr_pages    Specifies size of block
- *
- * @return 1 c2b found
- * @return 0 c2b not found
- */
-static inline int castle_cache_block_hash_demote(c_ext_pos_t cep,
-                                                         uint32_t nr_pages)
-{
-    return _castle_cache_block_hash_get(cep, nr_pages, 0) ? 1 : 0;
+    /* Take block hash lock and search for matching c2b. */
+    read_lock(&castle_cache_block_hash_lock);
+    c2b = castle_cache_block_hash_find(cep, nr_pages);
+    if (c2b)
+    {
+        /* Take c2b reference so we can drop block hash lock. */
+        get_c2b(c2b);
+        read_unlock(&castle_cache_block_hash_lock);
+
+        if (part_id != IGNORE_PARTITION)
+        {
+            /* We are obtaining this c2b to be used by a specific cache
+             * partition.  Adjust its position to reflect this in the LRU. */
+            spin_lock_irq(&castle_cache_block_lru_lock);
+            if (!c2b_dirty(c2b))
+                list_move_tail(&c2b->lru, &castle_cache_block_lru);
+            spin_unlock_irq(&castle_cache_block_lru_lock);
+        }
+    }
+    else
+        read_unlock(&castle_cache_block_hash_lock);
+
+    return c2b;
 }
 
 /**
@@ -3587,7 +3531,7 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
         debug("Trying to find buffer for cep="cep_fmt_str", nr_pages=%d\n",
             __cep2str(cep), nr_pages);
         /* Try to find in the hash first */
-        c2b = castle_cache_block_hash_get(cep, nr_pages);
+        c2b = castle_cache_block_hash_get(cep, nr_pages, partition);
         debug("Found in hash: %p\n", c2b);
         if (c2b)
         {
@@ -3925,7 +3869,7 @@ static void c2_pref_block_chunk_put(c_ext_pos_t cep, c2_pref_window_t *window)
     c2_block_t *c2b;
     int demote = 0;
 
-    if ((c2b = castle_cache_block_hash_get(cep, BLKS_PER_CHK)))
+    if ((c2b = castle_cache_block_hash_get(cep, BLKS_PER_CHK, IGNORE_PARTITION)))
     {
         /* Clear c2b status bits. */
         if (test_clear_c2b_prefetch(c2b))
@@ -4507,7 +4451,9 @@ static void castle_cache_prefetch_unpin(c_ext_pos_t cep,
         /* Get block, lock it and update offset. */
         if (advise & C2_ADV_SOFTPIN)
         {
-            if ((c2b = castle_cache_block_hash_get(cep, BLKS_PER_CHK)))
+            if ((c2b = castle_cache_block_hash_get(cep,
+                                                   BLKS_PER_CHK,
+                                                   IGNORE_PARTITION)))
                 clearsoftpin_c2b(c2b);
         }
         else //if (advise & C2_ADV_HARDPIN)
