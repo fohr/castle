@@ -3778,7 +3778,7 @@ static int castle_back_work_do(void *data)
         preempt_enable();
         if (!more)
         {
-            trace_back_work_do(conn, items);
+            trace_CASTLE_BACK_WORK_DO(conn, items);
             items = 0;
             schedule();
         }

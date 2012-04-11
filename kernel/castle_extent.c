@@ -5623,7 +5623,7 @@ int submit_async_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_chunks,
         rebuild_read_chunks++;
         /* Submit read only. Read c2b endio will schedule the write.
          * Since this is rebuild, we call submit_c2b(READ, ...) directly
-         * as we do not care about recording cache hit/miss statistics. */
+         * as we do not want to record cache hit/miss statistics. */
         BUG_ON(submit_c2b(READ, c2b));
     } else
     {

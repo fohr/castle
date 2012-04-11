@@ -10,6 +10,7 @@
 #include "castle_versions.h"
 #include "castle_da.h"
 #include "castle_debug.h"
+#include "castle_systemtap.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -1280,7 +1281,7 @@ static void castle_btree_c2b_lock(c_bvec_t *c_bvec, c2_block_t *c2b)
        - on writes, if we reached leaf level (possibly following leaf pointers)
        - on writes, if we are doing splits
      */
-    if (!c2b_uptodate(c2b) || write)
+    if (write || !c2b_uptodate(c2b))
     {
         write_lock_c2b(c2b);
         set_bit(CBV_C2B_WRITE_LOCKED, &c_bvec->flags);
@@ -1334,12 +1335,18 @@ static void castle_btree_submit_io_end(c2_block_t *c2b, int did_io)
     castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_UPTODATE);
 
     BUG_ON(c_bvec->btree_depth > MAX_BTREE_DEPTH);
-    /* Put on to the workqueue. Choose a workqueue which corresponds
-       to how deep we are in the tree.
-       A single queue cannot be used, because a request blocked on
-       lock_c2b() would block the entire queue (=> deadlock). */
-    CASTLE_INIT_WORK(&c_bvec->work, castle_btree_process);
-    castle_btree_bvec_queue(c_bvec);
+
+    if (did_io)
+    {
+        /* Place onto the workqueue.  Choose a workqueue which corresponds to
+         * how deep we are in the tree.  A single queue cannot be used, because
+         * a requested blocked on lock_c2b() would block the entire queue,
+         * which would lead to a deadlock. */
+        CASTLE_INIT_WORK(&c_bvec->work, castle_btree_process);
+        castle_btree_bvec_queue(c_bvec);
+    }
+    else
+        castle_btree_process(&c_bvec->work);
 }
 
 static void __castle_btree_submit(c_bvec_t *c_bvec,
@@ -1375,7 +1382,7 @@ static void __castle_btree_submit(c_bvec_t *c_bvec,
     c2b = castle_cache_block_get(node_cep,
                                  ct->node_sizes[c_bvec->btree_levels - c_bvec->btree_depth],
                                  write ? MERGE_OUT : USER);
-    castle_btree_c2b_lock(c_bvec, c2b);
+    castle_btree_c2b_lock(c_bvec, c2b); /* takes c2b read or write-lock */
     /* On reads, the parent can only be unlocked _after_ child got locked. */
     if(!write)
         castle_btree_c2b_forget(c_bvec);
@@ -1384,19 +1391,26 @@ static void __castle_btree_submit(c_bvec_t *c_bvec,
     {
         /* If the buffer doesn't contain up to date data, schedule the IO */
         castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_OUTOFDATE);
-        c2b->private = c_bvec;
-        c2b->end_io = castle_btree_submit_io_end;
-        BUG_ON(submit_c2b(READ, c2b));
+        BUG_ON(_castle_cache_block_read(c2b,
+                                        castle_btree_submit_io_end,
+                                        c_bvec));
     }
     else
     {
-        /* sanity check */
         struct castle_btree_node *node;
+
+        trace_CASTLE_CACHE_BLOCK_READ(0 /*submitted_c2ps*/,
+                                      c2b->cep.ext_id,
+                                      castle_extent_type_get(c2b->cep.ext_id),
+                                      c2b->cep.offset,
+                                      c2b->nr_pages,
+                                      1 /*async*/);
+
         node = c2b_bnode(c2b);
         BUG_ON(node->magic != BTREE_NODE_MAGIC);
-        /* If the buffer is up to date, copy data, and call the node processing
-           function directly. c2b_remember should not return an error, because
-           the Btree node had been normalized already. */
+        /* The buffer is up to date.  Copy data and call the node processing
+         * function directly.  c2b_remember should not return an error because
+         * the btree node has been normalized already. */
         castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_UPTODATE);
         castle_btree_c2b_remember(c_bvec, c2b);
         castle_btree_process(&c_bvec->work);
@@ -1778,15 +1792,20 @@ static void castle_btree_iter_path_traverse_endio(c2_block_t *c2b, int did_io)
         c_iter->path[c_iter->depth] = c2b;
     }
 
-    /* Put on to the workqueue.  Choose a workqueue which corresponds to how
-     * deep we are in the btree.
-     * A single queue cannot be used because a request blocked on lock_c2b()
-     * would block the entire queue (=> deadlock).
-     *
-     * NOTE: The +1 is required to match the workqueues we are using in normal
-     *       btree walks. */
-    CASTLE_INIT_WORK(&c_iter->work, _castle_btree_iter_path_traverse);
-    queue_work(castle_wqs[c_iter->depth+MAX_BTREE_DEPTH], &c_iter->work);
+    if (did_io)
+    {
+        /* Put on to the workqueue.  Choose a workqueue which corresponds to how
+         * deep we are in the btree.
+         * A single queue cannot be used because a request blocked on lock_c2b()
+         * would block the entire queue (=> deadlock).
+         *
+         * NOTE: The +1 is required to match the workqueues we are using in normal
+         *       btree walks. */
+        CASTLE_INIT_WORK(&c_iter->work, _castle_btree_iter_path_traverse);
+        queue_work(castle_wqs[c_iter->depth+MAX_BTREE_DEPTH], &c_iter->work);
+    }
+    else
+        __castle_btree_iter_path_traverse(c_iter);
 }
 
 /**
@@ -1861,18 +1880,23 @@ static int castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_ce
     /* Continue the traverse, scheduling and waiting for IO if necessary. */
     if (write_locked)
     {
-        iter_debug("Not uptodate, submitting\n");
-
         c_iter->running_async = 1;
-        c2b->end_io = castle_btree_iter_path_traverse_endio;
-        c2b->private = c_iter;
-        BUG_ON(submit_c2b(READ, c2b));
+        BUG_ON(_castle_cache_block_read(c2b,
+                                        castle_btree_iter_path_traverse_endio,
+                                        c_iter));
 
         return 1; /* inform caller we issued async I/O */
     }
     else
     {
         iter_debug("iter %p Uptodate, carrying on\n", c_iter);
+
+        trace_CASTLE_CACHE_BLOCK_READ(0 /*submitted_c2ps*/,
+                                      c2b->cep.ext_id,
+                                      castle_extent_type_get(c2b->cep.ext_id),
+                                      c2b->cep.offset,
+                                      c2b->nr_pages,
+                                      1 /*async*/);
 
         /* Push the node onto the path 'stack' */
         BUG_ON((c_iter->path[c_iter->depth] != NULL) && (c_iter->path[c_iter->depth] != c2b));

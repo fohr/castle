@@ -25,6 +25,7 @@
 #include "castle_time.h"
 #include "castle_rebuild.h"
 #include "castle_mstore.h"
+#include "castle_systemtap.h"
 
 #ifndef DEBUG
 #define debug(_f, ...)           ((void)0)
@@ -3460,23 +3461,42 @@ static inline void castle_cache_page_freelist_grow(int nr_pages)
 /**
  * Asynchronously issue read I/O for c2b, if required, or execute callback.
  *
+ * NOTE: c2b must be write-locked.
+ *
+ * @return  Return value from submit_c2b().
+ */
+int _castle_cache_block_read(c2_block_t *c2b, c2b_end_io_t end_io, void *private)
+{
+    int submitted_c2ps = 0;
+    int ret = 0;
+
+    /* Issue I/O or execute callback directly if already uptodate. */
+    c2b->end_io  = end_io;
+    c2b->private = private;
+    if (c2b_uptodate(c2b))
+        c2b->end_io(c2b, 0 /*did_io*/);
+    else
+        ret = _submit_c2b(READ, c2b, &submitted_c2ps);
+    trace_CASTLE_CACHE_BLOCK_READ(submitted_c2ps,
+                                  c2b->cep.ext_id,
+                                  castle_extent_type_get(c2b->cep.ext_id),
+                                  c2b->cep.offset,
+                                  c2b->nr_pages,
+                                  1 /*async*/);
+    return ret;
+}
+
+/**
+ * Asynchronously issue read I/O for c2b, if required, or execute callback.
+ *
  * NOTE: end_io() must handle dropping c2b write-lock.
  *
  * @return  Return value from submit_c2b().
  */
 int castle_cache_block_read(c2_block_t *c2b, c2b_end_io_t end_io, void *private)
 {
-    int ret = 0;
-
-    /* Issue I/O or execute callback directly if already uptodate. */
     write_lock_c2b(c2b);
-    c2b->end_io  = end_io;
-    c2b->private = private;
-    if (c2b_uptodate(c2b))
-        c2b->end_io(c2b, 0 /*did_io*/);
-    else
-        ret = submit_c2b(READ, c2b);
-    return ret;
+    return _castle_cache_block_read(c2b, end_io, private);
 }
 
 /**
@@ -3488,21 +3508,28 @@ int castle_cache_block_read(c2_block_t *c2b, c2b_end_io_t end_io, void *private)
  */
 int castle_cache_block_sync_read(c2_block_t *c2b)
 {
-    int submitted_c2ps;
+    int submitted_c2ps = 0;
     int ret = 0;
 
     /* Don't issue I/O if uptodate. */
     if (c2b_uptodate(c2b))
-        return 0;
+        goto out;
     write_lock_c2b(c2b);
     if (c2b_uptodate(c2b))
         /* Somebody did I/O. */
-        goto out;
+        goto unlock_out;
 
     /* Issue sync I/O on block. */
     ret = _submit_c2b_sync(READ, c2b, &submitted_c2ps);
-out:
+unlock_out:
     write_unlock_c2b(c2b);
+out:
+    trace_CASTLE_CACHE_BLOCK_READ(submitted_c2ps,
+                                  c2b->cep.ext_id,
+                                  castle_extent_type_get(c2b->cep.ext_id),
+                                  c2b->cep.offset,
+                                  c2b->nr_pages,
+                                  0 /*async*/);
     return ret;
 }
 

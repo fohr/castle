@@ -244,6 +244,7 @@ int         submit_direct_io          (int rw, struct block_device *bdev, sector
 
 int         c2b_has_clean_pages       (c2_block_t *c2b);
 
+int         _castle_cache_block_read  (c2_block_t *c2b, c2b_end_io_t end_io, void *private);
 int         castle_cache_block_read   (c2_block_t *c2b, c2b_end_io_t end_io, void *private);
 int         castle_cache_block_sync_read(c2_block_t *c2b);
 #define     castle_cache_page_block_reserve(_partition) \
