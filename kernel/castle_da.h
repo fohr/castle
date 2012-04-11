@@ -49,7 +49,7 @@ struct castle_da_merge {
     uint64_t                      nr_bytes;
     int                           is_new_key;   /**< Is the current key different from the last
                                                      key added to out_tree.                     */
-    struct castle_da_merge_level {
+    struct castle_immut_tree_level {
         /* Node we are currently generating, and book-keeping variables about the node. */
         c2_block_t               *node_c2b;
         void                     *last_key;
@@ -57,6 +57,12 @@ struct castle_da_merge {
         int                       valid_end_idx;
         c_ver_t                   valid_version;
     } levels[MAX_BTREE_DEPTH];
+
+    void                        (*node_complete)
+                                 (struct castle_da_merge        *merge,
+                                  c2_block_t                    *node_c2b,
+                                  int                            depth,
+                                  int                            completing);
 
     /* Deamortisation variables */
     struct work_struct            work;
