@@ -25,6 +25,10 @@ void castle_da_merge_mstore_package_check_free(struct castle_da_merge_mstore_pac
 int castle_da_merge_mstore_package_alloc(struct castle_da_merge_mstore_package *m,
                                          unsigned int nr_in_trees);
 
+typedef void (*c_immut_tree_node_complete_cb_t)(struct castle_da_merge        *merge,
+                                                c2_block_t                    *node_c2b,
+                                                int                            depth,
+                                                int                            completing);
 struct castle_da_merge {
     c_merge_id_t                  id;
     struct list_head              hash_list;
@@ -49,20 +53,19 @@ struct castle_da_merge {
     uint64_t                      nr_bytes;
     int                           is_new_key;   /**< Is the current key different from the last
                                                      key added to out_tree.                     */
-    struct castle_immut_tree_level {
-        /* Node we are currently generating, and book-keeping variables about the node. */
-        c2_block_t               *node_c2b;
-        void                     *last_key;
-        int                       next_idx;
-        int                       valid_end_idx;
-        c_ver_t                   valid_version;
-    } levels[MAX_BTREE_DEPTH];
 
-    void                        (*node_complete)
-                                 (struct castle_da_merge        *merge,
-                                  c2_block_t                    *node_c2b,
-                                  int                            depth,
-                                  int                            completing);
+    struct castle_immut_tree_construct {
+        struct castle_immut_tree_level {
+            /* Node we are currently generating, and book-keeping variables about the node. */
+            c2_block_t               *node_c2b;
+            void                     *last_key;
+            int                       next_idx;
+            int                       valid_end_idx;
+            c_ver_t                   valid_version;
+        } levels[MAX_BTREE_DEPTH];
+
+        c_immut_tree_node_complete_cb_t node_complete;
+    } *out_tree_constr;
 
     /* Deamortisation variables */
     struct work_struct            work;
