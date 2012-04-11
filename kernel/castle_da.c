@@ -5707,7 +5707,6 @@ static int castle_da_merge_unit_do(struct castle_da_merge *merge,
         for (i=0; i<merge->nr_trees; i++)
             castle_cache_advise_clear((c_ext_pos_t){merge->in_trees[i]->data_ext_free.ext_id, 0},
                     C2_ADV_EXTENT|C2_ADV_HARDPIN,
-                    MERGE_IN,
                     0);
     }
 

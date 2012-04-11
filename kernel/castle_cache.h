@@ -218,7 +218,7 @@ typedef uint32_t c2_advise_t;
 #define C2_ADV_ADAPTIVE     ((c2_advise_t) (1<<C2_ADV_adaptive))
 
 int  castle_cache_advise      (c_ext_pos_t cep, c2_advise_t advise, c2_partition_id_t partition, int chunks);
-int  castle_cache_advise_clear(c_ext_pos_t cep, c2_advise_t advise, c2_partition_id_t partition, int chunks);
+int  castle_cache_advise_clear(c_ext_pos_t cep, c2_advise_t advise, int chunks);
 void castle_cache_prefetch_pin(c_ext_pos_t cep, c2_advise_t advise, c2_partition_id_t partition, int chunks);
 void castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size, unsigned int ratelimit);
 void castle_cache_extent_evict(c_ext_dirtytree_t *dirtytree, c_chk_cnt_t start, c_chk_cnt_t count);

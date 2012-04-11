@@ -2561,40 +2561,31 @@ void put_c2b_and_demote(c2_block_t *c2b)
 }
 
 /**
- * Gets c2b matching (cep, nr_pages) and adjusts its LRU position.
+ * Get c2b matching (cep, nr_pages) if it is in the hash.
  *
  * @param cep       Specifies the c2b offset and extent
  * @param nr_pages  Specifies size of block
- * @param part_id   Cache partition block is for
- *                  IGNORE_PARTITION => Do not adjust c2b priority in LRU
  *
  * @return Matching c2b with an additional reference
  * @return NULL if no matches were found
  */
 static inline c2_block_t* castle_cache_block_hash_get(c_ext_pos_t cep,
                                                       uint32_t nr_pages,
-                                                      c2_partition_id_t part_id)
+                                                      int promote)
 {
     c2_block_t *c2b = NULL;
 
-    /* Take block hash lock and search for matching c2b. */
     read_lock(&castle_cache_block_hash_lock);
     c2b = castle_cache_block_hash_find(cep, nr_pages);
     if (c2b)
     {
-        /* Take c2b reference so we can drop block hash lock. */
         get_c2b(c2b);
         read_unlock(&castle_cache_block_hash_lock);
 
-        if (part_id != IGNORE_PARTITION)
-        {
-            /* We are obtaining this c2b to be used by a specific cache
-             * partition.  Adjust its position to reflect this in the LRU. */
-            spin_lock_irq(&castle_cache_block_lru_lock);
-            if (!c2b_dirty(c2b))
-                list_move_tail(&c2b->lru, &castle_cache_block_lru);
-            spin_unlock_irq(&castle_cache_block_lru_lock);
-        }
+        spin_lock_irq(&castle_cache_block_lru_lock);
+        if (!c2b_dirty(c2b))
+            list_move_tail(&c2b->lru, &castle_cache_block_lru);
+        spin_unlock_irq(&castle_cache_block_lru_lock);
     }
     else
         read_unlock(&castle_cache_block_hash_lock);
@@ -3617,7 +3608,7 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
         debug("Trying to find buffer for cep="cep_fmt_str", nr_pages=%d\n",
             __cep2str(cep), nr_pages);
         /* Try to find in the hash first */
-        c2b = castle_cache_block_hash_get(cep, nr_pages, part_id);
+        c2b = castle_cache_block_hash_get(cep, nr_pages, 1 /*promote*/);
         debug("Found in hash: %p\n", c2b);
         if (c2b)
         {
@@ -3955,7 +3946,7 @@ static void c2_pref_block_chunk_put(c_ext_pos_t cep, c2_pref_window_t *window)
     c2_block_t *c2b;
     int demote = 0;
 
-    if ((c2b = castle_cache_block_hash_get(cep, BLKS_PER_CHK, IGNORE_PARTITION)))
+    if ((c2b = castle_cache_block_hash_get(cep, BLKS_PER_CHK, 0 /*promote*/)))
     {
         /* Clear c2b status bits. */
         if (test_clear_c2b_prefetch(c2b))
@@ -4515,7 +4506,6 @@ void castle_cache_prefetch_pin(c_ext_pos_t cep,
  *
  * @param cep       Extent and offset to unpin from
  * @param advise    Advice for the cache
- * @param part_id   Cache partition to (de)allocate from
  * @param chunks    Number of chunks from cep to unpin
  *
  * @warning If unhardpinning the extent must previously have
@@ -4525,7 +4515,6 @@ void castle_cache_prefetch_pin(c_ext_pos_t cep,
  */
 static void castle_cache_prefetch_unpin(c_ext_pos_t cep,
                                         c2_advise_t advise,
-                                        c2_partition_id_t part_id,
                                         int chunks)
 {
     c2_block_t *c2b;
@@ -4534,19 +4523,17 @@ static void castle_cache_prefetch_unpin(c_ext_pos_t cep,
 
     while (chunks > 0)
     {
-        /* Get block, lock it and update offset. */
+        c2b = castle_cache_block_hash_get(cep, BLKS_PER_CHK, 0 /*promote*/);
+
         if (advise & C2_ADV_SOFTPIN)
         {
-            if ((c2b = castle_cache_block_hash_get(cep,
-                                                   BLKS_PER_CHK,
-                                                   IGNORE_PARTITION)))
+            if (c2b)
                 clearsoftpin_c2b(c2b);
         }
         else //if (advise & C2_ADV_HARDPIN)
         {
-            c2b = castle_cache_block_get(cep, BLKS_PER_CHK, part_id);
-            BUG_ON(!c2b);
-            put_c2b(c2b); /* will cause problems if they weren't prefetch-locked. */
+            BUG_ON(!c2b); /* should always find hardpinned c2b in hash */
+            put_c2b(c2b);
         }
 
         if (c2b)
@@ -4814,7 +4801,6 @@ int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, c2_partition_id_t p
  */
 int castle_cache_advise_clear(c_ext_pos_t cep,
                               c2_advise_t advise,
-                              c2_partition_id_t part_id,
                               int chunks)
 {
     /* Downgrade to softpin if hardpinning is disabled. */
@@ -4836,7 +4822,7 @@ int castle_cache_advise_clear(c_ext_pos_t cep,
         cep.offset = 0;
         chunks = castle_extent_size_get(cep.ext_id);
     }
-    castle_cache_prefetch_unpin(cep, advise, part_id, chunks);
+    castle_cache_prefetch_unpin(cep, advise, chunks);
 
     return EXIT_SUCCESS;
 }
