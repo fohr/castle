@@ -4556,12 +4556,10 @@ out:
 
 static void castle_da_merge_package(struct castle_da_merge *merge, c_ext_pos_t root_cep)
 {
-    struct castle_component_tree *out_tree;
-    int i;
+    struct castle_component_tree *out_tree = merge->out_tree;
 
     BUG_ON(!CASTLE_IN_TRANSACTION);
 
-    out_tree = merge->out_tree;
     debug("Using component tree id=%d to package the merge.\n", out_tree->seq);
 
     castle_printk(LOG_INFO, "Depth of ct=%d (%p) is: %d\n",
@@ -4574,21 +4572,16 @@ static void castle_da_merge_package(struct castle_da_merge *merge, c_ext_pos_t r
     debug("Root for that tree is: " cep_fmt_str_nl, cep2str(out_tree->root_node));
     BUG_ON(atomic_read(&out_tree->write_ref_count) != 0);
 
-    /* update list of large objects */
-    /* in transaction, so won't race against checkpoint - safe to proceed without locks */
-    list_splice_init(&merge->new_large_objs, &out_tree->large_objs);
-
     /* truncate remaining blank chunks in output tree... */
     if(MERGE_CHECKPOINTABLE(merge))
     {
         /* ... if there is at least one unused chunk */
         if (castle_ext_freespace_available(&out_tree->tree_ext_free) > C_CHK_SIZE)
         {
-            castle_printk(LOG_DEBUG, "%s::[da %d level %d] truncating tree ext %u beyond chunk %u,"
+            castle_printk(LOG_DEBUG, "%s::[da %d] truncating tree ext %u beyond chunk %u,"
                     " after %llu bytes used and %llu bytes allocated (grown)\n",
                     __FUNCTION__,
                     merge->da->id,
-                    merge->level,
                     out_tree->tree_ext_free.ext_id,
                     USED_CHUNK(atomic64_read(&out_tree->tree_ext_free.used)),
                     atomic64_read(&out_tree->tree_ext_free.used),
@@ -4597,13 +4590,12 @@ static void castle_da_merge_package(struct castle_da_merge *merge, c_ext_pos_t r
                                    USED_CHUNK(atomic64_read(&out_tree->tree_ext_free.used)));
         }
 
-        if (castle_ext_freespace_available(&merge->out_tree->data_ext_free) > C_CHK_SIZE)
+        if (castle_ext_freespace_available(&out_tree->data_ext_free) > C_CHK_SIZE)
         {
-            castle_printk(LOG_DEBUG, "%s::[da %d level %d] truncating data ext %u beyond chunk %u,"
+            castle_printk(LOG_DEBUG, "%s::[da %d] truncating data ext %u beyond chunk %u,"
                     " after %llu bytes used and %llu bytes allocated (grown)\n",
                     __FUNCTION__,
                     merge->da->id,
-                    merge->level,
                     out_tree->data_ext_free.ext_id,
                     USED_CHUNK(atomic64_read(&out_tree->data_ext_free.used)),
                     atomic64_read(&out_tree->data_ext_free.used),
@@ -4614,10 +4606,6 @@ static void castle_da_merge_package(struct castle_da_merge *merge, c_ext_pos_t r
     }
 
     BUG_ON(merge->da != out_tree->da);
-    castle_printk(LOG_INFO, "Finishing merge of ");
-    FOR_EACH_MERGE_TREE(i, merge)
-        castle_printk(LOG_INFO, "ct%d=%d, ", i, merge->in_trees[i]->seq);
-    castle_printk(LOG_INFO, "new_tree=%d\n", out_tree->seq);
 
     FAULT(MERGE_FAULT);
 }
@@ -4627,14 +4615,14 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge, c_ext_pos
     struct castle_btree_type *btree = merge->out_btree;
     struct castle_btree_node *node;
     c2_block_t *node_c2b, *next_node_c2b;
-    struct castle_component_tree *ct = merge->out_tree;
+    struct castle_component_tree *out_tree = merge->out_tree;
     uint8_t level;
     uint16_t node_size;
 
-    BUG_ON(atomic_read(&merge->out_tree->tree_depth) < 1);
+    BUG_ON(atomic_read(&out_tree->tree_depth) < 1);
 
     /* Start with the root node. */
-    node_size = ct->node_sizes[atomic_read(&merge->out_tree->tree_depth) - 1];
+    node_size = out_tree->node_sizes[atomic_read(&out_tree->tree_depth) - 1];
     node_c2b = castle_cache_block_get(root_cep, node_size, MERGE_OUT);
     BUG_ON(castle_cache_block_sync_read(node_c2b));
     write_lock_c2b(node_c2b);
@@ -4661,7 +4649,7 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge, c_ext_pos
         /* Go to the next btree node */
         debug("Locking next node cep=" cep_fmt_str_nl,
               cep2str(cvt.cep));
-        node_size = ct->node_sizes[atomic_read(&merge->out_tree->tree_depth) - level];
+        node_size = out_tree->node_sizes[atomic_read(&out_tree->tree_depth) - level];
         next_node_c2b = castle_cache_block_get(cvt.cep, node_size, MERGE_OUT);
         /* unlikely to do IO as these nodes have just been in the cache. */
         BUG_ON(castle_cache_block_sync_read(next_node_c2b));
@@ -4700,6 +4688,7 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge, c_ext_pos
  */
 static void castle_da_merge_complete(struct castle_da_merge *merge)
 {
+    struct castle_component_tree *out_tree = merge->out_tree;
     struct castle_immut_tree_level *level;
     struct castle_btree_node *node;
     c_ext_pos_t root_cep = INVAL_EXT_POS;
@@ -4707,7 +4696,7 @@ static void castle_da_merge_complete(struct castle_da_merge *merge)
 
     BUG_ON(!CASTLE_IN_TRANSACTION);
 
-    debug("Complete merge at level: %d|%d\n", merge->level, atomic_read(&merge->out_tree->tree_depth));
+    debug("Completed immut tree construction of depth: %d\n", atomic_read(&out_tree->tree_depth));
     /* Force the nodes to complete by setting next_idx negative. Valid node idx
        can be set to the last entry in the node safely, because it happens in
        conjunction with setting the version to 0. This guarantees that all
@@ -4720,13 +4709,13 @@ static void castle_da_merge_complete(struct castle_da_merge *merge)
            therefore we don't have to complete anything. */
         next_idx = level->next_idx;
         /* Record the root cep for later use. */
-        if(i+1 == atomic_read(&merge->out_tree->tree_depth))
+        if(i+1 == atomic_read(&out_tree->tree_depth))
         {
             /* Root node must always exist, and have > 0 entries.
                -1 is also allowed, if the node overflowed once the node for
-               previous (merge->out_tree->tree_depth-1) got completed. */
+               previous (out_tree->tree_depth-1) got completed. */
             BUG_ON(next_idx == 0 || next_idx < -1);
-            root_cep = merge->levels[i].node_c2b->cep;
+            root_cep = level->node_c2b->cep;
         }
         if(next_idx != 0)
         {
@@ -4746,12 +4735,12 @@ static void castle_da_merge_complete(struct castle_da_merge *merge)
         }
     }
     /* Write out the max keys along the max path. */
-    if ( atomic64_read(&merge->out_tree->item_count) > 0 )
+    if ( atomic64_read(&out_tree->item_count) > 0 )
         castle_da_max_path_complete(merge, root_cep);
 
     /* Complete Bloom filters. */
-    if (merge->out_tree->bloom_exists)
-        castle_bloom_complete(&merge->out_tree->bloom);
+    if (out_tree->bloom_exists)
+        castle_bloom_complete(&out_tree->bloom);
 
     /* Package the merge result. */
     castle_da_merge_package(merge, root_cep);
@@ -7094,10 +7083,15 @@ static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_bytes)
     /* On errors don't perform finalisation work. Don't commit the stats either.
        This isn't really expected to happen (only a corner case when the out tree
        grew to beyond 10 levels). */
-    if(ret == EXIT_SUCCESS)
+    if (ret == EXIT_SUCCESS)
     {
         /* Finish packaging the output tree. */
         castle_da_merge_complete(merge);
+
+        /* update list of large objects */
+        /* in transaction, so won't race against checkpoint - safe to proceed without locks */
+        list_splice_init(&merge->new_large_objs, &merge->out_tree->large_objs);
+
         /* Commit and zero private stats to global crash-consistent tree. */
         castle_version_states_commit(&merge->version_states);
     }
