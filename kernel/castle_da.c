@@ -3730,39 +3730,14 @@ static void castle_da_merge_res_pool_detach(struct castle_da_merge *merge, int e
     }
 }
 
-/**
- * Allocates extents for the output tree, medium objects and Bloom filetrs. Tree may be split
- * between two extents (internal nodes in an SSD-backed extent, leaf nodes on HDDs).
- *
- * @param merge     Merge state structure.
- */
-static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
+static void castle_da_merge_output_size(struct castle_da_merge *merge,
+                                        c_byte_off_t           *internal_tree_size_p,
+                                        c_byte_off_t           *tree_size_p,
+                                        c_byte_off_t           *data_size_p,
+                                        c_byte_off_t           *bloom_size_p)
 {
-    struct castle_component_tree *ct = merge->out_tree_constr->tree;
+    int i;
     c_byte_off_t internal_tree_size, tree_size, data_size, bloom_size;
-    struct castle_da_lfs_ct_t _lfs, *lfs;
-    c_ext_event_callback_t lfs_callback;
-    void *lfs_data;
-    int i, ret;
-    const int growable = MERGE_CHECKPOINTABLE(merge);
-
-    /* Handle Low Freespace gracefully, for L1 merges - fail the merge and also register
-     * for notification when more space available. */
-    if (merge->level == 1)
-    {
-        lfs             = &merge->da->l1_merge_lfs;
-        lfs_callback    = castle_da_lfs_merge_ct_callback;
-        lfs_data        = lfs;
-    }
-    /* For other merges just fail the merge. */
-    else
-    {
-        lfs             = &_lfs;
-        lfs_callback    = NULL;
-        lfs_data        = NULL;
-        lfs->da         = merge->da;
-        castle_da_lfs_ct_reset(lfs);
-    }
 
     /* Allocate an extent for merged tree for the size equal to sum of all the
      * trees being merged (could be a total merge).
@@ -3808,30 +3783,30 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
        on SSDs, because the overheads are smaller (node headers amortised between greater
        number of entries in the node). */
 
+    *internal_tree_size_p   = internal_tree_size;
+    *tree_size_p            = tree_size;
+    *data_size_p            = data_size;
+    *bloom_size_p           = bloom_size;
+}
+
+static int castle_immut_tree_space_alloc(struct castle_immut_tree_construct *tree_constr,
+                                         c_byte_off_t                        internal_tree_size,
+                                         c_byte_off_t                        tree_size,
+                                         c_byte_off_t                        data_size,
+                                         c_byte_off_t                        bloom_size,
+                                         struct castle_da_lfs_ct_t          *lfs,
+                                         c_ext_event_callback_t              lfs_callback,
+                                         void                               *lfs_data)
+{
+    struct castle_component_tree *ct = tree_constr->tree;
+    const int growable = tree_constr->checkpointable;
+    int ret;
+
     BUG_ON(!EXT_ID_INVAL(ct->internal_ext_free.ext_id) ||
            !EXT_ID_INVAL(ct->tree_ext_free.ext_id));
 
-    /* Create a reservation pool and reserve some space. For now, allocate fixed amount of space
-     * for all merges. We could change this based on merge type, later. */
-    if (growable)
-    {
-        merge->pool_id = castle_res_pool_create(castle_get_ssd_rda_lvl(), 100);
-        if (RES_POOL_INVAL(merge->pool_id))
-        {
-            debug_res_pools("Failed to reserve space for merge on SSD\n");
-            merge->pool_id = castle_res_pool_create(castle_get_rda_lvl(), 100);
-            if (RES_POOL_INVAL(merge->pool_id))
-            {
-                castle_printk(LOG_USERINFO, "Failed to reserve space for merge\n");
-                return -ENOSPC;
-            }
-        }
-        debug_res_pools("Created reservation pool %u for the merge at level %u\n",
-                         merge->pool_id, merge->level);
-    }
-
 __again:
-    /* If the space is not already reserved for the merge, allocate it from freespace. */
+    /* If the space is not already reserved for this tree, allocate it from freespace. */
     if (!lfs->space_reserved)
     {
         /* Initialize the lfs structure with required extent sizes. */
@@ -3853,18 +3828,7 @@ __again:
         /* If failed to allocate space, return error. lfs structure is already set.
          * Low freespace handler would allocate space, when more freespace is available. */
         if (ret)
-        {
-            /* Destroy reservation pool and reset ID in merge structure, merge_dealloc() can't
-             * handle partial done work from extents_alloc(). */
-            if (growable)
-            {
-                castle_res_pool_destroy(merge->pool_id);
-                BUG_ON(castle_res_pool_is_alive(merge->pool_id));
-                merge->pool_id = INVAL_RES_POOL;
-            }
-
             return ret;
-        }
     }
 
     /* Successfully allocated space. Initialize the component tree with alloced extents.
@@ -3877,22 +3841,96 @@ __again:
                                    CHUNK(data_size)))
         goto __again;
 
-    merge->out_tree_constr->internals_on_ssds = lfs->internals_on_ssds;
-    merge->out_tree_constr->leafs_on_ssds = lfs->leafs_on_ssds;
+    tree_constr->internals_on_ssds = lfs->internals_on_ssds;
+    tree_constr->leafs_on_ssds = lfs->leafs_on_ssds;
 
     /* Done with lfs structure; reset it. */
     castle_da_lfs_ct_reset(lfs);
 
     /* Allocate Bloom filters. */
     if ((ret = castle_bloom_create(&ct->bloom,
-                                   merge->da->id,
-                                   merge->da->btree_type,
+                                   ct->da->id,
+                                   ct->da->btree_type,
                                    bloom_size)))
         ct->bloom_exists = 0;
     else
         ct->bloom_exists = 1;
 
-    if (growable)
+    return 0;
+}
+
+/**
+ * Allocates extents for the output tree, medium objects and Bloom filetrs. Tree may be split
+ * between two extents (internal nodes in an SSD-backed extent, leaf nodes on HDDs).
+ *
+ * @param merge     Merge state structure.
+ */
+static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
+{
+    c_byte_off_t internal_tree_size, tree_size, data_size, bloom_size;
+    struct castle_da_lfs_ct_t _lfs, *lfs;
+    c_ext_event_callback_t lfs_callback;
+    void *lfs_data;
+    int ret;
+
+    castle_da_merge_output_size(merge, &internal_tree_size,
+                                       &tree_size,
+                                       &data_size,
+                                       &bloom_size);
+
+    /* Create a reservation pool and reserve some space. For now, allocate fixed amount of space
+     * for all merges. We could change this based on merge type, later. */
+    if (merge->out_tree_constr->checkpointable)
+    {
+        merge->pool_id = castle_res_pool_create(castle_get_ssd_rda_lvl(), 100);
+        if (RES_POOL_INVAL(merge->pool_id))
+        {
+            debug_res_pools("Failed to reserve space for merge on SSD\n");
+            merge->pool_id = castle_res_pool_create(castle_get_rda_lvl(), 100);
+            if (RES_POOL_INVAL(merge->pool_id))
+            {
+                castle_printk(LOG_USERINFO, "Failed to reserve space for merge\n");
+                return -ENOSPC;
+            }
+        }
+        debug_res_pools("Created reservation pool %u for the merge at level %u\n",
+                         merge->pool_id, merge->level);
+    }
+
+    /* Handle Low Freespace gracefully, for L1 merges - fail the merge and also register
+     * for notification when more space available. */
+    if (merge->level == 1)
+    {
+        lfs             = &merge->da->l1_merge_lfs;
+        lfs_callback    = castle_da_lfs_merge_ct_callback;
+        lfs_data        = lfs;
+    }
+    /* For other merges just fail the merge. */
+    else
+    {
+        lfs             = &_lfs;
+        lfs_callback    = NULL;
+        lfs_data        = NULL;
+        lfs->da         = merge->da;
+        castle_da_lfs_ct_reset(lfs);
+    }
+
+    ret = castle_immut_tree_space_alloc(merge->out_tree_constr,
+                                        internal_tree_size,
+                                        tree_size,
+                                        data_size,
+                                        bloom_size,
+                                        lfs, lfs_callback, lfs_data);
+    if (ret && !RES_POOL_INVAL(merge->pool_id))
+    {
+        castle_res_pool_destroy(merge->pool_id);
+        BUG_ON(castle_res_pool_is_alive(merge->pool_id));
+        merge->pool_id = INVAL_RES_POOL;
+
+        return ret;
+    }
+
+    if (merge->out_tree_constr->checkpointable)
         castle_da_merge_res_pool_attach(merge);
 
     return 0;
