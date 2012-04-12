@@ -62,6 +62,7 @@ enum c2b_state_bits {
     C2B_merge_in,           /**< Block is to be input to merge.                                 */
     C2B_merge_out,          /**< Block is output from merge.                                    */
     C2B_evictlist,          /**< Block is on castle_cache_block_evictlist.                      */
+    C2B_accessed,           /**< Block has been accessed recently (used by CLOCK).              */
 };
 
 #define INIT_C2B_BITS (0)
@@ -108,6 +109,7 @@ C2B_FNS(t0, t0)
 C2B_FNS(merge_in, merge_in)
 C2B_FNS(merge_out, merge_out)
 C2B_FNS(evictlist, evictlist)
+C2B_FNS(accessed, accessed)
 
 /* c2p encapsulates multiple memory pages (in order to reduce overheads).
    NOTE: In order for this to work, c2bs must necessarily be allocated in
@@ -308,6 +310,7 @@ static atomic_t                castle_cache_extent_dirtylist_sizes[NR_EXTENT_FLU
 static         DEFINE_SPINLOCK(castle_cache_block_lru_lock);
 static               LIST_HEAD(castle_cache_block_lru);             /**< List of all c2bs in LRU  */
 static atomic_t                castle_cache_block_lru_size;         /**< Number of c2bs in LRU    */
+static struct list_head       *castle_cache_block_clock_hand;
 
 static atomic_t                castle_cache_dirty_blks;             /**< Dirty blocks in cache    */
 static atomic_t                castle_cache_clean_blks;             /**< Clean blocks in cache    */
@@ -2438,11 +2441,7 @@ static c2_block_t* castle_cache_block_hash_find(c_ext_pos_t cep, uint32_t nr_pag
  */
 void put_c2b_and_demote(c2_block_t *c2b)
 {
-    spin_lock_irq(&castle_cache_block_lru_lock);
-    if(!c2b_dirty(c2b)) {
-        list_move(&c2b->lru, &castle_cache_block_lru);
-    }
-    spin_unlock_irq(&castle_cache_block_lru_lock);
+    clear_c2b_accessed(c2b);
     put_c2b(c2b);
 }
 
@@ -2454,6 +2453,9 @@ void put_c2b_and_demote(c2_block_t *c2b)
  *
  * @return Matching c2b with an additional reference
  * @return NULL if no matches were found
+ *
+ * Note that this function does not set the "accessed" bit of the c2b; it is the caller's
+ * responsibility to do so if that's the intended outcome.
  */
 static inline c2_block_t* castle_cache_block_hash_get(c_ext_pos_t cep,
                                                       uint32_t nr_pages)
@@ -2503,7 +2505,7 @@ static int castle_cache_block_hash_insert(c2_block_t *c2b)
     BUG_ON(c2b_dirty(c2b));
     spin_lock_irq(&castle_cache_block_lru_lock);
     write_unlock(&castle_cache_block_hash_lock);
-    list_add_tail(&c2b->lru, &castle_cache_block_lru);
+    list_add_tail(&c2b->lru, castle_cache_block_clock_hand);
     /* Cache list accounting. */
     atomic_inc(&castle_cache_block_lru_size);
     atomic_inc(&castle_cache_clean_blks);
@@ -3029,14 +3031,14 @@ static inline int c2b_busy(c2_block_t *c2b, int expected_count)
  */
 static int castle_cache_block_hash_clean(void)
 {
-#define BATCH_FREE          200
-    struct list_head *lh, *th;
+    static const int BATCH_FREE = 200;
+    static const int CLOCK_ROUNDS = 3;
+    struct list_head *next;
     struct hlist_node *le, *te;
     HLIST_HEAD(victims);
-    LIST_HEAD(unevictable);
     c2_block_t *c2b;
     int clean, dirty;
-    int nr_victims, nr_pages;
+    int nr_victims, nr_pages, rounds;
 
     /* Initialise. */
     nr_victims = nr_pages = 0;
@@ -3066,9 +3068,27 @@ static int castle_cache_block_hash_clean(void)
 
     do
     {
-        list_for_each_safe(lh, th, &castle_cache_block_lru)
+        for (next = castle_cache_block_clock_hand->next, rounds = 0;
+             nr_victims < BATCH_FREE && rounds < CLOCK_ROUNDS;
+             castle_cache_block_clock_hand = next, next = castle_cache_block_clock_hand->next)
         {
-            c2b = list_entry(lh, c2_block_t, lru);
+            /* skip the list's head (which isn't part of an actual entry) if necessary */
+            if (unlikely(castle_cache_block_clock_hand == &castle_cache_block_lru))
+            {
+                /* also use the head to spot how many times we've gone round the clock */
+                ++rounds;
+                continue;
+            }
+
+            c2b = list_entry(castle_cache_block_clock_hand, c2_block_t, lru);
+
+            /* skip recently accessed blocks (but clear their "accessed" bit) */
+            if (c2b_accessed(c2b))
+            {
+                clear_c2b_accessed(c2b);
+                continue;
+            }
+
             nr_pages += c2b->nr_pages;
 
             /* Blocks that match the following criteria are evicted:
@@ -3091,21 +3111,7 @@ static int castle_cache_block_hash_clean(void)
                 atomic_inc(&castle_cache_block_victims);
                 nr_victims++;
             }
-            else
-            {
-                /* Remove the unevictable block from its current location, and
-                 * stick it at the end of the list. This will prevent the LRU
-                 * accumulating unevictable blocks at the start, and this
-                 * function having to go through them every time. */
-                list_del(&c2b->lru);
-                list_add(&c2b->lru, &unevictable);
-            }
-
-            if (nr_victims >= BATCH_FREE)
-                break;
         }
-        /* Put all the unevictable pages back on the LRU, but at the tail of the list. */
-        list_splice_init(&unevictable, castle_cache_block_lru.prev);
     }
     while (0);                  /* leave this for now to prevent reindenting the block */
 
@@ -3213,6 +3219,8 @@ int castle_cache_block_destroy(c2_block_t *c2b)
     {
         spin_lock_irq(&castle_cache_block_lru_lock);
         hlist_del(&c2b->hlist);
+        if (unlikely(castle_cache_block_clock_hand == &c2b->lru))
+            castle_cache_block_clock_hand = castle_cache_block_clock_hand->next;
         list_del(&c2b->lru);
         /* Update bookkeeping info. */
         BUG_ON(atomic_dec_return(&castle_cache_block_lru_size) < 0);
@@ -3449,12 +3457,6 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
         debug("Found in hash: %p\n", c2b);
         if (c2b)
         {
-            /* Adjust c2b position in the LRU. */
-            spin_lock_irq(&castle_cache_block_lru_lock);
-            if (!c2b_dirty(c2b))
-                list_move_tail(&c2b->lru, &castle_cache_block_lru);
-            spin_unlock_irq(&castle_cache_block_lru_lock);
-
             /* Make sure that the number of pages agrees */
             BUG_ON(c2b->nr_pages != nr_pages);
 
@@ -3549,6 +3551,9 @@ out:
         }
     }
 #endif
+
+    /* Bump the "accessed" bit of the c2b */
+    set_c2b_accessed(c2b);
 
     return c2b;
 }
@@ -6060,6 +6065,8 @@ int castle_cache_init(void)
         INIT_LIST_HEAD(&castle_cache_extent_dirtylists[j]);
         atomic_set(&castle_cache_extent_dirtylist_sizes[j], 0);
     }
+
+    castle_cache_block_clock_hand = &castle_cache_block_lru;
 
     atomic_set(&castle_cache_block_lru_size, 0);
     atomic_set(&castle_cache_block_evictlist_size, 0);
