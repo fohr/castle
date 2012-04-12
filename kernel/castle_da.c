@@ -211,7 +211,7 @@ static void castle_data_ext_size_get(c_ext_id_t ext_id, uint64_t *nr_bytes,
 static int castle_merge_thread_create(c_thread_id_t *thread_id, struct castle_double_array *da);
 static int castle_merge_thread_attach(c_merge_id_t merge_id, c_thread_id_t thread_id);
 static void castle_da_lfs_all_rwcts_callback(void *data);
-static int castle_da_nodes_complete(struct castle_da_merge *merge);
+static int castle_immut_tree_nodes_complete(struct castle_immut_tree_construct *tree_constr);
 static void castle_immut_tree_dealloc(struct castle_immut_tree_construct *tree_constr);
 
 static atomic_t castle_da_merge_thread_count = ATOMIC(0);
@@ -4043,18 +4043,19 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
  * @param level     Level counted from leaves.
  * @return          The size of the node.
  */
-uint16_t castle_da_merge_node_size_get(struct castle_da_merge *merge, uint8_t level)
+uint16_t castle_immut_tree_node_size_get(struct castle_immut_tree_construct *tree_constr,
+                                       uint8_t level)
 {
     if (level > 0)
     {
-        if (merge->out_tree_constr->internals_on_ssds)
+        if (tree_constr->internals_on_ssds)
             return SSD_RO_TREE_NODE_SIZE;
         else
             return HDD_RO_TREE_NODE_SIZE;
     }
     else
     {
-        if (merge->out_tree_constr->leafs_on_ssds)
+        if (tree_constr->leafs_on_ssds)
             return SSD_RO_TREE_NODE_SIZE;
         else
             return HDD_RO_TREE_NODE_SIZE;
@@ -4070,14 +4071,14 @@ uint16_t castle_da_merge_node_size_get(struct castle_da_merge *merge, uint8_t le
  * @param node_size Return argument: size of the node.
  * @param ext_free  Return argument: extent freespace structure.
  */
-static inline void castle_da_merge_node_info_get(struct castle_da_merge *merge,
+static inline void castle_immut_tree_node_info_get(struct castle_immut_tree_construct *tree_constr,
                                                  uint8_t level,
                                                  uint16_t *node_size,
                                                  c_ext_free_t **ext_free)
 {
-    struct castle_component_tree *out_tree = merge->out_tree_constr->tree;
+    struct castle_component_tree *out_tree = tree_constr->tree;
 
-    *node_size = castle_da_merge_node_size_get(merge, level);
+    *node_size = castle_immut_tree_node_size_get(tree_constr, level);
     /* If level is zero, we are allocating from tree_ext. Size depends on whether the
        extent is on SSDs or HDDs. */
     if (level > 0)
@@ -4111,18 +4112,17 @@ static inline void castle_da_merge_node_info_get(struct castle_da_merge *merge,
  * the key gets added.  Used when entry is being moved from one node to another
  * node.
  */
-static c_val_tup_t _castle_da_entry_add(struct castle_da_merge *merge,
-                                         int depth,
-                                         void *key,
-                                         c_ver_t version,
-                                         c_val_tup_t cvt,
-                                         int is_re_add)
+static c_val_tup_t _castle_immut_tree_entry_add(struct castle_immut_tree_construct *tree_constr,
+                                                int depth,
+                                                void *key,
+                                                c_ver_t version,
+                                                c_val_tup_t cvt,
+                                                int is_re_add)
 {
-    struct castle_immut_tree_construct *tree_constr = merge->out_tree_constr;
     struct castle_immut_tree_level *level = tree_constr->levels + depth;
-    struct castle_btree_type *btree = merge->out_tree_constr->btree;
+    struct castle_btree_type *btree = tree_constr->btree;
     struct castle_component_tree *out_tree = tree_constr->tree;
-    struct castle_double_array *da = merge->da;
+    struct castle_double_array *da = tree_constr->da;
     struct castle_btree_node *node;
     int key_cmp;
     c_val_tup_t  preadoption_cvt = INVAL_VAL_TUP;
@@ -4139,7 +4139,7 @@ static c_val_tup_t _castle_da_entry_add(struct castle_da_merge *merge,
     {
         c_ext_free_t *ext_free;
 
-        castle_da_merge_node_info_get(merge, depth, &new_node_size, &ext_free);
+        castle_immut_tree_node_info_get(tree_constr, depth, &new_node_size, &ext_free);
         if ( atomic_read(&out_tree->tree_depth) < (depth+1) )
         {
             debug("%s::Creating a new root level: %d\n", __FUNCTION__, depth);
@@ -4207,7 +4207,7 @@ static c_val_tup_t _castle_da_entry_add(struct castle_da_merge *merge,
      * to avoid any such issues.
      */
     key_cmp = (level->next_idx != 0) ?
-               ((depth == 0)? merge->out_tree_constr->is_new_key: btree->key_compare(key, level->last_key)) :
+               ((depth == 0)? tree_constr->is_new_key: btree->key_compare(key, level->last_key)) :
                0;
 
     debug("Key cmp=%d\n", key_cmp);
@@ -4217,10 +4217,10 @@ static c_val_tup_t _castle_da_entry_add(struct castle_da_merge *merge,
     btree->entry_add(node, level->next_idx, key, version, cvt);
 
     /* Unsafe to access last_key here, since the node may have got compacted. Reset it.
-       Save this last key as the last merge key as well if level is the leaf level. */
+       Save this last key as the last key in tree as well if level is the leaf level. */
     btree->entry_get(node, level->next_idx, &level->last_key, NULL, NULL);
     if (depth == 0)
-        merge->out_tree_constr->last_key = level->last_key;
+        tree_constr->last_key = level->last_key;
 
     /* Dirty the node, and unlock if non-leaf node. */
     dirty_c2b(level->node_c2b);
@@ -4285,14 +4285,14 @@ static c_val_tup_t _castle_da_entry_add(struct castle_da_merge *merge,
     return preadoption_cvt;
 }
 
-/* wrapper around the real castle_da_entry_add; this performs orphan node preadoption iteratively */
-static int castle_da_entry_add(struct castle_da_merge *merge,
-                               int depth,
-                               void *key,
-                               c_ver_t version,
-                               c_val_tup_t cvt,
-                               int is_re_add,
-                               int node_complete)
+/* wrapper around the real castle_immut_tree_entry_add; this performs orphan node preadoption iteratively */
+static int castle_immut_tree_entry_add(struct castle_immut_tree_construct *tree_constr,
+                                       int depth,
+                                       void *key,
+                                       c_ver_t version,
+                                       c_val_tup_t cvt,
+                                       int is_re_add,
+                                       int node_complete)
 {
     c_val_tup_t preadoption_cvt;
 
@@ -4300,24 +4300,25 @@ static int castle_da_entry_add(struct castle_da_merge *merge,
         BUG_ON(!CVT_LEAF_VAL(cvt) && !CVT_LOCAL_COUNTER(cvt));
 
     do {
-        preadoption_cvt = _castle_da_entry_add(merge, depth, key, version, cvt, is_re_add);
+        preadoption_cvt = _castle_immut_tree_entry_add(tree_constr, depth, key,
+                                                       version, cvt, is_re_add);
 
         if(CVT_INVALID(preadoption_cvt))
             break; /* no new node was created, nothing new to adopt, so return now. */
 
         /* prepare for next loop iteration, to preadopt newly created node */
         cvt = preadoption_cvt;
-        key = merge->out_tree_constr->btree->max_key;
+        key = tree_constr->btree->max_key;
         is_re_add = 0;
         depth++;
 
         debug("%s:: preadopting new orphan node for out_tree %p.\n",
-                __FUNCTION__, merge->out_tree_constr->tree);
-    } while(true); /* we rely on the ret from _castle_da_entry_add to break out of the loop */
+                __FUNCTION__, tree_constr->tree);
+    } while(true); /* we rely on the ret from _castle_immut_tree_entry_add to break out of the loop */
 
     /* Try to complete node. */
     if (node_complete)
-        return castle_da_nodes_complete(merge);
+        return castle_immut_tree_nodes_complete(tree_constr);
 
     return 0;
 }
@@ -4357,7 +4358,7 @@ static void castle_immut_tree_node_complete(struct castle_immut_tree_construct *
     if (depth > 0)
         BUG_ON(BTREE_NODE_IS_LEAF(node));
 
-    /* Note: This code calls castle_da_entry_add(), which would change all
+    /* Note: This code calls castle_immut_tree_entry_add(), which would change all
      * parameters in level. Taking a copy of required members. */
     node_c2b        = level->node_c2b;
     last_key        = level->last_key;
@@ -4404,17 +4405,17 @@ static void castle_immut_tree_node_complete(struct castle_immut_tree_construct *
         {
             /* add a "real" link; this will make a new top-level node */
             debug("%s::linking completed node to parent.\n", __FUNCTION__);
-            castle_da_entry_add(tree_constr->private,
-                                depth+1,
-                                key,
-                                node->version,
-                                node_cvt,
-                                0,  /* Not a re-add. */
-                                0); /* Don't complete nodes. */
+            castle_immut_tree_entry_add(tree_constr,
+                                        depth+1,
+                                        key,
+                                        node->version,
+                                        node_cvt,
+                                        0,  /* Not a re-add. */
+                                        0); /* Don't complete nodes. */
         }
     }
 
-    /* Reset the variables to the correct state for castle_da_entry_add(). */
+    /* Reset the variables to the correct state for castle_immut_tree_entry_add(). */
     level->node_c2b      = NULL;
     level->last_key      = NULL;
     level->next_idx      = 0;
@@ -4434,13 +4435,13 @@ static void castle_immut_tree_node_complete(struct castle_immut_tree_construct *
         btree->entry_get(node, node_idx,  &key, &version, &cvt);
         debug("%s::[%p] splitting node at depth %d, cep "cep_fmt_str_nl,
                 __FUNCTION__, ct, depth, cep2str(node_c2b->cep));
-        castle_da_entry_add(tree_constr->private,
-                            depth,
-                            key,
-                            version,
-                            cvt,
-                            1,  /* Re-add. */
-                            0); /* Don't complete nodes. */
+        castle_immut_tree_entry_add(tree_constr,
+                                    depth,
+                                    key,
+                                    version,
+                                    cvt,
+                                    1,  /* Re-add. */
+                                    0); /* Don't complete nodes. */
         node_idx++;
         BUG_ON(level->node_c2b == NULL);
         /* Check if the node completed, it should never do */
@@ -4463,7 +4464,7 @@ static void castle_immut_tree_node_complete(struct castle_immut_tree_construct *
     {
         /* Node c2b was set to NULL earlier in this function. When we are completing the tree
            we should never have to create new nodes at the same level (i.e. there shouldn't be
-           any castle_da_entry_adds above). */
+           any castle_immut_tree_entry_adds above). */
         BUG_ON(level->node_c2b);
         debug("Just completed the root node (depth=%d), at the end of the tree.\n",
                 depth);
@@ -4529,9 +4530,8 @@ static void castle_da_merge_node_complete_cb(struct castle_immut_tree_construct 
     castle_da_merge_new_partition_update(merge, node_c2b, key);
 }
 
-static int castle_da_nodes_complete(struct castle_da_merge *merge)
+static int castle_immut_tree_nodes_complete(struct castle_immut_tree_construct *tree_constr)
 {
-    struct castle_immut_tree_construct *tree_constr = merge->out_tree_constr;
     struct castle_immut_tree_level *level;
     int i;
 
@@ -4546,7 +4546,7 @@ static int castle_da_nodes_complete(struct castle_da_merge *merge)
         {
             debug("%s:: tree %d completing level %d\n",
                     __FUNCTION__, tree_constr->tree->seq, i);
-            castle_immut_tree_node_complete(merge->out_tree_constr, i, 0 /* Not yet completing tree.  */);
+            castle_immut_tree_node_complete(tree_constr, i, 0 /* Not yet completing tree.  */);
             debug("%s:: tree %d completed level %d\n",
                     __FUNCTION__, tree_constr->tree->seq, i);
         }
@@ -4554,7 +4554,7 @@ static int castle_da_nodes_complete(struct castle_da_merge *merge)
             /* As soon as we see an incomplete node, we need to break out: */
             goto out;
     }
-    /* If we reached the top of the tree, we must fail the merge */
+    /* If we reached the top of the tree, we must return failure. */
     if(i == MAX_BTREE_DEPTH - 1)
         return -EINVAL;
 
@@ -4566,11 +4566,10 @@ out:
 
 static void castle_da_merge_package(struct castle_da_merge *merge, c_ext_pos_t root_cep)
 {
-    struct castle_component_tree *out_tree = merge->out_tree_constr->tree;
+    struct castle_immut_tree_construct *tree_constr = merge->out_tree_constr;
+    struct castle_component_tree *out_tree = tree_constr->tree;
 
     BUG_ON(!CASTLE_IN_TRANSACTION);
-
-    debug("Using component tree id=%d to package the merge.\n", out_tree->seq);
 
     castle_printk(LOG_INFO, "Depth of ct=%d (%p) is: %d\n",
             out_tree->seq, out_tree, atomic_read(&out_tree->tree_depth) );
@@ -4591,7 +4590,7 @@ static void castle_da_merge_package(struct castle_da_merge *merge, c_ext_pos_t r
             castle_printk(LOG_DEBUG, "%s::[da %d] truncating tree ext %u beyond chunk %u,"
                     " after %llu bytes used and %llu bytes allocated (grown)\n",
                     __FUNCTION__,
-                    merge->da->id,
+                    tree_constr->da->id,
                     out_tree->tree_ext_free.ext_id,
                     USED_CHUNK(atomic64_read(&out_tree->tree_ext_free.used)),
                     atomic64_read(&out_tree->tree_ext_free.used),
@@ -4605,7 +4604,7 @@ static void castle_da_merge_package(struct castle_da_merge *merge, c_ext_pos_t r
             castle_printk(LOG_DEBUG, "%s::[da %d] truncating data ext %u beyond chunk %u,"
                     " after %llu bytes used and %llu bytes allocated (grown)\n",
                     __FUNCTION__,
-                    merge->da->id,
+                    tree_constr->da->id,
                     out_tree->data_ext_free.ext_id,
                     USED_CHUNK(atomic64_read(&out_tree->data_ext_free.used)),
                     atomic64_read(&out_tree->data_ext_free.used),
@@ -4615,17 +4614,18 @@ static void castle_da_merge_package(struct castle_da_merge *merge, c_ext_pos_t r
         }
     }
 
-    BUG_ON(merge->da != out_tree->da);
+    BUG_ON(tree_constr->da != out_tree->da);
 
     FAULT(MERGE_FAULT);
 }
 
-static void castle_da_max_path_complete(struct castle_da_merge *merge, c_ext_pos_t root_cep)
+static void castle_immut_tree_max_path_complete(struct castle_immut_tree_construct *tree_constr,
+                                                c_ext_pos_t root_cep)
 {
-    struct castle_btree_type *btree = merge->out_tree_constr->btree;
+    struct castle_btree_type *btree = tree_constr->btree;
     struct castle_btree_node *node;
     c2_block_t *node_c2b, *next_node_c2b;
-    struct castle_component_tree *out_tree = merge->out_tree_constr->tree;
+    struct castle_component_tree *out_tree = tree_constr->tree;
     uint8_t level;
     uint16_t node_size;
 
@@ -4747,7 +4747,7 @@ static void castle_da_merge_complete(struct castle_da_merge *merge)
     }
     /* Write out the max keys along the max path. */
     if ( atomic64_read(&out_tree->item_count) > 0 )
-        castle_da_max_path_complete(merge, root_cep);
+        castle_immut_tree_max_path_complete(tree_constr, root_cep);
 
     /* Complete Bloom filters. */
     if (out_tree->bloom_exists)
@@ -5284,7 +5284,8 @@ static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
     }
     /* Make new partition key */
     expected_node_size =
-        castle_da_merge_node_size_get(merge, PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL);
+        castle_immut_tree_node_size_get(merge->out_tree_constr,
+                                        PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL);
     BUG_ON(node->size != expected_node_size);
     merge->redirection_partition.node_size = node->size;
     merge->redirection_partition.node_c2b  = node_c2b;
@@ -5344,7 +5345,7 @@ static int castle_da_merge_space_reserve(struct castle_da_merge *merge, c_val_tu
 
     /* Always make sure we have enough space available in the extent for next leaf node. */
     /* Need space for one leaf node. */
-    space_needed = castle_da_merge_node_size_get(merge, 0) * C_BLK_SIZE;
+    space_needed = castle_immut_tree_node_size_get(merge->out_tree_constr, 0) * C_BLK_SIZE;
 
     /* This functions checks whether we got enough space, if not grows the extent. */
     ret = castle_da_merge_extent_grow(&out_tree->tree_ext_free,
@@ -5463,7 +5464,7 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
     /* Deal with medium and large objects first. For medium objects, we need to copy them
        into our new medium object extent. For large objects, we need to save the aggregate
        size. plus take refs to extents? */
-    /* It is possible to do castle_da_entry_add() on the same entry multiple
+    /* It is possible to do castle_immut_tree_entry_add() on the same entry multiple
      * times. Don't process data again. */
     if (CVT_MEDIUM_OBJECT(cvt))
         cvt = castle_da_medium_obj_copy(merge, cvt);
@@ -5495,13 +5496,13 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
      *
      * - Add to level 0 node (and recurse up the tree)
      * - Update the bloom filter */
-    ret = castle_da_entry_add(merge,
-                              0,
-                              key,
-                              version,
-                              cvt,
-                              0,    /* Not a re-add. */
-                              1);   /* Complete nodes. */
+    ret = castle_immut_tree_entry_add(merge->out_tree_constr,
+                                      0,
+                                      key,
+                                      version,
+                                      cvt,
+                                      0,    /* Not a re-add. */
+                                      1);   /* Complete nodes. */
     BUG_ON(ret == -ESHUTDOWN);
 
     if (castle_da_user_timestamping_check(merge->da))
@@ -6874,7 +6875,7 @@ static c2_block_t* castle_da_merge_des_out_tree_c2b_write_fetch(struct castle_da
     BUG_ON(!merge);
     BUG_ON(EXT_POS_INVAL(cep));
 
-    node_size = castle_da_merge_node_size_get(merge, depth);
+    node_size = castle_immut_tree_node_size_get(merge->out_tree_constr, depth);
     BUG_ON(node_size == 0);
 
     c2b = castle_cache_block_get(cep, node_size, MERGE_OUT);
