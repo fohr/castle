@@ -4322,11 +4322,12 @@ static int castle_da_entry_add(struct castle_da_merge *merge,
     return 0;
 }
 
-static void castle_da_node_complete(struct castle_da_merge *merge, int depth, int completing)
+static void castle_immut_tree_node_complete(struct castle_immut_tree_construct *tree_constr,
+                                            int                                 depth,
+                                            int                                 completing)
 {
-    struct castle_immut_tree_construct *tree_constr = merge->out_tree_constr;
     struct castle_immut_tree_level *level = tree_constr->levels + depth;
-    struct castle_btree_type *btree = merge->out_tree_constr->btree;
+    struct castle_btree_type *btree = tree_constr->btree;
     struct castle_component_tree *ct = tree_constr->tree;
     struct castle_btree_node *node;
     int node_idx;
@@ -4339,12 +4340,12 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth, in
 
     /* Make sure we are not in recursion. */
 #ifdef CASTLE_DEBUG
-    BUG_ON(merge->out_tree_constr->is_recursion);
-    merge->out_tree_constr->is_recursion = 1;
+    BUG_ON(tree_constr->is_recursion);
+    tree_constr->is_recursion = 1;
 #endif
 
     debug("%s::Completing node at depth=%d for da %d\n",
-        __FUNCTION__, depth, merge->da->id);
+        __FUNCTION__, depth, tree_constr->da->id);
     BUG_ON(depth >= MAX_BTREE_DEPTH);
 
     node      = c2b_bnode(level->node_c2b);
@@ -4376,7 +4377,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth, in
     }
 
     /* Insert correct pointer in the parent, unless we've just completed the
-       root node at the end of the merge. */
+       root node at the end of the immutable tree. */
     if(!(unlikely(completing) && (atomic_read(&ct->tree_depth) == (depth+1) )))
     {
         CVT_NODE_INIT(node_cvt, (node_c2b->nr_pages * C_BLK_SIZE), node_c2b->cep);
@@ -4403,7 +4404,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth, in
         {
             /* add a "real" link; this will make a new top-level node */
             debug("%s::linking completed node to parent.\n", __FUNCTION__);
-            castle_da_entry_add(merge,
+            castle_da_entry_add(tree_constr->private,
                                 depth+1,
                                 key,
                                 node->version,
@@ -4433,7 +4434,7 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth, in
         btree->entry_get(node, node_idx,  &key, &version, &cvt);
         debug("%s::[%p] splitting node at depth %d, cep "cep_fmt_str_nl,
                 __FUNCTION__, ct, depth, cep2str(node_c2b->cep));
-        castle_da_entry_add(merge,
+        castle_da_entry_add(tree_constr->private,
                             depth,
                             key,
                             version,
@@ -4470,20 +4471,21 @@ static void castle_da_node_complete(struct castle_da_merge *merge, int depth, in
     debug("Releasing c2b for cep=" cep_fmt_str_nl, cep2str(node_c2b->cep));
     debug("Completing a node with %d entries at depth %d\n", node->used, depth);
 
-    merge->out_tree_constr->node_complete(merge, node_c2b, depth, completing);
+    tree_constr->node_complete(tree_constr, node_c2b, depth, completing);
 
     put_c2b(node_c2b);
 
 #ifdef CASTLE_DEBUG
-    merge->out_tree_constr->is_recursion = 0;
+    tree_constr->is_recursion = 0;
 #endif
 }
 
-static void castle_da_merge_node_complete_cb(struct castle_da_merge             *merge,
+static void castle_da_merge_node_complete_cb(struct castle_immut_tree_construct *tree_constr,
                                              c2_block_t                         *node_c2b,
                                              int                                 depth,
                                              int                                 completing)
 {
+    struct castle_da_merge *merge = tree_constr->private;
     struct castle_btree_node *node = c2b_bnode(node_c2b);
     void *key;
 
@@ -4544,7 +4546,7 @@ static int castle_da_nodes_complete(struct castle_da_merge *merge)
         {
             debug("%s:: tree %d completing level %d\n",
                     __FUNCTION__, tree_constr->tree->seq, i);
-            castle_da_node_complete(merge, i, 0 /* Not yet completing tree.  */);
+            castle_immut_tree_node_complete(merge->out_tree_constr, i, 0 /* Not yet completing tree.  */);
             debug("%s:: tree %d completed level %d\n",
                     __FUNCTION__, tree_constr->tree->seq, i);
         }
@@ -4685,14 +4687,14 @@ static void castle_da_max_path_complete(struct castle_da_merge *merge, c_ext_pos
  * Each level can have at most one uncompleted node. Complete each node with the
  * entries we got now, and link the node to its parent. During this process, each
  * non-leaf node can get one extra entry in worst case. Mark valid_end_idx in each
- * level to used-1. And call castle_da_node_complete on every level, which would
+ * level to used-1. And call castle_immut_tree_node_complete on every level, which would
  * complete the node and might add one entry in next higher level.
  *
  * @param merge [in, out] merge structure to be completed.
  *
  * @return ct Complete out tree
  *
- * @see castle_da_node_complete
+ * @see castle_immut_tree_node_complete
  */
 static void castle_da_merge_complete(struct castle_da_merge *merge)
 {
@@ -4740,7 +4742,7 @@ static void castle_da_merge_complete(struct castle_da_merge *merge)
             level->valid_end_idx--;
             level->valid_version = 0;
             level->next_idx = -1;
-            castle_da_node_complete(merge, i, 1 /* completing tree. */);
+            castle_immut_tree_node_complete(merge->out_tree_constr, i, 1 /* completing tree. */);
         }
     }
     /* Write out the max keys along the max path. */

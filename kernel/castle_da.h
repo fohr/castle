@@ -25,10 +25,11 @@ void castle_da_merge_mstore_package_check_free(struct castle_da_merge_mstore_pac
 int castle_da_merge_mstore_package_alloc(struct castle_da_merge_mstore_package *m,
                                          unsigned int nr_in_trees);
 
-typedef void (*c_immut_tree_node_complete_cb_t)(struct castle_da_merge        *merge,
-                                                c2_block_t                    *node_c2b,
-                                                int                            depth,
-                                                int                            completing);
+struct castle_immut_tree_construct;
+typedef void (*c_immut_tree_node_complete_cb_t)(struct castle_immut_tree_construct *tree_constr,
+                                                c2_block_t                         *node_c2b,
+                                                int                                 depth,
+                                                int                                 completing);
 struct castle_da_merge {
     c_merge_id_t                  id;
     struct list_head              hash_list;
