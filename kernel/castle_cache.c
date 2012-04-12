@@ -1031,16 +1031,16 @@ static int c2_dirtytree_remove(c2_block_t *c2b)
     spin_lock_irqsave(&dirtytree->lock, flags);
 
     /* Remove c2b from the tree. */
-    spin_lock(&castle_cache_extent_dirtylist_lock);
     rb_erase(&c2b->rb_dirtytree, &dirtytree->rb_root);
     if (RB_EMPTY_ROOT(&dirtytree->rb_root))
     {
         /* Last dirty c2b for this extent, remove it from the global
          * list of dirty extents. */
+        spin_lock(&castle_cache_extent_dirtylist_lock);
         list_del_init(&dirtytree->list);
+        spin_unlock(&castle_cache_extent_dirtylist_lock);
         BUG_ON(atomic_dec_return(&castle_cache_extent_dirtylist_sizes[dirtytree->flush_prio]) < 0);
     }
-    spin_unlock(&castle_cache_extent_dirtylist_lock);
 
     /* Maintain the number of pages in this dirtytree. */
     dirtytree->nr_pages -= c2b->nr_pages;
@@ -1126,18 +1126,18 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
     }
 
     /* Insert dirty c2b into the tree. */
-    spin_lock(&castle_cache_extent_dirtylist_lock);
     if (RB_EMPTY_ROOT(&dirtytree->rb_root))
     {
         /* First dirty c2b for this extent, place it onto the global
          * list of dirty extents. */
         BUG_ON(dirtytree->flush_prio >= NR_EXTENT_FLUSH_PRIOS);
+        spin_lock(&castle_cache_extent_dirtylist_lock);
         list_add(&dirtytree->list, &castle_cache_extent_dirtylists[dirtytree->flush_prio]);
+        spin_unlock(&castle_cache_extent_dirtylist_lock);
         atomic_inc(&castle_cache_extent_dirtylist_sizes[dirtytree->flush_prio]);
     }
     rb_link_node(&c2b->rb_dirtytree, parent, p);
     rb_insert_color(&c2b->rb_dirtytree, &dirtytree->rb_root);
-    spin_unlock(&castle_cache_extent_dirtylist_lock);
 
     /* Maintain the number of pages in this dirtytree. */
     dirtytree->nr_pages += c2b->nr_pages;
@@ -1159,16 +1159,16 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
  */
 void castle_cache_dirtytree_demote(c_ext_dirtytree_t *dirtytree)
 {
-    spin_lock_irq(&castle_cache_extent_dirtylist_lock);
     if (likely(!RB_EMPTY_ROOT(&dirtytree->rb_root)))
     {
         atomic_dec(&castle_cache_extent_dirtylist_sizes[dirtytree->flush_prio]);
+        spin_lock_irq(&castle_cache_extent_dirtylist_lock);
         list_del(&dirtytree->list);
         dirtytree->flush_prio = DEAD_EXT_FLUSH_PRIO;
         list_add(&dirtytree->list, &castle_cache_extent_dirtylists[dirtytree->flush_prio]);
+        spin_unlock_irq(&castle_cache_extent_dirtylist_lock);
         atomic_inc(&castle_cache_extent_dirtylist_sizes[dirtytree->flush_prio]);
     }
-    spin_unlock_irq(&castle_cache_extent_dirtylist_lock);
 }
 
 /**
