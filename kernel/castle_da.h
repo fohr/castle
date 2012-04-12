@@ -74,6 +74,7 @@ struct castle_da_merge {
         void                         *last_key;          /**< Last key added to out tree, depth
                                                               0. */
         void                         *private;
+        int                           checkpointable;
 #ifdef CASTLE_DEBUG
         uint8_t                       is_recursion;
 #endif

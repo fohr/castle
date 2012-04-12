@@ -4564,9 +4564,9 @@ out:
     return 0;
 }
 
-static void castle_da_merge_package(struct castle_da_merge *merge, c_ext_pos_t root_cep)
+static void castle_immut_tree_package(struct castle_immut_tree_construct *tree_constr,
+                                      c_ext_pos_t root_cep)
 {
-    struct castle_immut_tree_construct *tree_constr = merge->out_tree_constr;
     struct castle_component_tree *out_tree = tree_constr->tree;
 
     BUG_ON(!CASTLE_IN_TRANSACTION);
@@ -4582,7 +4582,7 @@ static void castle_da_merge_package(struct castle_da_merge *merge, c_ext_pos_t r
     BUG_ON(atomic_read(&out_tree->write_ref_count) != 0);
 
     /* truncate remaining blank chunks in output tree... */
-    if(MERGE_CHECKPOINTABLE(merge))
+    if (tree_constr->checkpointable)
     {
         /* ... if there is at least one unused chunk */
         if (castle_ext_freespace_available(&out_tree->tree_ext_free) > C_CHK_SIZE)
@@ -4696,9 +4696,8 @@ static void castle_immut_tree_max_path_complete(struct castle_immut_tree_constru
  *
  * @see castle_immut_tree_node_complete
  */
-static void castle_da_merge_complete(struct castle_da_merge *merge)
+static void castle_immut_tree_complete(struct castle_immut_tree_construct *tree_constr)
 {
-    struct castle_immut_tree_construct *tree_constr = merge->out_tree_constr;
     struct castle_component_tree *out_tree = tree_constr->tree;
     struct castle_immut_tree_level *level;
     struct castle_btree_node *node;
@@ -4742,7 +4741,7 @@ static void castle_da_merge_complete(struct castle_da_merge *merge)
             level->valid_end_idx--;
             level->valid_version = 0;
             level->next_idx = -1;
-            castle_immut_tree_node_complete(merge->out_tree_constr, i, 1 /* completing tree. */);
+            castle_immut_tree_node_complete(tree_constr, i, 1 /* completing tree. */);
         }
     }
     /* Write out the max keys along the max path. */
@@ -4754,7 +4753,7 @@ static void castle_da_merge_complete(struct castle_da_merge *merge)
         castle_bloom_complete(&out_tree->bloom);
 
     /* Package the merge result. */
-    castle_da_merge_package(merge, root_cep);
+    castle_immut_tree_package(tree_constr, root_cep);
 }
 
 static void castle_ct_large_objs_remove(struct list_head *);
@@ -6078,6 +6077,7 @@ static struct castle_immut_tree_construct * castle_immut_tree_alloc(
                                         c_immut_tree_node_complete_cb_t node_complete_cb,
                                         struct castle_btree_type       *btree,
                                         struct castle_double_array     *da,
+                                        int                             checkpointable,
                                         void                           *private)
 {
     struct castle_immut_tree_construct *tree_constr;
@@ -6104,6 +6104,7 @@ static struct castle_immut_tree_construct * castle_immut_tree_alloc(
     tree_constr->leafs_on_ssds      = 0;
     tree_constr->internals_on_ssds  = 0;
     tree_constr->private            = private;
+    tree_constr->checkpointable     = checkpointable;
 #ifdef CASTLE_DEBUG
     tree_constr->is_recursion       = 0;
 #endif
@@ -6165,6 +6166,7 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
     merge->out_tree_constr      = castle_immut_tree_alloc(castle_da_merge_node_complete_cb,
                                                           castle_btree_type_get(da->btree_type),
                                                           da,
+                                                          MERGE_CHECKPOINTABLE(merge),
                                                           merge);
     if (merge->out_tree_constr == NULL)
         goto error_out;
@@ -7155,7 +7157,7 @@ static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_bytes)
     if (ret == EXIT_SUCCESS)
     {
         /* Finish packaging the output tree. */
-        castle_da_merge_complete(merge);
+        castle_immut_tree_complete(merge->out_tree_constr);
 
         /* update list of large objects */
         /* in transaction, so won't race against checkpoint - safe to proceed without locks */
