@@ -53,12 +53,12 @@ int castle_dfs_resolver_preconstruct(c_dfs_resolver *dfs_resolver, struct castle
         max_entries += merge->in_trees[i]->max_versions_per_key;
     }
 
-    BUG_ON(!merge->out_btree);
-    new_node_size = merge->out_btree->min_size(max_entries);
+    BUG_ON(!merge->out_tree_constr->btree);
+    new_node_size = merge->out_tree_constr->btree->min_size(max_entries);
     castle_printk(LOG_DEBUG, "%s::[%p] expecting max key stream of %u entries, "
             "which requires a node size of %u blocks.\n",
             __FUNCTION__, merge, max_entries, new_node_size);
-    BUG_ON(max_entries > merge->out_btree->max_entries(new_node_size));
+    BUG_ON(max_entries > merge->out_tree_constr->btree->max_entries(new_node_size));
 
     /* Allocate and init btree node buffer */
     dfs_resolver->buffer_node = castle_alloc(new_node_size * C_BLK_SIZE);
@@ -67,7 +67,7 @@ int castle_dfs_resolver_preconstruct(c_dfs_resolver *dfs_resolver, struct castle
         ret = -ENOMEM;
         goto error;
     }
-    castle_btree_node_buffer_init(merge->out_btree->magic,
+    castle_btree_node_buffer_init(merge->out_tree_constr->btree->magic,
                                   dfs_resolver->buffer_node,
                                   new_node_size,
                                   BTREE_NODE_IS_LEAF_FLAG | BTREE_NODE_HAS_TIMESTAMPS_FLAG,
@@ -179,9 +179,9 @@ int castle_dfs_resolver_entry_add(c_dfs_resolver *dfs_resolver,
     BUG_ON(!key);
     BUG_ON(!CVT_LEAF_VAL(cvt) && !CVT_LOCAL_COUNTER(cvt));
     BUG_ON(!dfs_resolver->merge);
-    BUG_ON(!dfs_resolver->merge->out_btree);
+    BUG_ON(!dfs_resolver->merge->out_tree_constr->btree);
 
-    btree = dfs_resolver->merge->out_btree;
+    btree = dfs_resolver->merge->out_tree_constr->btree;
     BUG_ON(!btree);
 
     if(dfs_resolver->mode == DFS_RESOLVER_NEW_KEY)
@@ -217,7 +217,7 @@ int castle_dfs_resolver_entry_add(c_dfs_resolver *dfs_resolver,
             dfs_resolver->top_index,
             version,
             cvt.user_timestamp);
-    //dfs_resolver->merge->out_btree->key_print(LOG_DEBUG, key);
+    //dfs_resolver->merge->out_tree_constr->btree->key_print(LOG_DEBUG, key);
     debug("\n");
 
     dfs_resolver->top_index++;
@@ -242,7 +242,7 @@ int castle_dfs_resolver_entry_pop(c_dfs_resolver *dfs_resolver,
     BUG_ON(!cvt_p);
     BUG_ON(!version_p);
 
-    btree = dfs_resolver->merge->out_btree;
+    btree = dfs_resolver->merge->out_tree_constr->btree;
     BUG_ON(!btree);
 
     if(dfs_resolver->mode == DFS_RESOLVER_NEW_KEY)
@@ -295,7 +295,7 @@ int castle_dfs_resolver_entry_pop(c_dfs_resolver *dfs_resolver,
             dfs_resolver->curr_index,
             *version_p,
             cvt->user_timestamp);
-    //dfs_resolver->merge->out_btree->key_print(LOG_DEBUG, *key_p);
+    //dfs_resolver->merge->out_tree_constr->btree->key_print(LOG_DEBUG, *key_p);
     debug("\n");
 
     /* Prepare for next pop */
@@ -407,7 +407,7 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
 
     BUG_ON(!dfs_resolver);
     merge = dfs_resolver->merge;
-    btree = merge->out_btree;
+    btree = merge->out_tree_constr->btree;
     BUG_ON(!btree);
 
     if(dfs_resolver->mode == DFS_RESOLVER_NEW_KEY)
@@ -564,7 +564,7 @@ int castle_dfs_resolver_is_new_key_check(c_dfs_resolver *dfs_resolver, void *key
     }
 
     BUG_ON(dfs_resolver->mode != DFS_RESOLVER_ENTRY_ADD);
-    btree = dfs_resolver->merge->out_btree;
+    btree = dfs_resolver->merge->out_tree_constr->btree;
     BUG_ON(!btree);
     btree->entry_get(dfs_resolver->buffer_node, 0, &key_b, NULL, NULL);
     return btree->key_compare(key, key_b);
@@ -597,7 +597,7 @@ static void castle_dfs_resolver_reset(c_dfs_resolver *dfs_resolver)
 
     /* drop all entries in the buffer */
     BUG_ON(!dfs_resolver->buffer_node->used); /* there must have been at least 1 entry */
-    btree = dfs_resolver->merge->out_btree;
+    btree = dfs_resolver->merge->out_tree_constr->btree;
     BUG_ON(!btree);
     btree->entries_drop(dfs_resolver->buffer_node, 0, dfs_resolver->buffer_node->used - 1);
 }

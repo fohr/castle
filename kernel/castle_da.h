@@ -37,7 +37,6 @@ struct castle_da_merge {
     c_res_pool_id_t               pool_id;
 
     struct castle_double_array   *da;
-    struct castle_btree_type     *out_btree;
     int                           level;
     int                           nr_trees;     /**< num of component trees being merged        */
     struct castle_component_tree **in_trees;    /**< array of component trees to be merged      */
@@ -47,13 +46,14 @@ struct castle_da_merge {
     void                         **iters;       /**< Component Tree iterators.                  */
     c_merged_iter_t              *merged_iter;
     c2_block_t                   *last_leaf_node_c2b; /**< Last node c2b at depth 0.            */
-    void                         *last_key;           /**< Last key added to out tree, depth 0. */
     uint64_t                      total_nr_bytes;
     uint64_t                      nr_bytes;
-    int                           is_new_key;   /**< Is the current key different from the last
-                                                     key added to out_tree.                     */
 
     struct castle_immut_tree_construct {
+        struct castle_double_array   *da;
+        struct castle_component_tree *tree;
+        struct castle_btree_type     *btree;
+
         struct castle_immut_tree_level {
             /* Node we are currently generating, and book-keeping variables about the node. */
             c2_block_t               *node_c2b;
@@ -65,21 +65,26 @@ struct castle_da_merge {
 
         c_immut_tree_node_complete_cb_t node_complete;
 
-        struct castle_component_tree *tree;
+        int                           leafs_on_ssds;     /**< Are leaf btree nodes stored on SSD.*/
+        int                           internals_on_ssds; /**< Are internal nodes stored on SSD.  */
+
+        int                           is_new_key;        /**< Is the current key different from
+                                                              the last key added to out_tree.    */
+        void                         *last_key;          /**< Last key added to out tree, depth
+                                                              0. */
+        void                         *private;
+#ifdef CASTLE_DEBUG
+        uint8_t                       is_recursion;
+#endif
     } *out_tree_constr;
 
     /* Deamortisation variables */
     struct work_struct            work;
-    int                           leafs_on_ssds;        /**< Are leaf btree nodes stored on SSD.*/
-    int                           internals_on_ssds;    /**< Are internal nodes stored on SSD.  */
     struct list_head              new_large_objs;       /**< Large objects added since last
                                                              checkpoint (for merge serdes).     */
     struct castle_version_states  version_states;       /**< Merged version states.             */
     struct castle_version_delete_state snapshot_delete; /**< Snapshot delete state.             */
 
-#ifdef CASTLE_DEBUG
-    uint8_t                       is_recursion;
-#endif
     uint32_t                      skipped_count;        /**< Count of entries from deleted
                                                              versions.                          */
 
