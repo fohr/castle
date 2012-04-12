@@ -288,8 +288,7 @@ static c2_block_t             *castle_cache_blks = NULL;
 static c2_page_t              *castle_cache_pgs  = NULL;
 
 static int                     castle_cache_block_hash_buckets;
-static DEFINE_RWLOCK(castle_cache_block_hash_lock);
-static DEFINE_SPINLOCK(castle_cache_block_lru_lock);
+static           DEFINE_RWLOCK(castle_cache_block_hash_lock);
 static struct hlist_head      *castle_cache_block_hash = NULL;
 
 #define PAGE_HASH_LOCK_PERIOD  1024
@@ -300,12 +299,13 @@ static struct hlist_head      *castle_cache_page_hash = NULL;
 static struct kmem_cache      *castle_io_array_cache = NULL;
 static struct kmem_cache      *castle_flush_cache = NULL;
 
-/* Following LIST_HEADs are protected by castle_cache_block_lru_lock. */
+static         DEFINE_SPINLOCK(castle_cache_extent_dirtylist_lock);
 static struct list_head        castle_cache_extent_dirtylists[NR_EXTENT_FLUSH_PRIOS];
                                                                     /**< Lists of dirtytrees      */
 static atomic_t                castle_cache_extent_dirtylist_sizes[NR_EXTENT_FLUSH_PRIOS];
                                                                     /**< Number of dirty extents  */
 
+static         DEFINE_SPINLOCK(castle_cache_block_lru_lock);
 static               LIST_HEAD(castle_cache_block_lru);             /**< List of all c2bs in LRU  */
 static atomic_t                castle_cache_block_lru_size;         /**< Number of c2bs in LRU    */
 
@@ -1031,7 +1031,7 @@ static int c2_dirtytree_remove(c2_block_t *c2b)
     spin_lock_irqsave(&dirtytree->lock, flags);
 
     /* Remove c2b from the tree. */
-    spin_lock(&castle_cache_block_lru_lock); /* protects clean/dirty union */
+    spin_lock(&castle_cache_extent_dirtylist_lock);
     rb_erase(&c2b->rb_dirtytree, &dirtytree->rb_root);
     if (RB_EMPTY_ROOT(&dirtytree->rb_root))
     {
@@ -1040,7 +1040,7 @@ static int c2_dirtytree_remove(c2_block_t *c2b)
         list_del_init(&dirtytree->list);
         BUG_ON(atomic_dec_return(&castle_cache_extent_dirtylist_sizes[dirtytree->flush_prio]) < 0);
     }
-    spin_unlock(&castle_cache_block_lru_lock);
+    spin_unlock(&castle_cache_extent_dirtylist_lock);
 
     /* Maintain the number of pages in this dirtytree. */
     dirtytree->nr_pages -= c2b->nr_pages;
@@ -1126,7 +1126,7 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
     }
 
     /* Insert dirty c2b into the tree. */
-    spin_lock(&castle_cache_block_lru_lock); /* protects clean/dirty union. */
+    spin_lock(&castle_cache_extent_dirtylist_lock);
     if (RB_EMPTY_ROOT(&dirtytree->rb_root))
     {
         /* First dirty c2b for this extent, place it onto the global
@@ -1137,7 +1137,7 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
     }
     rb_link_node(&c2b->rb_dirtytree, parent, p);
     rb_insert_color(&c2b->rb_dirtytree, &dirtytree->rb_root);
-    spin_unlock(&castle_cache_block_lru_lock);
+    spin_unlock(&castle_cache_extent_dirtylist_lock);
 
     /* Maintain the number of pages in this dirtytree. */
     dirtytree->nr_pages += c2b->nr_pages;
@@ -1159,7 +1159,7 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
  */
 void castle_cache_dirtytree_demote(c_ext_dirtytree_t *dirtytree)
 {
-    spin_lock_irq(&castle_cache_block_lru_lock);
+    spin_lock_irq(&castle_cache_extent_dirtylist_lock);
     if (likely(!RB_EMPTY_ROOT(&dirtytree->rb_root)))
     {
         atomic_dec(&castle_cache_extent_dirtylist_sizes[dirtytree->flush_prio]);
@@ -1168,7 +1168,7 @@ void castle_cache_dirtytree_demote(c_ext_dirtytree_t *dirtytree)
         list_add(&dirtytree->list, &castle_cache_extent_dirtylists[dirtytree->flush_prio]);
         atomic_inc(&castle_cache_extent_dirtylist_sizes[dirtytree->flush_prio]);
     }
-    spin_unlock_irq(&castle_cache_block_lru_lock);
+    spin_unlock_irq(&castle_cache_extent_dirtylist_lock);
 }
 
 /**
@@ -5413,13 +5413,13 @@ aggressive:
                 might_resched();
 
                 /* Get next per-extent dirtytree to flush. */
-                spin_lock_irq(&castle_cache_block_lru_lock);
+                spin_lock_irq(&castle_cache_extent_dirtylist_lock);
 
                 /* The dirtylist might have became empty once between us reading
-                   its size, and taking the lru lock. Check for that. */
+                   its size, and taking the dirtylist lock. Check for that. */
                 if(list_empty(&castle_cache_extent_dirtylists[prio]))
                 {
-                    spin_unlock_irq(&castle_cache_block_lru_lock);
+                    spin_unlock_irq(&castle_cache_extent_dirtylist_lock);
                     /* Exit the loop early. */
                     i=0;
                     continue;
@@ -5427,15 +5427,15 @@ aggressive:
 
                 dirtytree = list_entry(castle_cache_extent_dirtylists[prio].next,
                         c_ext_dirtytree_t, list);
-                /* Get dirtytree ref under castle_cache_block_lru_lock.  Prevents
-                 * a potential race where all c2bs in tree are flushing and final
-                 * c2b IO completion callback handler might free the dirtytree. */
+                /* Get dirtytree ref under castle_cache_extent_dirtylist_lock. Prevents a
+                 * potential race where all c2bs in tree are flushing and final c2b IO
+                 * completion callback handler might free the dirtytree. */
                 castle_extent_dirtytree_get(dirtytree);
                 /* Move it to the end of the list. So that next time a different
                    extent will be considered next time around. */
                 list_move_tail(&dirtytree->list, &castle_cache_extent_dirtylists[prio]);
 
-                spin_unlock_irq(&castle_cache_block_lru_lock);
+                spin_unlock_irq(&castle_cache_extent_dirtylist_lock);
 
                 mask_id = castle_extent_all_masks_get(dirtytree->ext_id);
                 /* Check if extent is already dead. This shouldn't happen as before we delete
