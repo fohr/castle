@@ -1212,7 +1212,7 @@ static ssize_t merge_out_tree_show(struct kobject *kobj,
 {
     struct castle_da_merge *merge = container_of(kobj, struct castle_da_merge, kobj);
 
-    return sprintf(buf, "0x%llx", merge->out_tree->seq);
+    return sprintf(buf, "0x%llx", merge->out_tree_constr->tree->seq);
 }
 
 static ssize_t merge_progress_show(struct kobject *kobj,
@@ -1248,8 +1248,8 @@ static ssize_t merge_output_dext_show(struct kobject *kobj,
 {
     struct castle_da_merge *merge = container_of(kobj, struct castle_da_merge, kobj);
 
-    if (!EXT_ID_INVAL(merge->out_tree->data_ext_free.ext_id))
-        return sprintf(buf, "0x%llx\n", merge->out_tree->data_ext_free.ext_id);
+    if (!EXT_ID_INVAL(merge->out_tree_constr->tree->data_ext_free.ext_id))
+        return sprintf(buf, "0x%llx\n", merge->out_tree_constr->tree->data_ext_free.ext_id);
 
     return sprintf(buf, "\n");
 }

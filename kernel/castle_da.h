@@ -44,7 +44,6 @@ struct castle_da_merge {
     c_ext_id_t                   *drain_exts;   /**< List of data extents that are to be drained*/
     int                           nr_drain_exts;/**< # of data extents that are to be drained.  */
 
-    struct castle_component_tree *out_tree;
     void                         **iters;       /**< Component Tree iterators.                  */
     c_merged_iter_t              *merged_iter;
     c2_block_t                   *last_leaf_node_c2b; /**< Last node c2b at depth 0.            */
@@ -65,6 +64,8 @@ struct castle_da_merge {
         } levels[MAX_BTREE_DEPTH];
 
         c_immut_tree_node_complete_cb_t node_complete;
+
+        struct castle_component_tree *tree;
     } *out_tree_constr;
 
     /* Deamortisation variables */
