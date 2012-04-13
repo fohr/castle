@@ -4512,6 +4512,26 @@ static void castle_immut_tree_node_complete(struct castle_immut_tree_construct *
     debug("Releasing c2b for cep=" cep_fmt_str_nl, cep2str(node_c2b->cep));
     debug("Completing a node with %d entries at depth %d\n", node->used, depth);
 
+    /* Hold on to last leaf node for the sake of last_key. No need of lock, this
+     * is a immutable node. */
+    if (depth == 0)
+    {
+        c2_block_t *last_leaf_c2b = tree_constr->last_leaf_node_c2b;
+
+        /* Release the reference to the previous last node. */
+        if (last_leaf_c2b)
+        {
+            /* The last_key pointer mustn't be pointing to the node any more. */
+            BUG_ON(ptr_in_range(tree_constr->last_key,
+                                c2b_buffer(last_leaf_c2b),
+                                last_leaf_c2b->nr_pages * PAGE_SIZE));
+            put_c2b(last_leaf_c2b);
+        }
+
+        tree_constr->last_leaf_node_c2b = node_c2b;
+        get_c2b(tree_constr->last_leaf_node_c2b);
+    }
+
     if (tree_constr->node_complete)
         tree_constr->node_complete(tree_constr, node_c2b, depth, completing);
 
@@ -4531,26 +4551,6 @@ static void castle_da_merge_node_complete_cb(struct castle_immut_tree_construct 
     struct castle_da_merge *merge = tree_constr->private;
     struct castle_btree_node *node = c2b_bnode(node_c2b);
     void *key;
-
-    /* Hold on to last leaf node for the sake of last_key. No need of lock, this
-     * is a immutable node. */
-    if (depth == 0)
-    {
-        c2_block_t *last_leaf_c2b = merge->last_leaf_node_c2b;
-
-        /* Release the reference to the previous last node. */
-        if (last_leaf_c2b)
-        {
-            /* The last_key pointer mustn't be pointing to the node any more. */
-            BUG_ON(ptr_in_range(merge->out_tree_constr->last_key,
-                                c2b_buffer(last_leaf_c2b),
-                                last_leaf_c2b->nr_pages * PAGE_SIZE));
-            put_c2b(last_leaf_c2b);
-        }
-
-        merge->last_leaf_node_c2b = node_c2b;
-        get_c2b(merge->last_leaf_node_c2b);
-    }
 
     /* Update partial merge partition redirection key */
 
@@ -5061,7 +5061,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err, int 
         check_and_put_c2b(tree_constr->levels[i].node_c2b);
 
     /* Release the last leaf node c2b. */
-    check_and_put_c2b(merge->last_leaf_node_c2b);
+    check_and_put_c2b(tree_constr->last_leaf_node_c2b);
 
     /* Destroy all iterators. */
     if (merge->iters)
@@ -6143,6 +6143,7 @@ static struct castle_immut_tree_construct * castle_immut_tree_alloc(
     tree_constr->btree              = btree;
     tree_constr->is_new_key         = 1;
     tree_constr->last_key           = NULL;
+    tree_constr->last_leaf_node_c2b = NULL;
     tree_constr->leafs_on_ssds      = 0;
     tree_constr->internals_on_ssds  = 0;
     tree_constr->private            = private;
@@ -6150,7 +6151,6 @@ static struct castle_immut_tree_construct * castle_immut_tree_alloc(
 #ifdef CASTLE_DEBUG
     tree_constr->is_recursion       = 0;
 #endif
-
 
     return tree_constr;
 }
@@ -6202,7 +6202,6 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
     merge->nr_drain_exts        = nr_drain_exts;
     merge->iters                = NULL;
     merge->merged_iter          = NULL;
-    merge->last_leaf_node_c2b   = NULL;
     merge->total_nr_bytes       = 0;
     merge->nr_bytes             = 0;
     merge->out_tree_constr      = castle_immut_tree_alloc(castle_da_merge_node_complete_cb,
@@ -6793,8 +6792,8 @@ static void castle_da_merge_marshall(struct castle_da_merge *merge,
         merge_mstore->skipped_count      = merge->skipped_count;
         merge_mstore->last_leaf_node_cep = INVAL_EXT_POS;
 
-        if(merge->last_leaf_node_c2b)
-            merge_mstore->last_leaf_node_cep = merge->last_leaf_node_c2b->cep;
+        if(merge->out_tree_constr->last_leaf_node_c2b)
+            merge_mstore->last_leaf_node_cep = merge->out_tree_constr->last_leaf_node_c2b->cep;
 
         merge_mstore->redirection_partition_node_cep   = INVAL_EXT_POS;
         merge_mstore->redirection_partition_node_size = 0;
@@ -7050,19 +7049,19 @@ static void castle_da_merge_struct_deser(struct castle_da_merge *merge,
         }
     }
 
-    merge->last_leaf_node_c2b = NULL;
+    merge->out_tree_constr->last_leaf_node_c2b = NULL;
     if(!EXT_POS_INVAL(merge_mstore->last_leaf_node_cep))
     {
         debug("%s::last_leaf_node_c2b for merge %p (da %d level %d)\n",
                 __FUNCTION__, merge, da->id, level);
-        merge->last_leaf_node_c2b =
+        merge->out_tree_constr->last_leaf_node_c2b =
             castle_da_merge_des_out_tree_c2b_write_fetch(merge, merge_mstore->last_leaf_node_cep,
                     0 /* leaf */);
 
-        read_lock_c2b(merge->last_leaf_node_c2b);
+        read_lock_c2b(merge->out_tree_constr->last_leaf_node_c2b);
 
-        BUG_ON(!merge->last_leaf_node_c2b);
-        node = c2b_bnode(merge->last_leaf_node_c2b);
+        BUG_ON(!merge->out_tree_constr->last_leaf_node_c2b);
+        node = c2b_bnode(merge->out_tree_constr->last_leaf_node_c2b);
         BUG_ON(!node);
         BUG_ON(node->magic != BTREE_NODE_MAGIC);
 
@@ -7070,7 +7069,7 @@ static void castle_da_merge_struct_deser(struct castle_da_merge *merge,
         if( (!merge->out_tree_constr->last_key) && (node->used) )
             merge->out_tree_constr->btree->entry_get(node, node->used - 1, &merge->out_tree_constr->last_key, NULL, NULL);
 
-        read_unlock_c2b(merge->last_leaf_node_c2b);
+        read_unlock_c2b(merge->out_tree_constr->last_leaf_node_c2b);
 
         castle_printk(LOG_DEBUG, "%s::recovered last leaf node for merge %p (da %d level %d) from "
                 cep_fmt_str" \n",

@@ -46,7 +46,6 @@ struct castle_da_merge {
 
     void                         **iters;       /**< Component Tree iterators.                  */
     c_merged_iter_t              *merged_iter;
-    c2_block_t                   *last_leaf_node_c2b; /**< Last node c2b at depth 0.            */
     uint64_t                      total_nr_bytes;
     uint64_t                      nr_bytes;
 
@@ -73,6 +72,7 @@ struct castle_da_merge {
                                                               the last key added to out_tree.    */
         void                         *last_key;          /**< Last key added to out tree, depth
                                                               0. */
+        c2_block_t                   *last_leaf_node_c2b; /**< Last node c2b at depth 0.            */
         void                         *private;
         int                           checkpointable;
 #ifdef CASTLE_DEBUG
