@@ -4512,7 +4512,9 @@ static void castle_immut_tree_node_complete(struct castle_immut_tree_construct *
     debug("Releasing c2b for cep=" cep_fmt_str_nl, cep2str(node_c2b->cep));
     debug("Completing a node with %d entries at depth %d\n", node->used, depth);
 
-    tree_constr->node_complete(tree_constr, node_c2b, depth, completing);
+    if (tree_constr->node_complete)
+        tree_constr->node_complete(tree_constr, node_c2b, depth, completing);
+
 
     put_c2b(node_c2b);
 
