@@ -199,6 +199,10 @@ void castle_control_clone(c_ver_t version, int *ret, c_ver_t *clone)
         return;
     }
 
+    castle_printk(LOG_WARN,
+                  "Use of deprecated interface: cloning version=%d.\n",
+                  version);
+
     if (castle_version_deleted(version))
     {
         castle_printk(LOG_WARN, "Version is already marked for deletion. Can't clone it.\n");
@@ -542,12 +546,18 @@ void castle_control_collection_snapshot(c_collection_id_t collection,
     struct castle_attachment *ca = castle_attachment_get(collection, READ);
     c_ver_t ver, old_version;
 
+    castle_printk(LOG_WARN,
+                  "Use of deprecated interface: snapshotting collection id=%d.\n",
+                  collection);
     if(!ca)
     {
         *version = -1;
         *ret     = -ENOENT;
         return;
     }
+    castle_printk(LOG_WARN,
+                  "Use of deprecated interface: col name=%s, col id=%d, old version=%d.\n",
+                  ca->col.name, collection, ca->version);
     down_write(&ca->lock);
     old_version  = ca->version;
     *ret = castle_version_new(1,            /* snapshot */
