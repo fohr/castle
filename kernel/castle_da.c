@@ -3921,12 +3921,14 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
                                         data_size,
                                         bloom_size,
                                         lfs, lfs_callback, lfs_data);
-    if (ret && !RES_POOL_INVAL(merge->pool_id))
+    if (ret)
     {
-        castle_res_pool_destroy(merge->pool_id);
-        BUG_ON(castle_res_pool_is_alive(merge->pool_id));
-        merge->pool_id = INVAL_RES_POOL;
-
+        if (!RES_POOL_INVAL(merge->pool_id))
+        {
+            castle_res_pool_destroy(merge->pool_id);
+            BUG_ON(castle_res_pool_is_alive(merge->pool_id));
+            merge->pool_id = INVAL_RES_POOL;
+        }
         return ret;
     }
 
