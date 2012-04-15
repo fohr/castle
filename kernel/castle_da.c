@@ -212,7 +212,7 @@ static int castle_merge_thread_create(c_thread_id_t *thread_id, struct castle_do
 static int castle_merge_thread_attach(c_merge_id_t merge_id, c_thread_id_t thread_id);
 static void castle_da_lfs_all_rwcts_callback(void *data);
 static int castle_immut_tree_nodes_complete(struct castle_immut_tree_construct *tree_constr);
-static void castle_immut_tree_dealloc(struct castle_immut_tree_construct *tree_constr);
+static void castle_immut_tree_constr_dealloc(struct castle_immut_tree_construct *tree_constr);
 
 static atomic_t castle_da_merge_thread_count = ATOMIC(0);
 
@@ -5023,6 +5023,26 @@ static void castle_da_merge_partial_merge_cleanup(struct castle_da_merge *merge)
 
 }
 
+static void castle_immut_tree_constr_dealloc(struct castle_immut_tree_construct *constr)
+{
+    int i;
+
+    BUG_ON(!CASTLE_IN_TRANSACTION);
+
+    if (constr == NULL)
+        return;
+
+    /* FIXME: Talk LT, what happens if the extents freed with lve c2bs. */
+    /* Release all outstanding locks on merge c2bs. */
+    for (i=0; i<MAX_BTREE_DEPTH; i++)
+        check_and_put_c2b(constr->levels[i].node_c2b);
+
+    /* Release the last leaf node c2b. */
+    check_and_put_c2b(constr->last_leaf_node_c2b);
+
+    castle_free(constr);
+}
+
 /**
  * End-of-merge cleanup
  *
@@ -5055,13 +5075,6 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err, int 
 
     /* Remove merge from hash table. */
     castle_merges_hash_remove(merge);
-
-    /* Release all outstanding locks on merge c2bs. */
-    for (i=0; i<MAX_BTREE_DEPTH; i++)
-        check_and_put_c2b(tree_constr->levels[i].node_c2b);
-
-    /* Release the last leaf node c2b. */
-    check_and_put_c2b(tree_constr->last_leaf_node_c2b);
 
     /* Destroy all iterators. */
     if (merge->iters)
@@ -5107,7 +5120,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err, int 
         BUG();
     }
 
-    castle_immut_tree_dealloc(tree_constr);
+    castle_immut_tree_constr_dealloc(tree_constr);
 
     /* Free the merged iterator, if one was allocated. */
     castle_check_free(merge->merged_iter);
@@ -6115,7 +6128,7 @@ error_out:
     return ret;
 }
 
-static struct castle_immut_tree_construct * castle_immut_tree_alloc(
+static struct castle_immut_tree_construct * castle_immut_tree_constr_alloc(
                                         c_immut_tree_node_complete_cb_t node_complete_cb,
                                         struct castle_btree_type       *btree,
                                         struct castle_double_array     *da,
@@ -6153,15 +6166,6 @@ static struct castle_immut_tree_construct * castle_immut_tree_alloc(
 #endif
 
     return tree_constr;
-}
-
-static void castle_immut_tree_dealloc(struct castle_immut_tree_construct *tree_constr)
-{
-    if (tree_constr == NULL)
-        return;
-
-    BUG_ON(tree_constr->tree);
-    castle_free(tree_constr);
 }
 
 static struct castle_da_merge* castle_da_merge_alloc(int                            nr_trees,
@@ -6204,7 +6208,7 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
     merge->merged_iter          = NULL;
     merge->total_nr_bytes       = 0;
     merge->nr_bytes             = 0;
-    merge->out_tree_constr      = castle_immut_tree_alloc(castle_da_merge_node_complete_cb,
+    merge->out_tree_constr      = castle_immut_tree_constr_alloc(castle_da_merge_node_complete_cb,
                                                           castle_btree_type_get(da->btree_type),
                                                           da,
                                                           MERGE_CHECKPOINTABLE(merge),
@@ -6323,7 +6327,7 @@ error_out:
     castle_check_free(merge->snapshot_delete.need_parent);
     castle_check_free(merge->snapshot_delete.occupied);
     castle_version_states_free(&merge->version_states);
-    castle_immut_tree_dealloc(merge->out_tree_constr);
+    castle_immut_tree_constr_dealloc(merge->out_tree_constr);
     castle_check_free(merge->in_trees);
     castle_free(merge);
 
