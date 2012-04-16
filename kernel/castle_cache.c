@@ -4334,7 +4334,7 @@ static void castle_cache_prefetch_unpin(c_ext_pos_t cep,
         if (advise & C2_ADV_HARDPIN)
         {
             BUG_ON(!c2b); /* should always find hardpinned c2b in hash */
-            put_c2b(c2b);
+            castle_cache_block_unhardpin(c2b);
         }
 
         if (c2b)
