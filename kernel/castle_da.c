@@ -12562,12 +12562,13 @@ castle_user_timestamp_t castle_da_min_ts_cts_exclude_this_merge_get(struct castl
     return min_ts;
 }
 
-void * castle_da_in_stream_start(struct castle_double_array    *da,
-                                 uint64_t                       item_count,
-                                 c_chk_cnt_t                    internal_ext_size,
-                                 c_chk_cnt_t                    tree_ext_size,
-                                 c_chk_cnt_t                    data_ext_size,
-                                 int                            nr_rwcts)
+struct castle_immut_tree_construct *
+castle_da_in_stream_start(struct castle_double_array    *da,
+                          uint64_t                       item_count,
+                          c_chk_cnt_t                    internal_ext_size,
+                          c_chk_cnt_t                    tree_ext_size,
+                          c_chk_cnt_t                    data_ext_size,
+                          int                            nr_rwcts)
 {
     struct castle_immut_tree_construct *constr;
     struct castle_da_lfs_ct_t lfs;
