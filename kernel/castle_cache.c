@@ -901,7 +901,7 @@ void castle_cache_block_hardpin(c2_block_t *c2b)
  */
 void castle_cache_block_unhardpin(c2_block_t *c2b)
 {
-    put_c2b(c2b);
+    put_c2b_and_demote(c2b);
 }
 
 /**
@@ -3224,7 +3224,7 @@ int castle_cache_block_destroy(c2_block_t *c2b)
     /* If the c2b was busy, exit early. */
     if(ret)
     {
-        put_c2b(c2b);
+        put_c2b_and_demote(c2b);
         return ret;
     }
     /* Succeeded deleting the c2b from the hash, CLOCK (and evictlist).
@@ -3573,7 +3573,7 @@ void castle_cache_page_block_unreserve(c2_block_t *c2b)
     BUG_ON(!EXT_ID_RESERVE(c2b->cep.ext_id));
     BUG_ON(atomic_read(&c2b->count) != 1);
 
-    put_c2b(c2b);
+    put_c2b_and_demote(c2b);
 
     atomic_inc(&castle_cache_flush_seq);
     wake_up(&castle_cache_flush_wq);
@@ -3781,7 +3781,7 @@ static void c2_pref_block_chunk_put(c_ext_pos_t cep, c2_pref_window_t *window)
         debug("ext_id==%lld chunk %lld/%u\n",
               cep.ext_id, CHUNK(cep.offset), castle_extent_size_get(cep.ext_id)-1);
 
-        put_c2b(c2b);
+        put_c2b_and_demote(c2b);
     }
 }
 
@@ -4338,7 +4338,7 @@ static void castle_cache_prefetch_unpin(c_ext_pos_t cep,
         }
 
         if (c2b)
-            put_c2b(c2b);
+            put_c2b_and_demote(c2b);
         cep.offset += BLKS_PER_CHK * PAGE_SIZE;
         chunks--;
     }
