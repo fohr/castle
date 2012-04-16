@@ -4336,7 +4336,7 @@ static int castle_immut_tree_entry_add(struct castle_immut_tree_construct *tree_
 {
     c_val_tup_t preadoption_cvt, orig_cvt = cvt;
     struct castle_component_tree *out_tree = tree_constr->tree;
-    int update_stats = (is_re_add && (depth == 0));
+    int update_stats = (!is_re_add && (depth == 0));
     void *orig_key = key;
 
     if (depth==0)
