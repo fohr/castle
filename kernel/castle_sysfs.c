@@ -810,6 +810,7 @@ static struct attribute *castle_da_attrs[] = {
 };
 
 static struct kobj_type castle_da_ktype = {
+    .release        = castle_sysfs_kobj_release,
     .sysfs_ops      = &castle_sysfs_ops,
     .default_attrs  = castle_da_attrs,
 };
