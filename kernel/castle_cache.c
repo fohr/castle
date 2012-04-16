@@ -6080,6 +6080,10 @@ int castle_cache_init(void)
     atomic_set(&non_merge_misses, 0);
     atomic_set(&non_merge_hits, 0);
     c2_pref_total_window_size = 0;
+
+    /* Decide whether we have enough memory to allow hardpinning. Note that this should
+     * never be changed after initialisation, because doing so would mess up the reference
+     * count of C2Bs! */
     castle_cache_allow_hardpinning = castle_cache_size > CASTLE_CACHE_MIN_HARDPIN_SIZE << (20 - PAGE_SHIFT);
     if (!castle_cache_allow_hardpinning)
         castle_printk(LOG_INIT, "Cache size too small, hardpinning disabled.  "
