@@ -2433,11 +2433,7 @@ static c2_block_t* castle_cache_block_hash_find(c_ext_pos_t cep, uint32_t nr_pag
 }
 
 /**
- * Give a hint that a block can be reclaimed soon
- * Caller must hold a reference to the block
- * The reference is released as part of the call
- * Caller must not be in interrupt context
- *
+ * Drop reference on c2b and advise cache c2b can be reclaimed.
  */
 void put_c2b_and_demote(c2_block_t *c2b)
 {
