@@ -4335,8 +4335,9 @@ static int castle_immut_tree_entry_add(struct castle_immut_tree_construct *tree_
                                        int node_complete)
 {
     c_val_tup_t preadoption_cvt, orig_cvt = cvt;
-    void *orig_key = key;
     struct castle_component_tree *out_tree = tree_constr->tree;
+    int update_stats = (is_re_add && (depth == 0));
+    void *orig_key = key;
 
     if (depth==0)
         BUG_ON(!CVT_LEAF_VAL(cvt) && !CVT_LOCAL_COUNTER(cvt));
@@ -4358,21 +4359,24 @@ static int castle_immut_tree_entry_add(struct castle_immut_tree_construct *tree_
                 __FUNCTION__, tree_constr->tree);
     } while(true); /* we rely on the ret from _castle_immut_tree_entry_add to break out of the loop */
 
-    if (castle_da_user_timestamping_check(tree_constr->da))
+    if (update_stats)
     {
-        castle_atomic64_max(orig_cvt.user_timestamp,
-                            &out_tree->max_user_timestamp);
-        castle_atomic64_min(orig_cvt.user_timestamp,
-                            &out_tree->min_user_timestamp);
+        if (castle_da_user_timestamping_check(tree_constr->da))
+        {
+            castle_atomic64_max(orig_cvt.user_timestamp,
+                                &out_tree->max_user_timestamp);
+            castle_atomic64_min(orig_cvt.user_timestamp,
+                                &out_tree->min_user_timestamp);
+        }
+
+        if (out_tree->bloom_exists && tree_constr->is_new_key)
+            castle_bloom_add(&out_tree->bloom, tree_constr->btree, orig_key);
+
+        atomic64_inc(&out_tree->item_count);
+
+        /* Update component tree size stats. */
+        castle_tree_size_stats_update(orig_key, &orig_cvt, out_tree, 1 /* Add. */);
     }
-
-    if (out_tree->bloom_exists && tree_constr->is_new_key)
-        castle_bloom_add(&out_tree->bloom, tree_constr->btree, orig_key);
-
-    atomic64_inc(&out_tree->item_count);
-
-    /* Update component tree size stats. */
-    castle_tree_size_stats_update(orig_key, &orig_cvt, out_tree, 1 /* Add. */);
 
     /* Try to complete node. */
     if (node_complete)
