@@ -3066,54 +3066,50 @@ static int castle_cache_block_hash_clean(void)
     /* acquire the lock on the CLOCK list, since we are moving things around */
     spin_lock_irq(&castle_cache_block_clock_lock);
 
-    do
+    for (next = castle_cache_block_clock_hand->next, rounds = 0;
+         nr_victims < BATCH_FREE && rounds < CLOCK_ROUNDS;
+         castle_cache_block_clock_hand = next, next = castle_cache_block_clock_hand->next)
     {
-        for (next = castle_cache_block_clock_hand->next, rounds = 0;
-             nr_victims < BATCH_FREE && rounds < CLOCK_ROUNDS;
-             castle_cache_block_clock_hand = next, next = castle_cache_block_clock_hand->next)
+        /* skip the list's head (which isn't part of an actual entry) if necessary */
+        if (unlikely(castle_cache_block_clock_hand == &castle_cache_block_clock))
         {
-            /* skip the list's head (which isn't part of an actual entry) if necessary */
-            if (unlikely(castle_cache_block_clock_hand == &castle_cache_block_clock))
-            {
-                /* also use the head to spot how many times we've gone round the clock */
-                ++rounds;
-                continue;
-            }
+            /* also use the head to spot how many times we've gone round the clock */
+            ++rounds;
+            continue;
+        }
 
-            c2b = list_entry(castle_cache_block_clock_hand, c2_block_t, clock);
+        c2b = list_entry(castle_cache_block_clock_hand, c2_block_t, clock);
 
-            /* skip recently accessed blocks (but clear their "accessed" bit) */
-            if (c2b_accessed(c2b))
-            {
-                clear_c2b_accessed(c2b);
-                continue;
-            }
+        /* skip recently accessed blocks (but clear their "accessed" bit) */
+        if (c2b_accessed(c2b))
+        {
+            clear_c2b_accessed(c2b);
+            continue;
+        }
 
-            nr_pages += c2b->nr_pages;
+        nr_pages += c2b->nr_pages;
 
-            /* Blocks that match the following criteria are evicted:
-             *
-             * (1) Non-busy blocks (e.g. not referenced by consumers, not locked, not dirty).
-             * (2) Must be from an evictable extent (i.e. not from the super,
-             *     micro or mstore extents).  @TODO longer term solution: pools. */
-            if (!c2b_busy(c2b, 0) /* (1) */
-                && EVICTABLE_EXTENT(c2b->cep.ext_id)) /* (2) */
-            {
-                debug("Found a victim.\n");
+        /* Blocks that match the following criteria are evicted:
+         *
+         * (1) Non-busy blocks (e.g. not referenced by consumers, not locked, not dirty).
+         * (2) Must be from an evictable extent (i.e. not from the super,
+         *     micro or mstore extents).  @TODO longer term solution: pools. */
+        if (!c2b_busy(c2b, 0) /* (1) */
+            && EVICTABLE_EXTENT(c2b->cep.ext_id)) /* (2) */
+        {
+            debug("Found a victim.\n");
 
-                hlist_del(&c2b->hlist);
-                list_del(&c2b->clock);
-                hlist_add_head(&c2b->hlist, &victims);
+            hlist_del(&c2b->hlist);
+            list_del(&c2b->clock);
+            hlist_add_head(&c2b->hlist, &victims);
 
-                /* Cache list accounting and victimisation stats. */
-                BUG_ON(atomic_dec_return(&castle_cache_block_clock_size) < 0);
-                BUG_ON(atomic_dec_return(&castle_cache_clean_blks) < 0);
-                atomic_inc(&castle_cache_block_victims);
-                nr_victims++;
-            }
+            /* Cache list accounting and victimisation stats. */
+            BUG_ON(atomic_dec_return(&castle_cache_block_clock_size) < 0);
+            BUG_ON(atomic_dec_return(&castle_cache_clean_blks) < 0);
+            atomic_inc(&castle_cache_block_victims);
+            nr_victims++;
         }
     }
-    while (0);                  /* leave this for now to prevent reindenting the block */
 
     /* Hunt complete. Release locks. */
     spin_unlock_irq(&castle_cache_block_clock_lock);
