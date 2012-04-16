@@ -307,9 +307,9 @@ static struct list_head        castle_cache_extent_dirtylists[NR_EXTENT_FLUSH_PR
 static atomic_t                castle_cache_extent_dirtylist_sizes[NR_EXTENT_FLUSH_PRIOS];
                                                                     /**< Number of dirty extents  */
 
-static         DEFINE_SPINLOCK(castle_cache_block_lru_lock);
-static               LIST_HEAD(castle_cache_block_lru);             /**< List of all c2bs in LRU  */
-static atomic_t                castle_cache_block_lru_size;         /**< Number of c2bs in LRU    */
+static         DEFINE_SPINLOCK(castle_cache_block_clock_lock);
+static               LIST_HEAD(castle_cache_block_clock);           /**< List of c2bs in CLOCK    */
+static atomic_t                castle_cache_block_clock_size;       /**< Number of c2bs in CLOCK  */
 static struct list_head       *castle_cache_block_clock_hand;
 
 static atomic_t                castle_cache_dirty_blks;             /**< Dirty blocks in cache    */
@@ -2503,13 +2503,13 @@ static int castle_cache_block_hash_insert(c2_block_t *c2b)
     /* in the hash and hold a reference so drop lock */
     BUG_ON(atomic_read(&c2b->count) == 0);
     BUG_ON(c2b_dirty(c2b));
-    spin_lock_irq(&castle_cache_block_lru_lock);
+    spin_lock_irq(&castle_cache_block_clock_lock);
     write_unlock(&castle_cache_block_hash_lock);
-    list_add_tail(&c2b->lru, castle_cache_block_clock_hand);
+    list_add_tail(&c2b->clock, castle_cache_block_clock_hand);
     /* Cache list accounting. */
-    atomic_inc(&castle_cache_block_lru_size);
+    atomic_inc(&castle_cache_block_clock_size);
     atomic_inc(&castle_cache_clean_blks);
-    spin_unlock_irq(&castle_cache_block_lru_lock);
+    spin_unlock_irq(&castle_cache_block_clock_lock);
 
 out:
     return success;
@@ -3017,10 +3017,10 @@ static inline int c2b_busy(c2_block_t *c2b, int expected_count)
 }
 
 /**
- * Pick c2bs (and associated c2ps) to move from the LRU to freelist.
+ * Pick c2bs (and associated c2ps) to move from the CLOCK to freelist.
  *
  * - Return immediately if clean blocks make up < 10% of the cache.
- * - Iterate through the LRU looking for evictable blocks.
+ * - Iterate through the CLOCK looking for evictable blocks.
  *
  * @return 0    Victims found
  * @return 1    No victims found
@@ -3063,8 +3063,8 @@ static int castle_cache_block_hash_clean(void)
     /* this also means no-one can acquire new references */
     write_lock(&castle_cache_block_hash_lock);
 
-    /* acquire the lock on the LRU list, since we are moving things around */
-    spin_lock_irq(&castle_cache_block_lru_lock);
+    /* acquire the lock on the CLOCK list, since we are moving things around */
+    spin_lock_irq(&castle_cache_block_clock_lock);
 
     do
     {
@@ -3073,14 +3073,14 @@ static int castle_cache_block_hash_clean(void)
              castle_cache_block_clock_hand = next, next = castle_cache_block_clock_hand->next)
         {
             /* skip the list's head (which isn't part of an actual entry) if necessary */
-            if (unlikely(castle_cache_block_clock_hand == &castle_cache_block_lru))
+            if (unlikely(castle_cache_block_clock_hand == &castle_cache_block_clock))
             {
                 /* also use the head to spot how many times we've gone round the clock */
                 ++rounds;
                 continue;
             }
 
-            c2b = list_entry(castle_cache_block_clock_hand, c2_block_t, lru);
+            c2b = list_entry(castle_cache_block_clock_hand, c2_block_t, clock);
 
             /* skip recently accessed blocks (but clear their "accessed" bit) */
             if (c2b_accessed(c2b))
@@ -3102,11 +3102,11 @@ static int castle_cache_block_hash_clean(void)
                 debug("Found a victim.\n");
 
                 hlist_del(&c2b->hlist);
-                list_del(&c2b->lru);
+                list_del(&c2b->clock);
                 hlist_add_head(&c2b->hlist, &victims);
 
                 /* Cache list accounting and victimisation stats. */
-                BUG_ON(atomic_dec_return(&castle_cache_block_lru_size) < 0);
+                BUG_ON(atomic_dec_return(&castle_cache_block_clock_size) < 0);
                 BUG_ON(atomic_dec_return(&castle_cache_clean_blks) < 0);
                 atomic_inc(&castle_cache_block_victims);
                 nr_victims++;
@@ -3116,7 +3116,7 @@ static int castle_cache_block_hash_clean(void)
     while (0);                  /* leave this for now to prevent reindenting the block */
 
     /* Hunt complete. Release locks. */
-    spin_unlock_irq(&castle_cache_block_lru_lock);
+    spin_unlock_irq(&castle_cache_block_clock_lock);
     write_unlock(&castle_cache_block_hash_lock);
 
     /* We couldn't find any victims */
@@ -3152,7 +3152,7 @@ USED static int castle_cache_block_evictlist_process(void)
 
     spin_lock_irq(&castle_cache_block_evictlist_lock);
     write_lock(&castle_cache_block_hash_lock);
-    spin_lock(&castle_cache_block_lru_lock);
+    spin_lock(&castle_cache_block_clock_lock);
 
     list_for_each_safe(lh, th, &castle_cache_block_evictlist)
     {
@@ -3167,7 +3167,7 @@ USED static int castle_cache_block_evictlist_process(void)
 
         /* Return c2b to freelist, update budgets. */
         hlist_del(&c2b->hlist);
-        list_del(&c2b->lru);
+        list_del(&c2b->clock);
         list_move_tail(&c2b->evict, &victims);
         clear_c2b_evictlist(c2b);
         clear_c2b_merge_out(c2b);
@@ -3178,7 +3178,7 @@ USED static int castle_cache_block_evictlist_process(void)
             break;
     }
 
-    spin_unlock(&castle_cache_block_lru_lock);
+    spin_unlock(&castle_cache_block_clock_lock);
     write_unlock(&castle_cache_block_hash_lock);
     spin_unlock_irq(&castle_cache_block_evictlist_lock);
 
@@ -3217,16 +3217,16 @@ int castle_cache_block_destroy(c2_block_t *c2b)
     ret = c2b_busy(c2b, 1) ? -EINVAL : 0;
     if(!ret)
     {
-        spin_lock_irq(&castle_cache_block_lru_lock);
+        spin_lock_irq(&castle_cache_block_clock_lock);
         hlist_del(&c2b->hlist);
-        if (unlikely(castle_cache_block_clock_hand == &c2b->lru))
+        if (unlikely(castle_cache_block_clock_hand == &c2b->clock))
             castle_cache_block_clock_hand = castle_cache_block_clock_hand->next;
-        list_del(&c2b->lru);
+        list_del(&c2b->clock);
         /* Update bookkeeping info. */
-        BUG_ON(atomic_dec_return(&castle_cache_block_lru_size) < 0);
+        BUG_ON(atomic_dec_return(&castle_cache_block_clock_size) < 0);
         BUG_ON(atomic_dec_return(&castle_cache_clean_blks) < 0);
         atomic_inc(&castle_cache_block_victims);
-        spin_unlock_irq(&castle_cache_block_lru_lock);
+        spin_unlock_irq(&castle_cache_block_clock_lock);
     }
     write_unlock(&castle_cache_block_hash_lock);
     /* If the c2b was busy, exit early. */
@@ -3235,7 +3235,7 @@ int castle_cache_block_destroy(c2_block_t *c2b)
         put_c2b(c2b);
         return ret;
     }
-    /* Succeeded deleting the c2b from the hash, LRU (and evictlist).
+    /* Succeeded deleting the c2b from the hash, CLOCK (and evictlist).
      * Decrement the ref count. */
     put_c2b(c2b);
     BUG_ON(atomic_read(&c2b->count) != 0);
@@ -5384,10 +5384,10 @@ static void castle_cache_hashes_fini(void)
 #endif
             }
             BUG_ON(c2b_dirty(c2b));
-            list_del(&c2b->lru);
+            list_del(&c2b->clock);
 
             /* Cache list accounting. */
-            atomic_dec(&castle_cache_block_lru_size);
+            atomic_dec(&castle_cache_block_clock_size);
             atomic_dec(&castle_cache_clean_blks);
 
             castle_cache_block_free(c2b);
@@ -5395,7 +5395,7 @@ static void castle_cache_hashes_fini(void)
     }
 
     /* Ensure cache list accounting is in order. */
-    BUG_ON(atomic_read(&castle_cache_block_lru_size) != 0);
+    BUG_ON(atomic_read(&castle_cache_block_clock_size) != 0);
     BUG_ON(atomic_read(&castle_cache_block_evictlist_size) != 0);
     BUG_ON(atomic_read(&castle_cache_dirty_blks) != 0);
     BUG_ON(atomic_read(&castle_cache_clean_blks) != 0);
@@ -5436,7 +5436,7 @@ static int castle_cache_c2p_init(c2_page_t *c2p)
         /* Add page to the c2p */
         c2p->pages[j] = page;
 #ifdef CASTLE_DEBUG
-        /* For debugging, save the c2p pointer in used lru list. */
+        /* For debugging, save the c2p pointer in used CLOCK list. */
         page->lru.next = (void *)c2p;
 #endif
     }
@@ -6066,9 +6066,9 @@ int castle_cache_init(void)
         atomic_set(&castle_cache_extent_dirtylist_sizes[j], 0);
     }
 
-    castle_cache_block_clock_hand = &castle_cache_block_lru;
+    castle_cache_block_clock_hand = &castle_cache_block_clock;
 
-    atomic_set(&castle_cache_block_lru_size, 0);
+    atomic_set(&castle_cache_block_clock_size, 0);
     atomic_set(&castle_cache_block_evictlist_size, 0);
 
     atomic_set(&castle_cache_dirty_blks, 0);

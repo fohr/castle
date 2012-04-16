@@ -16,7 +16,7 @@ typedef struct castle_cache_block {
     void                      *buffer;          /**< Linear mapping of the pages                  */
 
     struct hlist_node          hlist;           /**< Entry in castle_cache_block_hash[]           */
-    struct list_head           lru;             /**< Position on castle_cache_block_lru.          */
+    struct list_head           clock;           /**< Position on castle_cache_block_clock.        */
     union {
         struct list_head       free;            /**< Position on castle_cache_block_freelist.     */
         struct list_head       reserve;         /**< Position on castle_cache_block_reservelist.  */
