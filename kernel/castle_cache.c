@@ -311,14 +311,11 @@ static atomic_t                castle_cache_block_lru_size;         /**< Number 
 
 static atomic_t                castle_cache_dirty_blks;             /**< Dirty blocks in cache    */
 static atomic_t                castle_cache_clean_blks;             /**< Clean blocks in cache    */
-static atomic_t                castle_cache_clean_softpin_blks;     /**< Clean softpin blocks     */
 
 static atomic_t                castle_cache_dirty_pgs;              /**< Dirty pages in cache     */
 static atomic_t                castle_cache_clean_pgs;              /**< Clean pages in cache     */
-static atomic_t                castle_cache_clean_softpin_pgs;      /**< Clean softpin pages      */
 
 static atomic_t                castle_cache_block_victims;          /**< Clean blocks evicted     */
-static atomic_t                castle_cache_softpin_block_victims;  /**< Clean softpins evicted   */
 
 /**
  * Castle cache partition states.
@@ -450,15 +447,9 @@ void castle_cache_stats_print(int verbose)
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_RESERVE_BLKS_ID,
                        atomic_read(&castle_cache_block_reservelist_size), 0);
-    castle_trace_cache(TRACE_VALUE,
-                       TRACE_CACHE_SOFTPIN_BLKS_ID,
-                       atomic_read(&castle_cache_clean_softpin_blks), 0);
     count1 = atomic_read(&castle_cache_block_victims);
     atomic_sub(count1, &castle_cache_block_victims);
     castle_trace_cache(TRACE_VALUE, TRACE_CACHE_BLOCK_VICTIMS_ID, count1, 0);
-    count1 = atomic_read(&castle_cache_softpin_block_victims);
-    atomic_sub(count1, &castle_cache_softpin_block_victims);
-    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_SOFTPIN_VICTIMS_ID, count1, 0);
     castle_trace_cache(TRACE_VALUE, TRACE_CACHE_READS_ID, reads, 0);
     castle_trace_cache(TRACE_VALUE, TRACE_CACHE_WRITES_ID, writes, 0);
 
@@ -911,107 +902,6 @@ void castle_cache_block_unhardpin(c2_block_t *c2b)
 }
 
 /**
- * Increment c2b softpin count and do cache list accounting.
- *
- * - Atomically increment softpin count
- * - Do clean softpin block accounting, if necessary
- *
- * @also c2_pref_window_submit() (our primary caller)
- */
-void castle_cache_block_softpin(c2_block_t *c2b)
-{
-    unsigned long old, new;
-    struct c2b_state *p_old, *p_new;
-    p_old = (struct c2b_state *)&old;
-    p_new = (struct c2b_state *)&new;
-
-    do {
-        *p_old = *p_new = c2b->state;
-        p_new->softpin_cnt++;
-    } while (cmpxchg((unsigned long*)&c2b->state, old, new) != old);
-
-    /* Increment clean block softpin count if it wasn't already softpinnined
-     * and if it is a clean block.  We use a stored state so we don't race! */
-    if ((p_old->softpin_cnt == 0) && !test_bit(C2B_dirty, p_old))
-        atomic_inc(&castle_cache_clean_softpin_blks);
-}
-
-/**
- * Decrement or clear c2b softpin count and do cache list accounting.
- *
- * @param clear Set clears count, otherwise decrements
- *
- * @return  Softpin count following operation
- */
-static int _unsoftpin_c2b(c2_block_t *c2b, int clear)
-{
-    if (c2b->state.softpin_cnt)
-    {
-        /* The block is currently softpinned but this could change while
-         * we're attempting to either clear or decrement the count.  If
-         * this happens we must detect it and return immediately, without
-         * making any adjustments to the clean block softpin count. */
-
-        unsigned long old, new;
-        struct c2b_state *p_old, *p_new;
-        p_old = (struct c2b_state *)&old;
-        p_new = (struct c2b_state *)&new;
-
-        do {
-            *p_old = *p_new = c2b->state;
-            if (p_new->softpin_cnt && clear)    /* clear the count */
-                p_new->softpin_cnt = 0;
-            else if (p_new->softpin_cnt)        /* decrement count */
-                p_new->softpin_cnt--;
-            else                                /* zeroed - return */
-                return 0;
-        } while (cmpxchg((unsigned long*)&c2b->state, old, new) != old);
-
-        /* Decrement clean block softpin count if we decremented the last
-         * softpin hold on a clean block. */
-        if ((p_new->softpin_cnt == 0) && !test_bit(C2B_dirty, p_old))
-            atomic_dec(&castle_cache_clean_softpin_blks);
-        else
-            return p_new->softpin_cnt;
-    }
-
-    return 0;
-}
-
-/**
- * Decrement c2b softpin count and do cache list accounting.
- *
- * - Decrement softpin count
- * - Does cache list accounting if necessary
- */
-int castle_cache_block_unsoftpin(c2_block_t *c2b)
-{
-    return _unsoftpin_c2b(c2b, 0);
-}
-
-/**
- * Unsoftpin a c2b from the cache and do cache list accounting.
- *
- * - Zeroes the c2b softpin count
- * - Does cache list accounting (necessary if block is clean)
- */
-static void clearsoftpin_c2b(c2_block_t *c2b)
-{
-    _unsoftpin_c2b(c2b, 1);
-}
-
-/**
- * Is c2b softpinned.
- *
- * @return >0   c2b is softpinned
- * @return  0   c2b is not softpinned
- */
-static inline int c2b_softpin(c2_block_t *c2b)
-{
-    return c2b->state.softpin_cnt;
-}
-
-/**
  * Remove a c2b from its per-extent dirtytree.
  *
  * c2b holds a reference to the dirtytree.
@@ -1201,8 +1091,6 @@ void dirty_c2b(c2_block_t *c2b)
     {
         /* Do cachelist accounting. */
         BUG_ON(atomic_dec_return(&castle_cache_clean_blks) < 0);
-        if (c2b_softpin(c2b))
-            atomic_dec(&castle_cache_clean_softpin_blks);
         if (c2b_evictlist(c2b))
         {
             unsigned long flags;
@@ -1261,8 +1149,6 @@ void clean_c2b(c2_block_t *c2b)
     /* Do cache list accounting. */
     BUG_ON(atomic_read(&c2b->count) == 0);
     atomic_inc(&castle_cache_clean_blks);
-    if (c2b_softpin(c2b))
-        atomic_inc(&castle_cache_clean_softpin_blks);
     if (c2b_merge_out(c2b))
     {
         unsigned long flags;
@@ -2615,7 +2501,6 @@ static int castle_cache_block_hash_insert(c2_block_t *c2b)
     /* in the hash and hold a reference so drop lock */
     BUG_ON(atomic_read(&c2b->count) == 0);
     BUG_ON(c2b_dirty(c2b));
-    BUG_ON(c2b_softpin(c2b));
     spin_lock_irq(&castle_cache_block_lru_lock);
     write_unlock(&castle_cache_block_hash_lock);
     list_add_tail(&c2b->lru, &castle_cache_block_lru);
@@ -2970,13 +2855,11 @@ static void castle_cache_block_init(c2_block_t *c2b,
     /* On debug builds, unpoison the fields. */
     atomic_set(&c2b->count, 0);
     atomic_set(&c2b->lock_cnt, 0);
-    c2b->state.softpin_cnt = 0;
 #else
     /* On non-debug builds, those fields should all be zero. */
     BUG_ON(c2b->c2ps != NULL);
     BUG_ON(atomic_read(&c2b->count) != 0);
     BUG_ON(atomic_read(&c2b->lock_cnt) != 0);
-    BUG_ON(c2b->state.softpin_cnt != 0);
 #endif
     /* Init the page array (note: this may substitute some c2ps,
        if they already exist in the hash. */
@@ -3031,9 +2914,7 @@ static void castle_cache_block_init(c2_block_t *c2b,
  * - Drop reference on each c2p
  * - Place on the freelist
  *
- * NOTE: Cache list and softpin accounting must have already been done prior to
- * calling this function.  It is therefore safe to free the c2b with a non-zero
- * softpin_cnt.
+ * NOTE: Cache list accounting must have already been done prior to calling this function.
  */
 static void castle_cache_block_free(c2_block_t *c2b)
 {
@@ -3137,10 +3018,7 @@ static inline int c2b_busy(c2_block_t *c2b, int expected_count)
  * Pick c2bs (and associated c2ps) to move from the LRU to freelist.
  *
  * - Return immediately if clean blocks make up < 10% of the cache.
- * - Evict softpin blocks if softpin blocks make up 1/2 of clean blocks.
  * - Iterate through the LRU looking for evictable blocks.
- * - If we weren't able to evict BATCH_FREE blocks then victimise softpin blocks
- *   and try again.
  *
  * @return 0    Victims found
  * @return 1    No victims found
@@ -3157,11 +3035,11 @@ static int castle_cache_block_hash_clean(void)
     HLIST_HEAD(victims);
     LIST_HEAD(unevictable);
     c2_block_t *c2b;
-    int clean, dirty, softpin;
-    int nr_victims, nr_pages, victimise_softpin;
+    int clean, dirty;
+    int nr_victims, nr_pages;
 
     /* Initialise. */
-    nr_victims = nr_pages = victimise_softpin = 0;
+    nr_victims = nr_pages = 0;
 
     /* Return immediately if the c2p cleanlist is < 10% of the cache.
      *
@@ -3177,16 +3055,6 @@ static int castle_cache_block_hash_clean(void)
         if (clean < (clean + dirty) / 10)
             return 2;
     }
-
-    /* Victimise softpins if they are more than half of all clean blocks. */
-    clean   = atomic_read(&castle_cache_clean_blks);
-    softpin = atomic_read(&castle_cache_clean_softpin_blks);
-    /* Sanitise the softpin count as it is possible the counter could go
-     * negative due to a transitory race dirtying a 'being-softpinned' c2b. */
-    if (softpin < 0)
-        softpin = 0;
-    if (softpin > clean / 2)
-        victimise_softpin = 1;
 
     /* Hunt for victim c2bs. Hold hash lock for duration. */
     /* this means we can delete victim blocks from the hash */
@@ -3206,19 +3074,12 @@ static int castle_cache_block_hash_clean(void)
             /* Blocks that match the following criteria are evicted:
              *
              * (1) Non-busy blocks (e.g. not referenced by consumers, not locked, not dirty).
-             * (2) Softpin blocks are prioritised (see comment above).
-             * (3) Are marked as blocks that sit at the beginning of a prefetch window for an extent
-             *     that no longer exists.  This allows us to correctly evict softpinned blocks from
-             *     extents that have now been removed - by targeting the start of window block we
-             *     unpin and demote those other blocks from the window.
-             * (4) Must be from an evictable extent (i.e. not from the super,
+             * (2) Must be from an evictable extent (i.e. not from the super,
              *     micro or mstore extents).  @TODO longer term solution: pools. */
             if (!c2b_busy(c2b, 0) /* (1) */
-                    && (victimise_softpin || !c2b_softpin(c2b) /* (2) */
-                        || (c2b_windowstart(c2b) && !castle_extent_exists(c2b->cep.ext_id))) /*(3)*/
-                    && EVICTABLE_EXTENT(c2b->cep.ext_id)) /* (4) */
+                && EVICTABLE_EXTENT(c2b->cep.ext_id)) /* (2) */
             {
-                debug("Found a %svictim.\n", c2b_softpin(c2b) ? "softpin " : "");
+                debug("Found a victim.\n");
 
                 hlist_del(&c2b->hlist);
                 list_del(&c2b->lru);
@@ -3227,13 +3088,7 @@ static int castle_cache_block_hash_clean(void)
                 /* Cache list accounting and victimisation stats. */
                 BUG_ON(atomic_dec_return(&castle_cache_block_lru_size) < 0);
                 BUG_ON(atomic_dec_return(&castle_cache_clean_blks) < 0);
-                if (c2b_softpin(c2b))
-                {
-                    clearsoftpin_c2b(c2b);
-                    atomic_inc(&castle_cache_softpin_block_victims);
-                }
-                else
-                    atomic_inc(&castle_cache_block_victims);
+                atomic_inc(&castle_cache_block_victims);
                 nr_victims++;
             }
             else
@@ -3252,9 +3107,7 @@ static int castle_cache_block_hash_clean(void)
         /* Put all the unevictable pages back on the LRU, but at the tail of the list. */
         list_splice_init(&unevictable, castle_cache_block_lru.prev);
     }
-    /* If we weren't able to clean BATCH_FREE c2bs to the freelist then begin
-     * victimising softpin c2bs if we have not already done so. */
-    while (!victimise_softpin && (victimise_softpin = (nr_victims < BATCH_FREE)));
+    while (0);                  /* leave this for now to prevent reindenting the block */
 
     /* Hunt complete. Release locks. */
     spin_unlock_irq(&castle_cache_block_lru_lock);
@@ -3364,13 +3217,7 @@ int castle_cache_block_destroy(c2_block_t *c2b)
         /* Update bookkeeping info. */
         BUG_ON(atomic_dec_return(&castle_cache_block_lru_size) < 0);
         BUG_ON(atomic_dec_return(&castle_cache_clean_blks) < 0);
-        if (c2b_softpin(c2b))
-        {
-            clearsoftpin_c2b(c2b);
-            atomic_inc(&castle_cache_softpin_block_victims);
-        }
-        else
-            atomic_inc(&castle_cache_block_victims);
+        atomic_inc(&castle_cache_block_victims);
         spin_unlock_irq(&castle_cache_block_lru_lock);
     }
     write_unlock(&castle_cache_block_hash_lock);
@@ -3762,12 +3609,6 @@ void castle_cache_page_block_unreserve(c2_block_t *c2b)
  *    Consumers call castle_cache_advise().  These consumer calls could
  *    potentially race.
  *
- * Softpinning:
- *    If requested we attempt to keep prefetched c2bs within the cache by
- *    maintaining a softpin count (c2b->softpin_cnt).  Blocks with positive
- *    softpin counts are prioritised in freelist grows/cleanlist eviction
- *    (castle_cache_block_hash_clean()).
- *
  * Deprecation of windows:
  *    When inserting a window into the RB tree, the strat_c2b is marked with
  *    'windowstart' bit. That bit provides a link between a c2b in the cache
@@ -3781,8 +3622,6 @@ void castle_cache_page_block_unreserve(c2_block_t *c2b)
  *
  * Prefetch algorithm and variables:
  *    Algorithm and variables: see comments in c2_pref_window_advance().
- *    When a window is moved forward chunks that fall off the front of
- *    the window are deprecated in the LRU cache if their softpin count reaches 0.
  *
  * General rules / observations:
  *
@@ -3819,7 +3658,6 @@ void castle_cache_page_block_unreserve(c2_block_t *c2b)
  *          // issues chunk-aligned I/O
  */
 #define PREF_WINDOW_ADAPTIVE        (0x1)           /**< Whether this is an adaptive window.      */
-#define PREF_WINDOW_SOFTPIN         (0x2)           /**< Keep c2bs in cache if possible.          */
 #define PREF_PAGES                  4 *BLKS_PER_CHK /**< #pages to non-adaptive prefetch.         */
 #define PREF_ADAP_INITIAL           2 *BLKS_PER_CHK /**< Initial #pages to adaptive prefetch.     */
 #define PREF_ADAP_MAX               16*BLKS_PER_CHK /**< Maximum #pages to adaptive prefetch.     */
@@ -3860,9 +3698,8 @@ static USED char* c2_pref_window_to_str(c2_pref_window_t *window)
     cep.offset = window->start_off;
 
     snprintf(win_str, PREF_WINDOW_STR_LEN,
-        "%s%s pref win: {cep="cep_fmt_str" start_off=0x%llx (%lld) "
+        "%s pref win: {cep="cep_fmt_str" start_off=0x%llx (%lld) "
         "end_off=0x%llx (%lld) pref_pages=%d (%lld) adv_thresh=%u%% st=0x%.2x",
-        window->state & PREF_WINDOW_SOFTPIN ? "S": "",
         window->state & PREF_WINDOW_ADAPTIVE ? "A" : "",
         cep2str(cep),
         window->start_off,
@@ -3883,7 +3720,6 @@ static USED char* c2_pref_window_to_str(c2_pref_window_t *window)
  *
  * - Get c2b
  * - Mark as prefetch
- * - Mark as softpin if window is softpin
  *
  * @return c2b
  */
@@ -3898,8 +3734,6 @@ static c2_block_t* c2_pref_block_chunk_get(c_ext_pos_t cep,
         /* Set c2b status bits. */
         if (!test_set_c2b_prefetch(c2b))
             atomic_inc(&c2_pref_active_window_size);
-        if (window->state & PREF_WINDOW_SOFTPIN)
-            castle_cache_block_softpin(c2b);
     }
 
 #ifdef CASTLE_PERF_DEBUG
@@ -3921,9 +3755,8 @@ static c2_block_t* c2_pref_block_chunk_get(c_ext_pos_t cep,
     }
 #endif
 
-    debug("ext_id==%lld chunk %lld/%u softpin_cnt=%d\n",
-            cep.ext_id, CHUNK(cep.offset), castle_extent_size_get(cep.ext_id)-1,
-            atomic_read(&c2b->softpin_cnt));
+    debug("ext_id==%lld chunk %lld/%u\n",
+          cep.ext_id, CHUNK(cep.offset), castle_extent_size_get(cep.ext_id)-1);
 
     return c2b;
 }
@@ -3934,13 +3767,10 @@ static c2_block_t* c2_pref_block_chunk_get(c_ext_pos_t cep,
  * - Lookup c2b, if one exists:
  * - Clear prefetch bit
  *   - Maintain prefetch_chunks stats if the bit was previously set
- * - Handle softpin blocks
- * - Position for eviction in LRU if prefetch & softpin counts reach 0
  */
 static void c2_pref_block_chunk_put(c_ext_pos_t cep, c2_pref_window_t *window)
 {
     c2_block_t *c2b;
-    int demote = 0;
 
     if ((c2b = castle_cache_block_hash_get(cep, BLKS_PER_CHK)))
     {
@@ -3950,17 +3780,11 @@ static void c2_pref_block_chunk_put(c_ext_pos_t cep, c2_pref_window_t *window)
             atomic_dec(&c2_pref_active_window_size);
             set_c2b_prefetched(c2b);
         }
-        if (window->state & PREF_WINDOW_SOFTPIN)
-            demote = demote || castle_cache_block_unsoftpin(c2b);
 
-        debug("ext_id==%lld chunk %lld/%u softpin_cnt=%d\n",
-                cep.ext_id, CHUNK(cep.offset), castle_extent_size_get(cep.ext_id)-1,
-                atomic_read(&c2b->softpin_cnt));
+        debug("ext_id==%lld chunk %lld/%u\n",
+              cep.ext_id, CHUNK(cep.offset), castle_extent_size_get(cep.ext_id)-1);
 
-        if (demote)
-            put_c2b_and_demote(c2b);
-        else
-            put_c2b(c2b);
+        put_c2b(c2b);
     }
 }
 
@@ -4305,8 +4129,6 @@ static c2_pref_window_t * c2_pref_window_alloc(c2_pref_window_t *window,
         window->state      |= PREF_WINDOW_ADAPTIVE;
         window->pref_pages  = PREF_ADAP_INITIAL;
     }
-    if (advise & C2_ADV_SOFTPIN)
-        window->state  |= PREF_WINDOW_SOFTPIN;
 
 //    debug("Allocated a new window.\n");
 
@@ -4440,7 +4262,7 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b)
 }
 
 /**
- * Hard/soft pin 'chunks' chunk-sized c2bs from cep.
+ * Hardpin 'chunks' chunk-sized c2bs from cep.
  *
  * @param cep       Extent and offset to pin
  * @param advise    Advice for the cache
@@ -4472,12 +4294,7 @@ void castle_cache_prefetch_pin(c_ext_pos_t cep,
             BUG_ON(castle_cache_block_read(c2b, c2_pref_io_end, NULL));
         }
 
-        if (advise & C2_ADV_SOFTPIN)
-        {
-            castle_cache_block_softpin(c2b);
-            put_c2b(c2b);
-        }
-        else if (!(advise & C2_ADV_HARDPIN))
+        if (!(advise & C2_ADV_HARDPIN))
         {
             put_c2b(c2b);
         }
@@ -4490,15 +4307,11 @@ void castle_cache_prefetch_pin(c_ext_pos_t cep,
     {
         debug("Hardpinning for ext_id %llu\n", cep.ext_id);
     }
-    else if (advise & C2_ADV_SOFTPIN)
-    {
-        debug("Softpinning for ext_id %llu\n", cep.ext_id);
-    }
 #endif
 }
 
 /**
- * Un-hard/soft pin 'chunks' chunk-sized c2bs from cep allowing them to be evicted.
+ * Un-hardpin 'chunks' chunk-sized c2bs from cep allowing them to be evicted.
  *
  * @param cep       Extent and offset to unpin from
  * @param advise    Advice for the cache
@@ -4521,12 +4334,7 @@ static void castle_cache_prefetch_unpin(c_ext_pos_t cep,
     {
         c2b = castle_cache_block_hash_get(cep, BLKS_PER_CHK);
 
-        if (advise & C2_ADV_SOFTPIN)
-        {
-            if (c2b)
-                clearsoftpin_c2b(c2b);
-        }
-        else //if (advise & C2_ADV_HARDPIN)
+        if (advise & C2_ADV_HARDPIN)
         {
             BUG_ON(!c2b); /* should always find hardpinned c2b in hash */
             put_c2b(c2b);
@@ -4543,10 +4351,6 @@ static void castle_cache_prefetch_unpin(c_ext_pos_t cep,
     {
         debug("Unhardpinning for ext_id %llu\n", cep.ext_id);
     }
-    else if (advise & C2_ADV_SOFTPIN)
-    {
-        debug("Unsoftpinning for ext_id %llu\n", cep.ext_id);
-    }
 #endif
 }
 
@@ -4558,7 +4362,6 @@ static void castle_cache_prefetch_unpin(c_ext_pos_t cep,
  * @param pages     Number of pages to advance from cep.
  *
  * - Get n chunk-sized c2bs from cep
- * - Mark them as prefetch and softpin if necessary (@also c2_pref_block_chunk_get())
  * - Dispatch c2bs if they require I/O
  *
  * @also c2_pref_io_end()
@@ -4733,9 +4536,8 @@ static int castle_cache_prefetch_advise(c_ext_pos_t cep,
     BUG_ON(c2_pref_window_compare(window, cep));
 
     /* Update window advice to match prefetch advice.  Do this once we know we
-     * aren't racing so we don't pollute other bystanding windows. */
-    if (advise & C2_ADV_SOFTPIN)
-        window->state |= PREF_WINDOW_SOFTPIN;
+     * aren't racing so we don't pollute other bystanding windows.  Currently a no-op (no
+     * relevant advice to update). */
 
     /* Advance the window if necessary. */
     return c2_pref_window_advance(window, cep, advise, part_id);
@@ -4756,12 +4558,9 @@ static int castle_cache_prefetch_advise(c_ext_pos_t cep,
  */
 int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, c2_partition_id_t part_id, int chunks)
 {
-    /* Downgrade to softpin if hardpinning is disabled. */
-    if (!castle_cache_allow_hardpinning && (advise & C2_ADV_HARDPIN))
-    {
+    /* Only hardpin if it is enabled. */
+    if (!castle_cache_allow_hardpinning)
         advise &= ~C2_ADV_HARDPIN;
-        advise |=  C2_ADV_SOFTPIN;
-    }
 
     /* Prefetching is handled via a _prefetch_advise() call. */
     if ((advise & C2_ADV_PREFETCH) && !(advise & C2_ADV_EXTENT))
@@ -4791,20 +4590,15 @@ int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, c2_partition_id_t p
  * - If operating on an extent (advise & C2_ADV_EXTENT) manipulate cep and
  *   chunks to span the whole extent.
  *
- * @TODO needs to handle multiple requests at once (e.g. C2_ADV_HARDPIN & C2_ADV_SOFTPIN).
- *
  * @also castle_cache_prefetch_unpin()
  */
 int castle_cache_advise_clear(c_ext_pos_t cep,
                               c2_advise_t advise,
                               int chunks)
 {
-    /* Downgrade to softpin if hardpinning is disabled. */
-    if (!castle_cache_allow_hardpinning && (advise & C2_ADV_HARDPIN))
-    {
+    /* Only hardpin if it is enabled. */
+    if (!castle_cache_allow_hardpinning)
         advise &= ~C2_ADV_HARDPIN;
-        advise |=  C2_ADV_SOFTPIN;
-    }
 
     /* There's no such thing as 'unprefetching'. */
     if (advise & C2_ADV_PREFETCH && !(advise & C2_ADV_EXTENT))
@@ -5590,8 +5384,6 @@ static void castle_cache_hashes_fini(void)
             /* Cache list accounting. */
             atomic_dec(&castle_cache_block_lru_size);
             atomic_dec(&castle_cache_clean_blks);
-            if (c2b_softpin(c2b))
-                atomic_dec(&castle_cache_clean_softpin_blks);
 
             castle_cache_block_free(c2b);
         }
@@ -5602,7 +5394,6 @@ static void castle_cache_hashes_fini(void)
     BUG_ON(atomic_read(&castle_cache_block_evictlist_size) != 0);
     BUG_ON(atomic_read(&castle_cache_dirty_blks) != 0);
     BUG_ON(atomic_read(&castle_cache_clean_blks) != 0);
-    BUG_ON(atomic_read(&castle_cache_clean_softpin_blks) != 0);
     BUG_ON(atomic_read(&c2_pref_active_window_size) != 0);
     BUG_ON(c2_pref_total_window_size != 0);
     BUG_ON(!RB_EMPTY_ROOT(&c2p_rb_root));
@@ -6275,14 +6066,11 @@ int castle_cache_init(void)
 
     atomic_set(&castle_cache_dirty_blks, 0);
     atomic_set(&castle_cache_clean_blks, 0);
-    atomic_set(&castle_cache_clean_softpin_blks, 0);
 
     atomic_set(&castle_cache_dirty_pgs, 0);
     atomic_set(&castle_cache_clean_pgs, 0);
-    atomic_set(&castle_cache_clean_softpin_pgs, 0);
 
     atomic_set(&castle_cache_block_victims, 0);
-    atomic_set(&castle_cache_softpin_block_victims, 0);
 
     atomic_set(&castle_cache_flush_seq, 0);
     atomic_set(&c2_pref_active_window_size, 0);

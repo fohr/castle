@@ -25,9 +25,9 @@ typedef struct castle_cache_block {
     struct rb_node             rb_dirtytree;    /**< Per-extent dirtytree RB-node.                */
     c_ext_dirtytree_t         *dirtytree;       /**< Dirtytree c2b is a member of.                */
 
+    /* Keeping this as a bitfield since some bits will be needed for CLOCK. */
     struct c2b_state {
-        unsigned long          bits:56;         /**< State bitfield                               */
-        unsigned long          softpin_cnt:8;   /**< Softpin count                                */
+        unsigned long          bits:64;         /**< State bitfield                               */
     } state;
     atomic_t                   count;           /**< Count of active consumers                    */
     atomic_t                   lock_cnt;
@@ -201,7 +201,6 @@ enum c2_advise_bits {
     C2_ADV_extent,  /** @FIXME needs to be folded into C2_ADV_cep */
     C2_ADV_prefetch,
     C2_ADV_hardpin,
-    C2_ADV_softpin,
     C2_ADV_static,
     C2_ADV_adaptive,
 };
@@ -212,7 +211,6 @@ typedef uint32_t c2_advise_t;
 
 #define C2_ADV_PREFETCH     ((c2_advise_t) (1<<C2_ADV_prefetch))
 #define C2_ADV_HARDPIN      ((c2_advise_t) (1<<C2_ADV_hardpin))
-#define C2_ADV_SOFTPIN      ((c2_advise_t) (1<<C2_ADV_softpin))
 
 #define C2_ADV_STATIC       ((c2_advise_t) (1<<C2_ADV_static))
 #define C2_ADV_ADAPTIVE     ((c2_advise_t) (1<<C2_ADV_adaptive))
@@ -254,8 +252,6 @@ c2_block_t* castle_cache_block_get    (c_ext_pos_t cep,
                                        c2_partition_id_t partition);
 void        castle_cache_block_hardpin  (c2_block_t *c2b);
 void        castle_cache_block_unhardpin(c2_block_t *c2b);
-void        castle_cache_block_softpin  (c2_block_t *c2b);
-int         castle_cache_block_unsoftpin(c2_block_t *c2b);
 void        castle_cache_page_block_unreserve(c2_block_t *c2b);
 int         castle_cache_extent_flush_schedule (c_ext_id_t ext_id, uint64_t start, uint64_t size);
 

@@ -4059,7 +4059,7 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
 
         s_c2b = castle_cache_block_get(old_cep, blocks, MERGE_IN);
         c_c2b = castle_cache_block_get(new_cep, blocks, MERGE_OUT);
-        castle_cache_advise(s_c2b->cep, C2_ADV_PREFETCH|C2_ADV_SOFTPIN, MERGE_IN, 0);
+        castle_cache_advise(s_c2b->cep, C2_ADV_PREFETCH, MERGE_IN, 0);
         BUG_ON(castle_cache_block_sync_read(s_c2b));
         read_lock_c2b(s_c2b);
         write_lock_c2b(c_c2b);

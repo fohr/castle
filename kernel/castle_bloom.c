@@ -51,8 +51,8 @@ MODULE_PARM_DESC(castle_bloom_debug, "Verify bloom misses (for point gets)");
 #define BLOOM_INDEX_NODE_SIZE         (uint32_t)(BLOOM_INDEX_NODE_SIZE_PAGES * PAGE_SIZE)
 #define BLOOM_INDEX_NODE_SIZE_PAGES   256
 
-/* the maximum number of chunks in a bloom filter for which we softpin */
-#define BLOOM_MAX_SOFTPIN_CHUNKS      (castle_cache_size_get() / (5 * BLOOM_CHUNK_SIZE_PAGES))
+/* the maximum number of chunks in a bloom filter that we prefetch when unmarshalling */
+#define BLOOM_MAX_PREFETCH_CHUNKS     (castle_cache_size_get() / (5 * BLOOM_CHUNK_SIZE_PAGES))
 
 uint32_t opt_hashes_per_bit[] =
 { 0, 1, 2, 3, 3, 4, 5, 5, 6, 7, 7, 8, 9, 10, 10, 11, 12 };
@@ -240,7 +240,6 @@ static void castle_bloom_next_btree_node(castle_bloom_t *bf)
                                              BLOOM_INDEX_NODE_SIZE_PAGES,
                                              MERGE_OUT);
     write_lock_c2b(bf_bp->node_c2b);
-    castle_cache_block_softpin(bf_bp->node_c2b);
     update_c2b(bf_bp->node_c2b);
     /* Init the node properly */
     bf_bp->cur_node = c2b_bnode(bf_bp->node_c2b);
@@ -318,8 +317,6 @@ static void castle_bloom_next_chunk(castle_bloom_t *bf)
                                                     * bf->block_size_pages,
                                               MERGE_OUT);
     write_lock_c2b(bf_bp->chunk_c2b);
-    if (bf->num_chunks <= BLOOM_MAX_SOFTPIN_CHUNKS)
-        castle_cache_block_softpin(bf_bp->chunk_c2b);
     update_c2b(bf_bp->chunk_c2b);
     bf_bp->cur_chunk_buffer = c2b_buffer(bf_bp->chunk_c2b);
     memset(bf_bp->cur_chunk_buffer, 0, BLOOM_CHUNK_SIZE);
@@ -466,10 +463,6 @@ void castle_bloom_destroy(castle_bloom_t *bf)
 {
     debug("castle_bloom_destroy.\n");
     BUG_ON(bf->private);
-
-    castle_cache_advise_clear((c_ext_pos_t){bf->ext_id, 0},
-                              C2_ADV_EXTENT|C2_ADV_SOFTPIN,
-                              0);
 
     castle_extent_unlink(bf->ext_id);
 }
@@ -771,10 +764,6 @@ static void castle_bloom_block_read_end_io(c2_block_t *c2b, int did_io)
 
     if (did_io)
     {
-        if (bl->bf->num_chunks <= BLOOM_MAX_SOFTPIN_CHUNKS)
-            /* Softpin bloom filter c2bs. */
-            castle_cache_block_softpin(c2b);
-
         castle_printk(LOG_DEBUG, "%s::Bloom filter block not in cache, "
                 "I/O completed at "cep_fmt_str" for bf %p.\n",
                 __FUNCTION__, cep2str(c2b->cep), bl->bf);
@@ -916,8 +905,6 @@ static void castle_bloom_index_get(castle_bloom_t *bf, struct castle_bloom_index
         c2_block_t *c2b;
 
         c2b = castle_cache_block_get(cep, BLOOM_INDEX_NODE_SIZE_PAGES, USER);
-        if (!c2b_uptodate(c2b))
-            castle_cache_block_softpin(c2b);
         BUG_ON(castle_cache_block_sync_read(c2b));
         cep.offset += BLOOM_INDEX_NODE_SIZE;
 
@@ -1055,25 +1042,23 @@ void castle_bloom_unmarshall(castle_bloom_t *bf, struct castle_clist_entry *ctm)
     atomic_set(&bf->num_btree_nodes, ctm->bloom_num_btree_nodes);
 
     castle_printk(LOG_DEBUG, "%s: bf=%p ext_id=%llu num_chunks=%u "
-            "chunks_offset=%llu num_btree_nodes=%u "
-            "bf->num_chunks<=BLOOM_MAX_SOFTPIN_CHUNKS=%d\n",
+            "chunks_offset=%llu num_btree_nodes=%u\n",
             __FUNCTION__, bf, bf->ext_id, bf->num_chunks,
-            bf->chunks_offset, atomic_read(&bf->num_btree_nodes),
-            bf->num_chunks <= BLOOM_MAX_SOFTPIN_CHUNKS);
+            bf->chunks_offset, atomic_read(&bf->num_btree_nodes));
 
     castle_extent_mark_live(bf->ext_id, ctm->da_id);
 
     bf->private = NULL;
 
     /* Pre-warm cache for bloom filters. */
-    if (bf->num_chunks <= BLOOM_MAX_SOFTPIN_CHUNKS)
+    if (bf->num_chunks <= BLOOM_MAX_PREFETCH_CHUNKS)
     {
         /* A bf chunk is not the same as a c2b chunk.
          * CHUNK() will give us an offset starting from 0, bump it by 1 to get
          * the number of chunks we need to prefetch & pin. */
         int chunks = CHUNK(bf->chunks_offset + bf->num_chunks * BLOOM_CHUNK_SIZE) + 1;
         castle_cache_advise((c_ext_pos_t){bf->ext_id, 0},
-                C2_ADV_EXTENT|C2_ADV_PREFETCH|C2_ADV_SOFTPIN, USER, chunks);
+                C2_ADV_EXTENT|C2_ADV_PREFETCH, USER, chunks);
     }
 
 #ifdef CASTLE_BLOOM_FP_STATS
@@ -1162,7 +1147,6 @@ void castle_bloom_build_param_unmarshall(castle_bloom_t *bf, struct castle_bbp_e
                                                  BLOOM_INDEX_NODE_SIZE_PAGES,
                                                  MERGE_OUT);
         BUG_ON(castle_cache_block_sync_read(bf_bp->node_c2b));
-        castle_cache_block_softpin(bf_bp->node_c2b);
         write_lock_c2b(bf_bp->node_c2b);
         bf_bp->cur_node = c2b_bnode(bf_bp->node_c2b);
         BUG_ON(!bf_bp->cur_node);
@@ -1204,8 +1188,6 @@ void castle_bloom_build_param_unmarshall(castle_bloom_t *bf, struct castle_bbp_e
                                                         * bf->block_size_pages,
                                                   MERGE_OUT);
         BUG_ON(castle_cache_block_sync_read(bf_bp->chunk_c2b));
-        if (bf->num_chunks <= BLOOM_MAX_SOFTPIN_CHUNKS)
-            castle_cache_block_softpin(bf_bp->chunk_c2b);
         bf_bp->cur_chunk_buffer = c2b_buffer(bf_bp->chunk_c2b);
     }
     return;
