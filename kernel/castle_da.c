@@ -4326,13 +4326,13 @@ static c_val_tup_t _castle_immut_tree_entry_add(struct castle_immut_tree_constru
 }
 
 /* wrapper around the real castle_immut_tree_entry_add; this performs orphan node preadoption iteratively */
-static int castle_immut_tree_entry_add(struct castle_immut_tree_construct *tree_constr,
-                                       int depth,
-                                       void *key,
-                                       c_ver_t version,
-                                       c_val_tup_t cvt,
-                                       int is_re_add,
-                                       int node_complete)
+int castle_immut_tree_entry_add(struct castle_immut_tree_construct *tree_constr,
+                                int depth,
+                                void *key,
+                                c_ver_t version,
+                                c_val_tup_t cvt,
+                                int is_re_add,
+                                int node_complete)
 {
     c_val_tup_t preadoption_cvt, orig_cvt = cvt;
     struct castle_component_tree *out_tree = tree_constr->tree;
@@ -6137,11 +6137,11 @@ error_out:
 }
 
 static struct castle_immut_tree_construct * castle_immut_tree_constr_alloc(
-                                        c_immut_tree_node_complete_cb_t node_complete_cb,
-                                        struct castle_btree_type       *btree,
-                                        struct castle_double_array     *da,
-                                        int                             checkpointable,
-                                        void                           *private)
+                                                    struct castle_btree_type       *btree,
+                                                    struct castle_double_array     *da,
+                                                    int                             checkpointable,
+                                                    c_immut_tree_node_complete_cb_t node_complete_cb,
+                                                    void                           *private)
 {
     struct castle_immut_tree_construct *tree_constr;
     int i;
@@ -6216,11 +6216,11 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
     merge->merged_iter          = NULL;
     merge->total_nr_bytes       = 0;
     merge->nr_bytes             = 0;
-    merge->out_tree_constr      = castle_immut_tree_constr_alloc(castle_da_merge_node_complete_cb,
-                                                          castle_btree_type_get(da->btree_type),
-                                                          da,
-                                                          MERGE_CHECKPOINTABLE(merge),
-                                                          merge);
+    merge->out_tree_constr      = castle_immut_tree_constr_alloc(castle_btree_type_get(da->btree_type),
+                                                                 da,
+                                                                 MERGE_CHECKPOINTABLE(merge),
+                                                                 castle_da_merge_node_complete_cb,
+                                                                 merge);
     if (merge->out_tree_constr == NULL)
         goto error_out;
 
@@ -12549,3 +12549,109 @@ castle_user_timestamp_t castle_da_min_ts_cts_exclude_this_merge_get(struct castl
     return min_ts;
 }
 
+void * castle_da_in_stream_start(struct castle_double_array    *da,
+                                 uint64_t                       item_count,
+                                 c_chk_cnt_t                    internal_ext_size,
+                                 c_chk_cnt_t                    tree_ext_size,
+                                 c_chk_cnt_t                    data_ext_size,
+                                 int                            nr_rwcts)
+{
+    struct castle_immut_tree_construct *constr;
+    struct castle_da_lfs_ct_t lfs;
+    int ret = 0;
+
+    constr = castle_immut_tree_constr_alloc(castle_btree_type_get(da->btree_type),
+                                            da,
+                                            0,
+                                            NULL,       /* node_complete callback.  */
+                                            NULL);      /* private info.            */
+
+    if (!constr)
+        return NULL;
+
+    constr->tree = castle_ct_alloc(da,
+                                   2,           /* Level - 2.               */
+                                   INVAL_TREE,  /* Assign seq ID.           */
+                                   1,           /* # of data extents.       */
+                                   nr_rwcts);   /* # of RWCTs.              */
+                                   /* FIXME: Understand the usage of nr of rwcts. */
+
+    if (constr->tree == NULL)
+    {
+        ret = -ENOMEM;
+        goto err_out;
+    }
+
+    lfs.da = da;
+    castle_da_lfs_ct_reset(&lfs);
+
+    ret = castle_immut_tree_space_alloc(constr,
+                                        internal_ext_size * C_CHK_SIZE,
+                                        tree_ext_size * C_CHK_SIZE,
+                                        data_ext_size * C_CHK_SIZE,
+                                        item_count,
+                                        &lfs, NULL, NULL);
+
+    if (ret)
+    {
+        castle_ct_put(constr->tree, READ, NULL);
+        constr->tree = NULL;
+        goto err_out;
+    }
+
+    return constr;
+
+err_out:
+    castle_immut_tree_constr_dealloc(constr);
+
+    return NULL;
+}
+
+void castle_da_in_stream_complete(struct castle_immut_tree_construct *constr, int err)
+{
+    struct castle_double_array *da = constr->da;
+    struct castle_component_tree *ct = constr->tree;
+
+    if (err)
+    {
+        if (ct)
+        {
+            castle_ct_put(ct, READ, NULL);
+            constr->tree = NULL;
+        }
+
+        castle_immut_tree_constr_dealloc(constr);
+
+        return;
+    }
+
+    /* Complete Output tree and get it ready to promote to DA. */
+    castle_immut_tree_complete(constr);
+
+    /* Link CT to DA. */
+    write_lock(&da->lock);
+    castle_component_tree_add(da, constr->tree, NULL);
+    write_unlock(&da->lock);
+
+    castle_sysfs_ct_add(constr->tree);
+
+    /* We don't need constructor any more. */
+    castle_immut_tree_constr_dealloc(constr);
+}
+
+int castle_da_in_stream_entry_add(struct castle_immut_tree_construct *constr,
+                                  void                               *key,
+                                  c_ver_t                             version,
+                                  c_val_tup_t                         cvt)
+{
+    /* Only inlines supported for now. */
+    BUG_ON(!CVT_INLINE(cvt));
+
+    return castle_immut_tree_entry_add(constr,
+                                       0,       /* Depth */
+                                       key,
+                                       version,
+                                       cvt,
+                                       0,       /* Not a re-add. */
+                                       1);      /* Complete nodes, if possible. */
+}

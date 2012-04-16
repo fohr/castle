@@ -273,4 +273,19 @@ uint16_t castle_da_merge_node_size_get(struct castle_da_merge *merge,
 castle_user_timestamp_t castle_da_min_ts_cts_exclude_this_merge_get(struct castle_da_merge *merge);
 
 void castle_double_array_inserts_enable(void);
+
+void * castle_da_in_stream_start           (struct castle_double_array    *da,
+                                            uint64_t                       item_count,
+                                            c_chk_cnt_t                    internal_ext_size,
+                                            c_chk_cnt_t                    tree_ext_size,
+                                            c_chk_cnt_t                    data_ext_size,
+                                            int                            nr_rwcts);
+
+void   castle_da_in_stream_complete        (struct castle_immut_tree_construct *constr,
+                                            int                                 err);
+
+int    castle_da_in_stream_entry_add       (struct castle_immut_tree_construct *constr,
+                                            void                               *key,
+                                            c_ver_t                             version,
+                                            c_val_tup_t                         cvt);
 #endif /* __CASTLE_DA_H__ */
