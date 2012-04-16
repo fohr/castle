@@ -1048,20 +1048,25 @@ struct castle_bbp_entry
 } PACKED;
 STATIC_BUG_ON(sizeof(struct castle_bbp_entry) != 70);
 
+#define CASTLE_CT_DEFAULT_FLAGS         0
 /* Component tree flags bits. */
 #define CASTLE_CT_DYNAMIC_BIT           0   /* CT is dynamic. RW Tree.                          */
 #define CASTLE_CT_NEW_TREE_BIT          1   /* CT is not yet committed to disk.                 */
 #define CASTLE_CT_BLOOM_EXISTS_BIT      2   /* CT has bloom filter.                             */
 #define CASTLE_CT_MERGE_OUTPUT_BIT      3   /* CT is being created by a merge.                  */
 #define CASTLE_CT_MERGE_INPUT_BIT       4   /* CT is being merged.                              */
-#define CASTLE_CT_PARTIAL_TREE_BIT      5   /* CT tree is partial could be intree/outtree.       */
+#define CASTLE_CT_PARTIAL_TREE_BIT      5   /* CT tree is partial could be intree/outtree.      */
+#define CASTLE_CT_IS_BARRIER            6   /* CT is actually a barrier_ct (not a real tree)    */
+#define CASTLE_CT_IS_ACTIVE_BARRIER     7   /* barrier_ct is active (else is inactive and should be
+                                               removed ASAP). */
 
 /**
  * Is CT queriable.
  */
-#define CASTLE_CT_QUERIABLE(_ct)                                            \
-    (test_bit(CASTLE_CT_PARTIAL_TREE_BIT, &((_ct)->flags))                  \
-        || !test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &((_ct)->flags)))
+#define CASTLE_CT_QUERIABLE(_ct)                                          \
+    ( !test_bit(CASTLE_CT_IS_BARRIER, &((_ct)->flags)) &&                  \
+    ((test_bit(CASTLE_CT_PARTIAL_TREE_BIT, &((_ct)->flags))                 \
+        || !test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &((_ct)->flags)))))
 
 /**
  * Total number of extents associated with a CT.
@@ -1072,7 +1077,7 @@ STATIC_BUG_ON(sizeof(struct castle_bbp_entry) != 70);
 struct castle_component_tree {
     tree_seq_t          seq;               /**< Unique ID identifying this tree.                */
     tree_seq_t          data_age;          /**< Denotes the age of data.                        */
-    unsigned long       flags;
+    uint32_t            flags;
 
     atomic_t            ref_count;
     atomic_t            write_ref_count;
@@ -1196,7 +1201,8 @@ struct castle_clist_entry {
     /*        337 */ uint64_t        min_user_timestamp;
     /*        345 */ int32_t         tree_depth;
     /*        349 */ uint32_t        max_versions_per_key;
-    /*        353 */ uint8_t         _unused[159];
+    /*        353 */ uint32_t        flags;
+    /*        357 */ uint8_t         _unused[155];
     /*        512 */
 } PACKED;
 STATIC_BUG_ON(sizeof(struct castle_clist_entry) != 512);

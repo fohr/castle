@@ -5346,7 +5346,7 @@ static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
         BUG_ON(merge->redirection_partition.key);
 
         /* Mark all input/outtrees as partial trees. */
-        BUG_ON(test_and_set_bit(CASTLE_CT_PARTIAL_TREE_BIT, &out_tree->flags));
+        set_bit(CASTLE_CT_PARTIAL_TREE_BIT, &out_tree->flags);
         for (i=0; i<merge->nr_trees; i++)
             BUG_ON(test_and_set_bit(CASTLE_CT_PARTIAL_TREE_BIT, &merge->in_trees[i]->flags));
 
@@ -8749,6 +8749,8 @@ void castle_da_ct_marshall(struct castle_clist_entry *ctm,
     BUILD_BUG_ON(sizeof(castle_user_timestamp_t) != sizeof(uint64_t));
     ctm->max_user_timestamp = atomic64_read(&ct->max_user_timestamp);
     ctm->min_user_timestamp = atomic64_read(&ct->min_user_timestamp);
+
+    ctm->flags = ct->flags;
 }
 
 /**
@@ -8810,6 +8812,8 @@ static struct castle_component_tree * castle_da_ct_unmarshall(struct castle_clis
 
     atomic64_set(&ct->max_user_timestamp, ctm->max_user_timestamp);
     atomic64_set(&ct->min_user_timestamp, ctm->min_user_timestamp);
+
+    ct->flags = ctm->flags;
 
     castle_ct_hash_add(ct);
 
@@ -9594,7 +9598,7 @@ static int castle_da_merge_deser_mstore_outtree_recover(void)
         castle_printk(LOG_DEBUG, "%s::deserialising merge on da %d level %d with partially-"
                                  "complete ct, seq %d\n",
                                  __FUNCTION__, da_id, level, out_tree->seq);
-        set_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &out_tree->flags);
+        BUG_ON(!test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &out_tree->flags));
         /* the difference between unmarshalling a partially complete in-merge ct and a "normal" ct is
            unlike a normal ct, a partially complete in-merge ct does not get added to a DA through
            cct_add(da, ct, NULL, 1). */
@@ -9990,6 +9994,7 @@ static struct castle_component_tree * castle_ct_init(struct castle_double_array 
     ct->merge                    = NULL;
     ct->merge_id                 = INVAL_MERGE_ID;
     ct->max_versions_per_key     = 0;
+    ct->flags                    = CASTLE_CT_DEFAULT_FLAGS;
 
     atomic_set(&ct->tree_depth, -1);
 

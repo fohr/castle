@@ -351,7 +351,7 @@ static ssize_t da_tree_list_show(struct kobject *kobj,
                 ct_size = atomic64_read(&ct->nr_bytes);
 
             ret = snprintf(buf, PAGE_SIZE,
-                           "%s[%lu %u %u %u %llu %lu %lu] ",
+                           "%s[%lu %u %u %u %llu %lu %lu %u] ",
                            buf,
                            atomic64_read(&ct->item_count),         /* Item count*/
                            (uint32_t)ct->node_sizes[0],            /* Leaf node size */
@@ -360,7 +360,8 @@ static ssize_t da_tree_list_show(struct kobject *kobj,
                            (uint32_t)atomic_read(&ct->tree_depth), /* Depth of tree */
                            ct_size,
                            atomic64_read(&ct->min_user_timestamp),
-                           atomic64_read(&ct->max_user_timestamp));
+                           atomic64_read(&ct->max_user_timestamp),
+                           ct->flags);
             if (ret >= PAGE_SIZE)
                 goto err;
         }
@@ -929,7 +930,14 @@ static ssize_t ct_merge_state_show(struct kobject *kobj,
 
     read_lock(&ct->da->lock);
 
-    if (!ct->merge)
+    if (test_bit(CASTLE_CT_IS_BARRIER, &(ct->flags)))
+    {
+        if (test_bit(CASTLE_CT_IS_ACTIVE_BARRIER, &(ct->flags)))
+            ret = sprintf(buf, "active_barrier\n");
+        else
+            ret = sprintf(buf, "zombie_barrier\n");
+    }
+    else if (!ct->merge)
         ret = sprintf(buf, "idle\n");
     else if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags))
         ret = sprintf(buf, "output\n");
