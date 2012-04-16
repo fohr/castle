@@ -10,6 +10,7 @@
 #include "castle_versions.h"
 #include "castle_objects.h"
 #include "castle_extent.h"
+#include "castle_systemtap.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -239,6 +240,7 @@ static void castle_objects_rq_iter_init(castle_object_iterator_t *iter,
                            iter->da_id,
                            iter->start_key,
                            iter->end_key,
+                           iter->seq_id,
                            _castle_objects_rq_iter_init, /*init_cb*/
                            iter /*private*/);
 
@@ -1016,6 +1018,7 @@ void _castle_object_iter_init(castle_object_iterator_t *iterator)
 /**
  * Initialise a range query.
  *
+ * @param   seq_id      Unique ID for tracing purposes
  * @param   start_cb    Callback in the event we go asynchronous
  * @param   private     Caller-provided data passed to start_cb()
  *
@@ -1036,6 +1039,7 @@ int castle_object_iter_init(struct castle_attachment *attachment,
                              c_vl_bkey_t *start_key,
                              c_vl_bkey_t *end_key,
                              castle_object_iterator_t **iter,
+                             int seq_id,
                              castle_object_iter_start_cb_t start_cb,
                              void *private)
 {
@@ -1079,6 +1083,7 @@ int castle_object_iter_init(struct castle_attachment *attachment,
         goto err1;
 
     /* Initialise the rest of the iterator */
+    iterator->seq_id        = seq_id;
     iterator->version       = attachment->version;
     iterator->da_id         = castle_version_da_id_get(iterator->version);
     iterator->start_cb      = start_cb;
@@ -1162,6 +1167,8 @@ int castle_object_iter_finish(castle_object_iterator_t *iterator)
 static void castle_object_next_available(struct work_struct *work)
 {
     castle_object_iterator_t *iter = container_of(work, castle_object_iterator_t, work);
+
+    trace_CASTLE_REQUEST_CLAIM(iter->seq_id);
 
     castle_object_iter_next(iter, iter->next_available, iter->next_available_data);
 }

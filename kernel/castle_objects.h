@@ -18,7 +18,8 @@ int          castle_object_iter_init         (struct castle_attachment *attachme
                                               c_vl_bkey_t *start_key,
                                               c_vl_bkey_t *end_key,
                                               castle_object_iterator_t **iter,
-                                              castle_object_iter_start_cb_t async_cb,
+                                              int seq_id,
+                                              castle_object_iter_start_cb_t start_cb,
                                               void *private);
 int          castle_object_iter_next         (castle_object_iterator_t *iterator,
                                               castle_object_iter_next_available_t callback,

@@ -32,7 +32,8 @@ void        castle_rq_iter_init       (c_rq_iter_t *c_rq_iter,
                                        struct castle_component_tree
                                                    *tree,
                                        void        *start_key,
-                                       void        *end_key);
+                                       void        *end_key,
+                                       int          seq_id);
 void        castle_rq_iter_cancel     (c_rq_iter_t *c_rq_iter);
 extern struct castle_iterator_type castle_rq_iter;
 

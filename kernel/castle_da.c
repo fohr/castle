@@ -2350,7 +2350,12 @@ static void _castle_da_rq_iter_init(c_da_rq_iter_t *iter)
         }
 
         /* Initialise CT iterator. */
-        castle_rq_iter_init(ct_iter, iter->version, proxy_ct->ct, ct_start_key, ct_end_key);
+        castle_rq_iter_init(ct_iter,
+                            iter->version,
+                            proxy_ct->ct,
+                            ct_start_key,
+                            ct_end_key,
+                            iter->seq_id);
         BUG_ON(ct_iter->err); /* doesn't fail */
 
         /* Add initialised iterator to merged iterators lists. */
@@ -2586,6 +2591,7 @@ int castle_da_rq_iter_relevant_cts_get(c_da_rq_iter_t *iter,
  * @param   da_id       DA to iterate
  * @param   start_key   Range query start key
  * @param   end_key     Range query end key
+ * @param   seq_id      Unique ID for tracing purposes
  * @param   init_cb     Callback to fire when initialisation is complete
  * @param   private     Caller-provided data to be passed to init_cb()
  *
@@ -2604,6 +2610,7 @@ void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
                             c_da_t da_id,
                             void *start_key,
                             void *end_key,
+                            int seq_id,
                             castle_da_rq_iter_init_cb_t init_cb,
                             void *private)
 {
@@ -2624,6 +2631,7 @@ void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
     /* Initialise the iterator. */
     iter->async_iter.end_io = NULL;
     iter->err               = 0;
+    iter->seq_id            = seq_id;
     iter->version           = version;
 
     /* Initialise async init stuff. */

@@ -1752,6 +1752,9 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
 static void _castle_btree_iter_path_traverse(struct work_struct *work)
 {
     c_iter_t *c_iter = container_of(work, c_iter_t, work);
+
+    trace_CASTLE_REQUEST_CLAIM(c_iter->seq_id);
+
     iter_debug("iter %p\n", c_iter);
     __castle_btree_iter_path_traverse(c_iter);
 }
@@ -1973,6 +1976,8 @@ static int __castle_btree_iter_start(c_iter_t *c_iter)
 static void _castle_btree_iter_start(struct work_struct *work)
 {
     c_iter_t *c_iter = container_of(work, c_iter_t, work);
+
+    trace_CASTLE_REQUEST_CLAIM(c_iter->seq_id);
 
     __castle_btree_iter_start(c_iter);
 }
@@ -2433,10 +2438,17 @@ static void castle_rq_iter_fini(c_rq_iter_t *rq_iter)
     debug("Free rq_iter: %p\n", rq_iter);
 }
 
-void castle_rq_iter_init(c_rq_iter_t *rq_iter, c_ver_t version,
+/**
+ * Initialise a range query iterator for a component tree.
+ *
+ * @param   seq_id  Sequence ID for tracing purposes
+ */
+void castle_rq_iter_init(c_rq_iter_t *rq_iter,
+                         c_ver_t version,
                          struct castle_component_tree *tree,
                          void *start_key,
-                         void *end_key)
+                         void *end_key,
+                         int seq_id)
 {
     struct castle_btree_type *btype;
     struct castle_iterator *iter;

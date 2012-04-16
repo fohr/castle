@@ -1644,6 +1644,7 @@ typedef struct castle_iterator {
     };
     int                           cancelled;
     int                           err;
+    int                           seq_id;           /**< Unique ID for tracing                  */
     int                           running_async;    /**< Has the iterator requeued and gone
                                                          asynchronous since it started, e.g. to
                                                          do I/O or avoid a stack overflow.      */
@@ -1693,6 +1694,7 @@ typedef struct castle_rq_iterator {
     c_async_iterator_t            async_iter;
     struct castle_component_tree *tree;
     int                           err;
+    int                           seq_id;               /**< Sequence ID for tracing.       */
     c_ver_t                       version;
     struct castle_iterator        iterator;
     volatile int                  iter_completed;
@@ -1813,6 +1815,7 @@ struct castle_da_rq_iterator
     castle_da_rq_iter_init_cb_t init_cb;            /**< Initialisation complete callback.      */
     void                       *private;            /**< Passed to init_cb().                   */
 
+    int                         seq_id;             /**< Unique ID for tracing.                 */
     int                         err;
 };
 
@@ -2093,13 +2096,14 @@ struct castle_object_get {
 };
 
 struct castle_object_pull {
+    int                           seq_id;       /**< Unique ID for tracing.                     */
     c_val_tup_t                   cvt;
 
-    struct castle_da_cts_proxy   *cts_proxy;     /**< Reference-taking snapshot of CTs in DA.*/
+    struct castle_da_cts_proxy   *cts_proxy;    /**< Reference-taking snapshot of CTs in DA.    */
     uint64_t                      remaining;
     uint64_t                      offset;
 
-    c_vl_bkey_t                  *key;           /**< Key of the value to be replaced.       */
+    c_vl_bkey_t                  *key;          /**< Key of the value to be replaced.           */
 
     struct castle_cache_block    *curr_c2b;
 
@@ -2137,6 +2141,7 @@ struct castle_object_iterator
     void                               *end_key;
 
     /* Rest */
+    int                                 seq_id;                 /**< Unique ID for tracing.     */
     int                                 err;
     int                                 completed;
     void                               *last_next_key;
