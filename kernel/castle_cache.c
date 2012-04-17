@@ -536,6 +536,24 @@ inline int c2b_partition(c2_block_t *c2b, c2_partition_id_t part_id)
 }
 
 /**
+ * Mark c2b as being cache partition member, return if it already was.
+ */
+static inline int test_and_set_c2b_partition(c2_block_t *c2b, c2_partition_id_t part_id)
+{
+    BUG_ON(part_id >= NR_CACHE_PARTITIONS);
+    return test_and_set_bit(C2B_STATE_PARTITION_OFFSET + part_id, &c2b->state);
+}
+
+/**
+ * Unmark c2b as being cache partition member, return if it was.
+ */
+static inline int test_and_clear_c2b_partition(c2_block_t *c2b, c2_partition_id_t part_id)
+{
+    BUG_ON(part_id >= NR_CACHE_PARTITIONS);
+    return test_and_clear_bit(C2B_STATE_PARTITION_OFFSET + part_id, &c2b->state);
+}
+
+/**
  * Can the specified partition satisfy a request of nr_c2bs, nr_c2ps?
  *
  * NOTE: c2bs are not currently budgeted
