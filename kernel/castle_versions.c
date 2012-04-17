@@ -1361,7 +1361,7 @@ struct timeval castle_version_immute_timestamp_get(c_ver_t version)
 
     v = castle_versions_hash_get(version);
     BUG_ON(!v);
-    BUG_ON(test_bit(CV_LEAF_BIT, &v->flags));
+    BUG_ON(castle_version_is_mutable(version));
 
     return v->immute_timestamp;
 }
