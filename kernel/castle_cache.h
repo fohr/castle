@@ -6,6 +6,11 @@
 struct castle_cache_block;
 typedef void  (*c2b_end_io_t)(struct castle_cache_block *c2b, int did_io);
 
+#define C2B_STATE_BITS_BITS         56          /**< Bits reserved for c2b state.                 */
+#define C2B_STATE_PARTITION_OFFSET  C2B_STATE_BITS_BITS /**< Offset of c2b_state.partition.       */
+#define C2B_STATE_PARTITION_BITS    8           /**< Bits reserved for c2b cache partition.       */
+STATIC_BUG_ON(C2B_STATE_BITS_BITS + C2B_STATE_PARTITION_BITS != 64);
+
 struct castle_cache_page;
 typedef struct castle_cache_block {
     c_ext_pos_t                cep;
@@ -25,9 +30,9 @@ typedef struct castle_cache_block {
     struct rb_node             rb_dirtytree;    /**< Per-extent dirtytree RB-node.                */
     c_ext_dirtytree_t         *dirtytree;       /**< Dirtytree c2b is a member of.                */
 
-    /* Keeping this as a bitfield since some bits will be needed for CLOCK. */
     struct c2b_state {
-        unsigned long          bits:64;         /**< State bitfield                               */
+        unsigned long          bits:C2B_STATE_BITS_BITS;           /**< State bitfield            */
+        unsigned long          partition:C2B_STATE_PARTITION_BITS; /**< Cache partition bitfield  */
     } state;
     atomic_t                   count;           /**< Count of active consumers                    */
     atomic_t                   lock_cnt;
@@ -47,9 +52,10 @@ typedef enum {
     IGNORE_PARTITION = -1,                  /**< Cache to ignore partition                        */
     USER = 0,                               /**< Direct user-accessed data                        */
     MERGE_IN,                               /**< Cache used for merge input                       */
-    MERGE_OUT,                              /**< Cache used for merge output                      */
-    NR_CACHE_PARTITIONS,                    /**< Counter; must always be last                     */
+    MERGE_OUT = MERGE_IN,                   /**< Cache used for merge output                      */
+    NR_CACHE_PARTITIONS,                    /**< Number of cache partitions (must be last).       */
 } c2_partition_id_t;
+STATIC_BUG_ON(NR_CACHE_PARTITIONS >= C2B_STATE_PARTITION_BITS);
 
 /**********************************************************************************************
  * Locking.
@@ -159,12 +165,6 @@ void set_c2b_in_flight      (c2_block_t *c2b);
 void set_c2b_eio            (c2_block_t *c2b);
 void clear_c2b_eio          (c2_block_t *c2b);
 int  c2b_eio                (c2_block_t *c2b);
-void set_c2b_t0             (c2_block_t *c2b);
-int  c2b_t0                 (c2_block_t *c2b);
-void set_c2b_merge_in       (c2_block_t *c2b);
-int  c2b_merge_in           (c2_block_t *c2b);
-void set_c2b_merge_out      (c2_block_t *c2b);
-int  c2b_merge_out          (c2_block_t *c2b);
 void castle_cache_extent_dirtytree_remove(c_ext_dirtytree_t *dirtytree);
 
 /**********************************************************************************************

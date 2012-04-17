@@ -58,12 +58,11 @@ enum c2b_state_bits {
     C2B_in_flight,          /**< Block is currently in-flight (un-set in c2b_multi_io_end()).   */
     C2B_barrier,            /**< Block in write IO, and should be used as a barrier write.      */
     C2B_eio,                /**< Block failed to write to slave(s)                              */
-    C2B_t0,                 /**< Block is from a T0.                                            */
-    C2B_merge_in,           /**< Block is to be input to merge.                                 */
-    C2B_merge_out,          /**< Block is output from merge.                                    */
     C2B_evictlist,          /**< Block is on castle_cache_block_evictlist.                      */
     C2B_accessed,           /**< Block has been accessed recently (used by CLOCK).              */
+    C2B_num_state_bits,     /**< Number of allocated c2b state bits (must be last).             */
 };
+STATIC_BUG_ON(C2B_num_state_bits >= C2B_STATE_BITS_BITS); /* Can use 0..C2B_STATE_BITS_BITS-1   */
 
 #define INIT_C2B_BITS (0)
 #define C2B_FNS(bit, name)                                          \
@@ -105,9 +104,6 @@ C2B_FNS(remap, remap)
 C2B_FNS(in_flight, in_flight)
 C2B_FNS(barrier, barrier)
 C2B_FNS(eio, eio)
-C2B_FNS(t0, t0)
-C2B_FNS(merge_in, merge_in)
-C2B_FNS(merge_out, merge_out)
 C2B_FNS(evictlist, evictlist)
 C2B_FNS(accessed, accessed)
 
@@ -511,6 +507,32 @@ EXPORT_SYMBOL(castle_cache_stats_print);
 int castle_cache_size_get()
 {
     return castle_cache_size;
+}
+
+/**
+ * Mark c2b as being a member of a specified cache partition.
+ */
+static inline void set_c2b_partition(c2_block_t *c2b, c2_partition_id_t part_id)
+{
+    BUG_ON(part_id >= NR_CACHE_PARTITIONS);
+    set_bit(C2B_STATE_PARTITION_OFFSET + part_id, &c2b->state);
+}
+
+/**
+ * Unmark c2b as being a member of a specified cache partition.
+ */
+static inline void clear_c2b_partition(c2_block_t *c2b, c2_partition_id_t part_id)
+{
+    BUG_ON(part_id >= NR_CACHE_PARTITIONS);
+    clear_bit(C2B_STATE_PARTITION_OFFSET + part_id, &c2b->state);
+}
+
+/**
+ * Is c2b a member of specified cache partition?
+ */
+inline int c2b_partition(c2_block_t *c2b, c2_partition_id_t part_id)
+{
+    return test_bit(C2B_STATE_PARTITION_OFFSET + part_id, &c2b->state);
 }
 
 /**
@@ -1098,7 +1120,7 @@ void dirty_c2b(c2_block_t *c2b)
         {
             unsigned long flags;
 
-            BUG_ON(!c2b_merge_out(c2b));
+            BUG_ON(!c2b_partition(c2b, MERGE_OUT));
             spin_lock_irqsave(&castle_cache_block_evictlist_lock, flags);
             list_del(&c2b->evict);
             atomic_dec(&castle_cache_block_evictlist_size);
@@ -1152,7 +1174,7 @@ void clean_c2b(c2_block_t *c2b)
     /* Do cache list accounting. */
     BUG_ON(atomic_read(&c2b->count) == 0);
     atomic_inc(&castle_cache_clean_blks);
-    if (c2b_merge_out(c2b))
+    if (c2b_partition(c2b, MERGE_OUT))
     {
         unsigned long flags;
 
@@ -2957,7 +2979,7 @@ static void castle_cache_block_free(c2_block_t *c2b)
     /* Call deallocator function for all prefetch window start c2bs. */
     if (c2b_windowstart(c2b))
         c2_pref_c2b_destroy(c2b);
-    if (c2b_merge_out(c2b))
+    if (c2b_partition(c2b, MERGE_OUT))
     {
         unsigned long flags;
 
@@ -3149,7 +3171,7 @@ USED static int castle_cache_block_evictlist_process(void)
     list_for_each_safe(lh, th, &castle_cache_block_evictlist)
     {
         c2b = list_entry(lh, c2_block_t, evict);
-        BUG_ON(!c2b_merge_out(c2b));
+        BUG_ON(!c2b_partition(c2b, MERGE_OUT));
 
         if (c2b_busy(c2b, 0))
         {
@@ -3162,7 +3184,7 @@ USED static int castle_cache_block_evictlist_process(void)
         list_del(&c2b->clock);
         list_move_tail(&c2b->evict, &victims);
         clear_c2b_evictlist(c2b);
-        clear_c2b_merge_out(c2b);
+        clear_c2b_partition(c2b, MERGE_OUT);
         BUG_ON(atomic_dec_return(&castle_cache_block_evictlist_size) < 0);
 
         nr_victims++;
