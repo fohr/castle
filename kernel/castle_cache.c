@@ -4559,6 +4559,10 @@ int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, c2_partition_id_t p
     if (!castle_cache_allow_hardpinning)
         advise &= ~C2_ADV_HARDPIN;
 
+    /* Exit early if no actual advice is left. */
+    if ((advise & ~C2_ADV_EXTENT) == 0)
+        return EXIT_SUCCESS;
+
     /* Prefetching is handled via a _prefetch_advise() call. */
     if ((advise & C2_ADV_PREFETCH) && !(advise & C2_ADV_EXTENT))
         return castle_cache_prefetch_advise(cep, advise, part_id);
@@ -4596,6 +4600,10 @@ int castle_cache_advise_clear(c_ext_pos_t cep,
     /* Only hardpin if it is enabled. */
     if (!castle_cache_allow_hardpinning)
         advise &= ~C2_ADV_HARDPIN;
+
+    /* Exit early if no actual advice is left. */
+    if ((advise & ~C2_ADV_EXTENT) == 0)
+        return EXIT_SUCCESS;
 
     /* There's no such thing as 'unprefetching'. */
     if (advise & C2_ADV_PREFETCH && !(advise & C2_ADV_EXTENT))
