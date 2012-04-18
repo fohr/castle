@@ -2566,6 +2566,9 @@ static int castle_cache_block_hash_insert(c2_block_t *c2b)
 {
     int idx;
 
+    BUG_ON(atomic_read(&c2b->count) == 0);
+    BUG_ON(c2b_dirty(c2b));
+
     write_lock(&castle_cache_block_hash_lock);
 
     /* Check if already in the hash */
@@ -2580,8 +2583,6 @@ static int castle_cache_block_hash_insert(c2_block_t *c2b)
     idx = castle_cache_block_hash_idx(c2b->cep);
     hlist_add_head(&c2b->hlist, &castle_cache_block_hash[idx]);
     /* in the hash and hold a reference so drop lock */
-    BUG_ON(atomic_read(&c2b->count) == 0);
-    BUG_ON(c2b_dirty(c2b));
     spin_lock_irq(&castle_cache_block_clock_lock);
     write_unlock(&castle_cache_block_hash_lock);
     list_add_tail(&c2b->clock, castle_cache_block_clock_hand);
