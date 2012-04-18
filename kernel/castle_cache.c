@@ -2564,20 +2564,19 @@ static inline c2_block_t* castle_cache_block_hash_get(c_ext_pos_t cep,
  */
 static int castle_cache_block_hash_insert(c2_block_t *c2b)
 {
-    int idx, success;
+    int idx;
 
     write_lock(&castle_cache_block_hash_lock);
 
     /* Check if already in the hash */
-    success = 0;
     if(castle_cache_block_hash_find(c2b->cep, c2b->nr_pages))
     {
         write_unlock(&castle_cache_block_hash_lock);
-        goto out;
+
+        return 0;
     }
 
     /* Insert */
-    success = 1;
     idx = castle_cache_block_hash_idx(c2b->cep);
     hlist_add_head(&c2b->hlist, &castle_cache_block_hash[idx]);
     /* in the hash and hold a reference so drop lock */
@@ -2591,8 +2590,7 @@ static int castle_cache_block_hash_insert(c2_block_t *c2b)
     atomic_inc(&castle_cache_clean_blks);
     spin_unlock_irq(&castle_cache_block_clock_lock);
 
-out:
-    return success;
+    return 1;
 }
 
 /**
