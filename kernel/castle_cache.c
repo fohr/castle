@@ -3118,10 +3118,10 @@ static int castle_cache_block_hash_clean(void)
     HLIST_HEAD(victims);
     c2_block_t *c2b;
     int clean, dirty;
-    int nr_victims, nr_pages, rounds;
+    int nr_victims, scanned_pages, rounds;
 
     /* Initialise. */
-    nr_victims = nr_pages = 0;
+    nr_victims = scanned_pages = 0;
 
     /* Return immediately if the c2p cleanlist is < 10% of the cache.
      *
@@ -3167,7 +3167,7 @@ static int castle_cache_block_hash_clean(void)
             continue;
         }
 
-        nr_pages += c2b->nr_pages;
+        scanned_pages += c2b->nr_pages;
 
         /* Blocks that match the following criteria are evicted:
          *
@@ -3201,9 +3201,9 @@ static int castle_cache_block_hash_clean(void)
     /* We couldn't find any victims */
     if (hlist_empty(&victims))
     {
-        if (nr_pages > castle_cache_size / 2)
+        if (scanned_pages > castle_cache_size / 2)
             castle_printk(LOG_WARN, "Couldn't find a victim page in %d pages, cache size %d\n",
-                    nr_pages, castle_cache_size);
+                    scanned_pages, castle_cache_size);
         debug("No victims found!!\n");
         return 1;
     }
