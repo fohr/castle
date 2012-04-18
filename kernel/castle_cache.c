@@ -539,7 +539,7 @@ inline int c2b_partition(c2_block_t *c2b, c2_partition_id_t part_id)
 /**
  * Mark c2b as being cache partition member, return if it already was.
  */
-static inline int test_and_set_c2b_partition(c2_block_t *c2b, c2_partition_id_t part_id)
+static inline int test_set_c2b_partition(c2_block_t *c2b, c2_partition_id_t part_id)
 {
     BUG_ON(part_id >= NR_CACHE_PARTITIONS);
     return test_and_set_bit(C2B_STATE_PARTITION_OFFSET + part_id, &c2b->state);
@@ -548,7 +548,7 @@ static inline int test_and_set_c2b_partition(c2_block_t *c2b, c2_partition_id_t 
 /**
  * Unmark c2b as being cache partition member, return if it was.
  */
-static inline int test_and_clear_c2b_partition(c2_block_t *c2b, c2_partition_id_t part_id)
+static inline int test_clear_c2b_partition(c2_block_t *c2b, c2_partition_id_t part_id)
 {
     BUG_ON(part_id >= NR_CACHE_PARTITIONS);
     return test_and_clear_bit(C2B_STATE_PARTITION_OFFSET + part_id, &c2b->state);
@@ -3186,7 +3186,7 @@ static int castle_cache_block_hash_clean(void)
             BUG_ON(atomic_dec_return(&castle_cache_block_clock_size) < 0);
             BUG_ON(atomic_dec_return(&castle_cache_clean_blks) < 0);
             atomic_inc(&castle_cache_block_victims);
-            BUG_ON(!test_and_clear_c2b_partition(c2b, USER));
+            BUG_ON(!test_clear_c2b_partition(c2b, USER));
             c2_partition_budget_return(USER,
                     1 /*nr_c2bs*/, castle_cache_pages_to_c2ps(c2b->nr_pages));
             nr_victims++;
@@ -3250,7 +3250,7 @@ USED static int castle_cache_block_evictlist_process(void)
         clear_c2b_evictlist(c2b);
         clear_c2b_partition(c2b, MERGE_OUT);
         BUG_ON(atomic_dec_return(&castle_cache_block_evictlist_size) < 0);
-        BUG_ON(!test_and_clear_c2b_partition(c2b, MERGE_OUT));
+        BUG_ON(!test_clear_c2b_partition(c2b, MERGE_OUT));
         c2_partition_budget_return(MERGE_OUT,
                 1 /*nr_c2bs*/, castle_cache_pages_to_c2ps(c2b->nr_pages));
         nr_victims++;
@@ -3633,7 +3633,7 @@ out:
 #endif
 
     /* Update budget if we're adding c2b to a partition for the first time. */
-    if (!test_and_set_c2b_partition(c2b, part_id))
+    if (!test_set_c2b_partition(c2b, part_id))
     {
         c2_partition_budget_claim(part_id,
                 1 /*nr_c2bs*/, castle_cache_pages_to_c2ps(nr_pages));
@@ -5485,7 +5485,7 @@ static void castle_cache_hashes_fini(void)
             atomic_dec(&castle_cache_block_clock_size);
             atomic_dec(&castle_cache_clean_blks);
             for (part_id = 0; part_id < NR_CACHE_PARTITIONS; part_id++)
-                if (test_and_clear_c2b_partition(c2b, part_id))
+                if (test_clear_c2b_partition(c2b, part_id))
                     c2_partition_budget_return(part_id, 1 /*nr_c2bs*/,
                             castle_cache_pages_to_c2ps(c2b->nr_pages));
 
