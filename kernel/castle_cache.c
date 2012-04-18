@@ -322,6 +322,7 @@ static atomic_t                castle_cache_block_victims;          /**< Clean b
 typedef struct {
     atomic_t        max_c2ps;               /**< Total c2ps available for this partition          */
     atomic_t        cur_c2ps;               /**< Current c2ps used by this partition              */
+    uint8_t         overbudget;             /**< Is this partition overbudget?                    */
 } c2_partition_t;
 
 static c2_partition_t           castle_cache_partition[NR_CACHE_PARTITIONS];/**< Cache partitions */
@@ -570,6 +571,10 @@ static inline int c2_partition_can_satisfy(c2_partition_id_t part_id, int nr_c2b
     c2_partition_t *partition;
     int want_c2ps, max_c2ps;
 
+    /* We must bypass partition accounting checks at least until flushing and
+     * eviction policies have been updated to be aware of cache partitions. */
+    return 1;
+
     BUG_ON(part_id >= NR_CACHE_PARTITIONS);
 
     /* Partitions don't currently budget c2bs. */
@@ -582,6 +587,45 @@ static inline int c2_partition_can_satisfy(c2_partition_id_t part_id, int nr_c2b
     max_c2ps  = atomic_read(&partition->max_c2ps);
 
     return want_c2ps <= max_c2ps;
+}
+
+/**
+ * Add/remove nr_c2bs, nr_c2ps from cache partition budget.
+ */
+static void c2_partition_budget_update(c2_partition_id_t part_id, int nr_c2bs, int nr_c2ps)
+{
+    c2_partition_t *partition;
+    int cur_c2ps;
+
+    BUG_ON(part_id >= NR_CACHE_PARTITIONS);
+    BUG_ON(nr_c2bs == 0);
+    BUG_ON(nr_c2ps == 0);
+
+    /* Update c2ps used by this partition. */
+    partition = &castle_cache_partition[part_id];
+    cur_c2ps  = atomic_add_return(nr_c2ps, &partition->cur_c2ps);
+    BUG_ON(cur_c2ps < 0);
+    partition->overbudget = cur_c2ps > atomic_read(&partition->max_c2ps);
+}
+
+/**
+ * Claim nr_c2bs, nr_c2ps from cache partition budget.
+ *
+ * Called when a c2b is to be accounted for in a cache partition.
+ */
+static inline void c2_partition_budget_claim(c2_partition_id_t part_id, int nr_c2bs, int nr_c2ps)
+{
+    c2_partition_budget_update(part_id, nr_c2bs, nr_c2ps);
+}
+
+/**
+ * Return nr_c2bs, nr_c2ps to the cache partition budget.
+ *
+ * Called when a c2b is no longer to be accounted for by a cache partition.
+ */
+static inline void c2_partition_budget_return(c2_partition_id_t part_id, int nr_c2bs, int nr_c2ps)
+{
+    c2_partition_budget_update(part_id, -nr_c2bs, -nr_c2ps);
 }
 
 /**
@@ -2906,6 +2950,7 @@ static void castle_cache_block_init(c2_block_t *c2b,
     atomic_set(&c2b->remaining, 0);
     c2b->cep = cep;
     c2b->state.bits = INIT_C2B_BITS | (uptodate ? (1 << C2B_uptodate) : 0);
+    c2b->state.partition = 0;
     c2b->nr_pages = nr_pages;
     c2b->c2ps = c2ps;
 
@@ -3143,6 +3188,9 @@ static int castle_cache_block_hash_clean(void)
             BUG_ON(atomic_dec_return(&castle_cache_block_clock_size) < 0);
             BUG_ON(atomic_dec_return(&castle_cache_clean_blks) < 0);
             atomic_inc(&castle_cache_block_victims);
+            BUG_ON(!test_and_clear_c2b_partition(c2b, USER));
+            c2_partition_budget_return(USER,
+                    1 /*nr_c2bs*/, castle_cache_pages_to_c2ps(c2b->nr_pages));
             nr_victims++;
         }
     }
@@ -3204,7 +3252,9 @@ USED static int castle_cache_block_evictlist_process(void)
         clear_c2b_evictlist(c2b);
         clear_c2b_partition(c2b, MERGE_OUT);
         BUG_ON(atomic_dec_return(&castle_cache_block_evictlist_size) < 0);
-
+        BUG_ON(!test_and_clear_c2b_partition(c2b, MERGE_OUT));
+        c2_partition_budget_return(MERGE_OUT,
+                1 /*nr_c2bs*/, castle_cache_pages_to_c2ps(c2b->nr_pages));
         nr_victims++;
         if (nr_victims >= BATCH_FREE)
             break;
@@ -3583,6 +3633,13 @@ out:
         }
     }
 #endif
+
+    /* Update budget if we're adding c2b to a partition for the first time. */
+    if (!test_and_set_c2b_partition(c2b, part_id))
+    {
+        c2_partition_budget_claim(part_id,
+                1 /*nr_c2bs*/, castle_cache_pages_to_c2ps(nr_pages));
+    }
 
     /* Bump the "accessed" bit of the c2b */
     set_c2b_accessed(c2b);
@@ -5398,7 +5455,7 @@ static void castle_cache_hashes_fini(void)
 {
     struct hlist_node *l, *t;
     c2_block_t *c2b;
-    int i;
+    int i, part_id;
 
     if(!castle_cache_block_hash || !castle_cache_page_hash)
     {
@@ -5429,6 +5486,10 @@ static void castle_cache_hashes_fini(void)
             /* Cache list accounting. */
             atomic_dec(&castle_cache_block_clock_size);
             atomic_dec(&castle_cache_clean_blks);
+            for (part_id = 0; part_id < NR_CACHE_PARTITIONS; part_id++)
+                if (test_and_clear_c2b_partition(c2b, part_id))
+                    c2_partition_budget_return(part_id, 1 /*nr_c2bs*/,
+                            castle_cache_pages_to_c2ps(c2b->nr_pages));
 
             castle_cache_block_free(c2b);
         }
@@ -5442,6 +5503,8 @@ static void castle_cache_hashes_fini(void)
     BUG_ON(atomic_read(&c2_pref_active_window_size) != 0);
     BUG_ON(c2_pref_total_window_size != 0);
     BUG_ON(!RB_EMPTY_ROOT(&c2p_rb_root));
+    for (part_id = 0; part_id < NR_CACHE_PARTITIONS; part_id++)
+        BUG_ON(atomic_read(&castle_cache_partition[part_id].cur_c2ps) != 0);
 
 #ifdef CASTLE_DEBUG
     /* All cache pages should have been removed from the hash by now (there are no c2bs left) */
