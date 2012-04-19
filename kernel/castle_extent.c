@@ -3860,7 +3860,7 @@ void castle_extent_sup_ext_close(struct castle_slave *cs)
  *
  * @return mask_id  ID of the mask that reference is given for.
  */
-c_ext_mask_id_t castle_extent_mask_get(c_ext_id_t ext_id)
+c_ext_mask_id_t castle_extent_mask_get(c_ext_id_t ext_id, c_chk_cnt_t *raw_size)
 {
     c_ext_t *ext = __castle_extents_hash_get(ext_id);
     uint32_t val;
@@ -3881,6 +3881,16 @@ c_ext_mask_id_t castle_extent_mask_get(c_ext_id_t ext_id)
 
         BUG_ON(castle_extent_mask_hash_get(mask->mask_id) == NULL);
 
+        /* Work out how much raw space the extent is taking up using the current mask range. */
+        if(raw_size)
+        {
+            c_chk_cnt_t size;
+
+            size = 0;
+            size += mask->range.end - mask->range.start;
+            size *= ext->k_factor;
+            *raw_size = size;
+        }
         /* Return the mask ID. put() needs to be called with the same ID. */
         return mask->mask_id;
     }
@@ -3999,12 +4009,34 @@ c_ext_mask_id_t castle_extent_get(c_ext_id_t ext_id)
     read_lock_irqsave(&castle_extents_hash_lock, flags);
 
     /* Call low level get function. */
-    mask_id = castle_extent_mask_get(ext_id);
+    mask_id = castle_extent_mask_get(ext_id, NULL);
 
     debug_ext_ref("%s::count = %d\n", __FUNCTION__, count++);
     read_unlock_irqrestore(&castle_extents_hash_lock, flags);
 
     return mask_id;
+}
+
+/**
+ * Take a reference to the extent, and return the amount of freespace used up by the extent
+ * by the current mask, accounting for redundancy (i.e. the 2x in 2-RDA).
+ */
+void castle_extent_and_size_get(c_ext_id_t ext_id, c_ext_mask_id_t *mask_id, c_chk_cnt_t *size)
+{
+    unsigned long flags;
+
+    /* Return pointers musn't be null. */
+    BUG_ON(!mask_id);
+    BUG_ON(!size);
+
+    /* Read lock is good enough as ref count is atomic. */
+    read_lock_irqsave(&castle_extents_hash_lock, flags);
+
+    /* Call low level get function. */
+    *mask_id = castle_extent_mask_get(ext_id, size);
+
+    read_unlock_irqrestore(&castle_extents_hash_lock, flags);
+
 }
 
 /**
@@ -4194,7 +4226,7 @@ int castle_extent_link(c_ext_id_t ext_id)
     read_lock_irqsave(&castle_extents_hash_lock, flags);
 
     /* Try to get a reference on the extent. Would fail, if the extent is already dead. */
-    mask_id = castle_extent_mask_get(ext_id);
+    mask_id = castle_extent_mask_get(ext_id, NULL);
     if (MASK_ID_INVAL(mask_id))
     {
         /* Shouldn't have tried to create links on a dead extent. BUG. */
@@ -4476,7 +4508,7 @@ int castle_extent_rebuild_ext_get(c_ext_t *ext, int is_locked)
     BUG_ON(!MASK_ID_INVAL(ext->rebuild_mask_id));
 
     if (is_locked)
-        ext->rebuild_mask_id = castle_extent_mask_get(ext->ext_id);
+        ext->rebuild_mask_id = castle_extent_mask_get(ext->ext_id, NULL);
     else
         ext->rebuild_mask_id = castle_extent_get(ext->ext_id);
 

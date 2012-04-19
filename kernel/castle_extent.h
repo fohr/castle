@@ -114,7 +114,10 @@ void                castle_extent_mark_live                 (c_ext_id_t     ext_
                                                              c_da_t         da_id);
 void                castle_extent_mask_put                  (c_ext_mask_id_t mask_id);
 int                 castle_extent_free                      (c_ext_id_t     ext_id);
-c_ext_mask_id_t     castle_extent_get                       (c_ext_id_t     ext_id);
+c_ext_mask_id_t     castle_extent_get                       (c_ext_id_t ext_id);
+void                castle_extent_and_size_get              (c_ext_id_t ext_id,
+                                                             c_ext_mask_id_t *mask_id,
+                                                             c_chk_cnt_t *size);
 void                castle_extent_put                       (c_ext_mask_id_t mask_id);
 c_ext_mask_id_t     castle_extent_all_masks_get             (c_ext_id_t     ext_id);
 void                castle_extent_put_all                   (c_ext_mask_id_t mask_id);

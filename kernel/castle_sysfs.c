@@ -275,30 +275,9 @@ static ssize_t da_size_show(struct kobject *kobj,
                             char *buf)
 {
     struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj);
-    int i;
-    uint32_t size = 0;
+    uint32_t size;
 
-    /* Get READ lock on DA, to make sure DA doesn't disappear while printing stats. */
-    read_lock(&da->lock);
-
-    for(i=0; i<=da->top_level; i++)
-    {
-        struct castle_component_tree *ct;
-        struct list_head *lh;
-
-        list_for_each(lh, &da->levels[i].trees)
-        {
-            ct = list_entry(lh, struct castle_component_tree, da_list);
-
-            size += CHUNK(ct->tree_ext_free.ext_size) +
-                    CHUNK(ct->data_ext_free.ext_size) +
-                    CHUNK(ct->internal_ext_free.ext_size) +
-                    ((ct->bloom_exists)?ct->bloom.num_chunks:0) +
-                    atomic64_read(&ct->large_ext_chk_cnt);
-        }
-    }
-
-    read_unlock(&da->lock);
+    size = castle_double_array_size_get(da);
 
     return sprintf(buf, "%u\n", size);
 }

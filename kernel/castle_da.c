@@ -2852,7 +2852,7 @@ static int castle_da_l1_merge_cts_get(struct castle_double_array *da,
             castle_component_tree_del(da, ct);
             write_unlock(&da->lock);
             CASTLE_TRANSACTION_END;
-            castle_ct_put(ct, READ /*rw*/, NULL);
+            castle_ct_put(ct, READ /*rw*/);
 
             return -EAGAIN;
         }
@@ -4906,11 +4906,11 @@ static void castle_da_merge_cts_release(struct castle_da_merge *merge, int err)
     {
         /* Release all input trees. */
         for (i=0; i<merge->nr_trees; i++)
-            castle_ct_put(merge->in_trees[i], READ /*rw*/, NULL);
+            castle_ct_put(merge->in_trees[i], READ /*rw*/);
 
         /* Get-rid of empty out_tree. */
         if (out_tree && (atomic64_read(&out_tree->item_count) == 0))
-            castle_ct_put(out_tree, READ /*rw*/, NULL);
+            castle_ct_put(out_tree, READ /*rw*/);
     }
     /* Merge Failed and out_tree is valid. */
     else if (out_tree)
@@ -4923,7 +4923,7 @@ static void castle_da_merge_cts_release(struct castle_da_merge *merge, int err)
         if (err == -ESHUTDOWN)
             castle_ct_dealloc(out_tree);
         else
-            castle_ct_put(out_tree, READ /*rw*/, NULL);
+            castle_ct_put(out_tree, READ /*rw*/);
     }
 
     merge->out_tree_constr->tree = NULL;
@@ -5964,7 +5964,7 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
     ret = castle_da_merge_extents_alloc(merge);
     if(ret)
     {
-        castle_ct_put(out_tree, READ /*rw*/, NULL);
+        castle_ct_put(out_tree, READ /*rw*/);
         merge->out_tree_constr->tree = out_tree = NULL;
 
         goto error_out;
@@ -6134,7 +6134,7 @@ error_out:
         castle_da_merge_res_pool_detach(merge, ret);
         if (out_tree->bloom_exists)
             castle_bloom_abort(&out_tree->bloom);
-        castle_ct_put(out_tree, READ /*rw*/, NULL);
+        castle_ct_put(out_tree, READ /*rw*/);
         merge->out_tree_constr->tree = out_tree = NULL;
     }
     castle_printk(LOG_ERROR, "%s::Failed a merge with ret=%d\n", __FUNCTION__, ret);
@@ -8497,18 +8497,12 @@ static int castle_data_exts_read(void)
  * @param   ct      Component Tree to get bump reference count on
  * @param   write   1 => Get a write reference
  *                  0 => Get a read reference
- * @param   refs    *    => Pre-allocated array of extent references.
- *                  NULL => Don't take extent references.
  *
- * NOTE: Extent references must be taken on all CTs which might be involved in
- *       partial merges, i.e. those that are the result of a merge.
- *
+ * @also castle_ct_and_exts_get()
  * @also castle_ct_put()
  */
-void castle_ct_get(struct castle_component_tree *ct, int rw, c_ct_ext_ref_t *refs)
+void castle_ct_get(struct castle_component_tree *ct, int rw)
 {
-    int i, nr_refs = 0;
-
     /* NOTE: Caller should hold castle_da_lock. */
     BUG_ON(write_can_lock(&ct->da->lock));
 
@@ -8517,55 +8511,96 @@ void castle_ct_get(struct castle_component_tree *ct, int rw, c_ct_ext_ref_t *ref
     if (rw == WRITE)
         /* Take write reference. */
         atomic_inc(&ct->write_ref_count);
+}
 
-    if (refs == NULL)
-    {
-        BUG_ON(ct->level >= MIN_DA_SERDES_LEVEL); /* allow RWCTs only */
 
-        return;
-    }
+/**
+ * Get a reference to the CT and all extents that belong to the CT. The references are
+ * saved in the refs structure provided. Also, the contribution towards the total
+ * amount of freespace used up by this DA is computed, and returned through the second
+ * return pointer.
+ *
+ * NOTE: The CT ref taken by this function is a read reference.
+ *
+ * @param   refs                Pre-allocated array of extent references.
+ * @param   da_size_contrib_p   Return pointer for the DA size contribution due to this CT.
+ *
+ * NOTE: Extent references must be taken on all CTs which might be involved in
+ *       partial merges, i.e. those that are the result of a merge.
+ *
+ */
+void castle_ct_and_exts_get(struct castle_component_tree *ct,
+                            c_ct_ext_ref_t *refs,
+                            c_chk_cnt_t *da_size_contrib_p)
+{
+    int i, nr_refs = 0;
+    c_chk_cnt_t da_size_contrib, size_delta;
 
+    /* Return pointers musn't be null. */
+    BUG_ON(!refs);
+    BUG_ON(!da_size_contrib_p);
+
+    /* Get ref to the CT itself first. */
+    castle_ct_get(ct, 0 /* not a write. */);
+
+    /* Work out how many extents there are. */
     refs->nr_refs = CASTLE_CT_EXTENTS(ct);
 
+    /* Init the DA contribution to 0 to start with. */
+    da_size_contrib = 0;
+
     /* Take references on all extents associated with CT. */
-    refs->refs[nr_refs++] = castle_extent_get(ct->internal_ext_free.ext_id);
-    refs->refs[nr_refs++] = castle_extent_get(ct->tree_ext_free.ext_id);
+    castle_extent_and_size_get(ct->internal_ext_free.ext_id, &refs->refs[nr_refs++], &size_delta);
+    da_size_contrib += size_delta;
+
+    castle_extent_and_size_get(ct->tree_ext_free.ext_id, &refs->refs[nr_refs++], &size_delta);
+    da_size_contrib += size_delta;
+
     if (ct->bloom_exists)
-        refs->refs[nr_refs++] = castle_extent_get(ct->bloom.ext_id);
+    {
+        castle_extent_and_size_get(ct->bloom.ext_id, &refs->refs[nr_refs++], &size_delta);
+        da_size_contrib += size_delta;
+    }
+
     for (i = 0; i < ct->nr_data_exts; i++)
-        refs->refs[nr_refs++] = castle_extent_get(ct->data_exts[i]);
+    {
+        castle_extent_and_size_get(ct->data_exts[i], &refs->refs[nr_refs++], &size_delta);
+        /* Add the data extent to the total DA size if:
+           a) tree is not in merge
+           b) tree is an input to a merge
+           c) if the tree is the output of a merge, only add its own data extent,
+              other data extents have already been counted, when input CTs were inspected.
+         */
+        if(!test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags) ||
+           ct->data_exts[i] == ct->data_ext_free.ext_id)
+            da_size_contrib += size_delta;
+    }
 
     /* Verify we got references on all extents. */
     BUG_ON(nr_refs != refs->nr_refs);
     for (i = 0; i < nr_refs; i++)
         BUG_ON(refs->refs[i] == INVAL_MASK_ID);
+
+    *da_size_contrib_p = da_size_contrib;
 }
 
 /**
- * Drop CT and extent references.
+ * Drop CT reference.
  *
  * @param   ct      Component Tree to drop references on
- * @param   rw      READ  => Get a read reference
- *                  WRITE => Get a write reference
- * @param   refs    *     => Pointer to extent references to drop
- *                  NULL  => Don't drop extent references (not taken during get)
+ * @param   rw      1 => Drop a write reference
+ *                  0 => Drop a read reference
  *
+ * @also castle_ct_and_exts_put()
  * @also castle_ct_get()
  */
-void castle_ct_put(struct castle_component_tree *ct, int rw, c_ct_ext_ref_t *refs)
+void castle_ct_put(struct castle_component_tree *ct, int rw)
 {
-    int i;
-
     BUG_ON(in_atomic());
 
     if (rw == WRITE)
         /* Drop write reference. */
         atomic_dec(&ct->write_ref_count);
-
-    /* Drop CT extent references. */
-    if (refs)
-        for (i = 0; i < refs->nr_refs; i++)
-            castle_extent_put(refs->refs[i]);
 
     if(likely(!atomic_dec_and_test(&ct->ref_count)))
         return;
@@ -8600,6 +8635,26 @@ void castle_ct_put(struct castle_component_tree *ct, int rw, c_ct_ext_ref_t *ref
     /* Poison ct (note this will be repoisoned by kfree on kernel debug build. */
     memset(ct, 0xde, sizeof(struct castle_component_tree));
     castle_free(ct);
+}
+
+/**
+ * Drop all references to extents that belong/used to belong to the CT, and the CT reference.
+ *
+ * @param ct    Component tree to drop the ref for
+ * @param refs  Array of extent references to drop
+ */
+void castle_ct_and_exts_put(struct castle_component_tree *ct, c_ct_ext_ref_t *refs)
+{
+    int i;
+
+    BUG_ON(!refs);
+
+    /* Drop CT extent references first. */
+    for (i = 0; i < refs->nr_refs; i++)
+        castle_extent_put(refs->refs[i]);
+
+    /* Then drop the CT. */
+    castle_ct_put(ct, READ /*rw*/);
 }
 
 /**
@@ -8669,7 +8724,7 @@ static void __castle_da_level0_modified_promote(struct work_struct *work)
                                                    0 /*in_tran*/,
                                                    LFS_VCT_T_INVALID);
         }
-        castle_ct_put(ct, WRITE /*rw*/, NULL);
+        castle_ct_put(ct, WRITE /*rw*/);
         if (create_failed)
             goto out;
     }
@@ -9396,7 +9451,7 @@ err_out:
         l->next = NULL; /* for castle_ct_put() */
         l->prev = NULL; /* for castle_ct_put() */
         ct = list_entry(l, struct castle_component_tree, da_list);
-        castle_ct_put(ct, READ /*rw*/, NULL);
+        castle_ct_put(ct, READ /*rw*/);
     }
 
     /* Clear the growing bit and return failure. */
@@ -10177,7 +10232,7 @@ static int _castle_da_rwct_create(struct castle_double_array *da,
 
 no_space:
     if (ct)
-        castle_ct_put(ct, READ /*rw*/, NULL);
+        castle_ct_put(ct, READ /*rw*/);
     return -ENOSPC;
 }
 
@@ -10320,7 +10375,7 @@ static struct castle_component_tree* castle_da_rwct_get(struct castle_double_arr
     read_lock(&da->lock);
     ct = __castle_da_rwct_get(da, cpu_index);
     BUG_ON(!ct);
-    castle_ct_get(ct, WRITE /*rw*/, NULL);
+    castle_ct_get(ct, WRITE /*rw*/);
     read_unlock(&da->lock);
 
     return ct;
@@ -10358,7 +10413,7 @@ again:
     debug("Number of items in component tree %d, # items %ld. Trying to add a new rwct.\n",
             ct->seq, atomic64_read(&ct->item_count));
     /* Drop reference for old CT. */
-    castle_ct_put(ct, WRITE /*rw*/, NULL);
+    castle_ct_put(ct, WRITE /*rw*/);
 
     /* Try creating a new CT. */
     ret = castle_da_rwct_create(da, cpu_index, 0 /* in_tran */);
@@ -10561,6 +10616,7 @@ static struct castle_da_cts_proxy* castle_da_cts_proxy_create(struct castle_doub
     proxy = castle_alloc(sizeof(struct castle_da_cts_proxy));
     if (!proxy)
         return NULL;
+    proxy->da_size = 0;
 
 reallocate:
     read_lock(&da->lock);
@@ -10632,6 +10688,7 @@ reallocate:
         {
             struct castle_da_cts_proxy_ct *proxy_ct;
             struct castle_component_tree *ct_p;
+            c_chk_cnt_t da_size_contrib;
 
             /* Skip if the CT is not queriable. */
             ct_p = list_entry(l, struct castle_component_tree, da_list);
@@ -10642,7 +10699,8 @@ reallocate:
             proxy_ct            = &proxy->cts[ct++];
             proxy_ct->ct        = ct_p;
             proxy_ct->ext_refs  = (c_ct_ext_ref_t *)ext_refs;
-            castle_ct_get(proxy_ct->ct, READ /*rw*/, proxy_ct->ext_refs);
+            castle_ct_and_exts_get(proxy_ct->ct, proxy_ct->ext_refs, &da_size_contrib);
+            proxy->da_size += da_size_contrib;
             VERIFY_PROXY_CT(proxy_ct->ct, da);
             ext_refs += sizeof(c_ct_ext_ref_t)
                 + proxy_ct->ext_refs->nr_refs * sizeof(((c_ct_ext_ref_t *)0)->refs[0]);
@@ -10810,7 +10868,7 @@ static inline void _castle_da_cts_proxy_put(struct castle_da_cts_proxy *proxy)
             BUG_ON(!proxy->cts[ct].pk);
         else
             BUG_ON(proxy->cts[ct].pk);
-        castle_ct_put(proxy->cts[ct].ct, READ /*rw*/, proxy->cts[ct].ext_refs);
+        castle_ct_and_exts_put(proxy->cts[ct].ct, proxy->cts[ct].ext_refs);
     }
 
     castle_free(proxy->ext_refs);
@@ -11009,6 +11067,26 @@ found:
     *index = i;
 
     return proxy_ct->ct;
+}
+
+
+/**
+ * Return the amount of disk space used up by this DA. This accounts for any redundancy
+ * (i.e. the 2x for 2-RDA).
+ *
+ * @param da    Double array to get the size for
+ */
+c_chk_cnt_t castle_double_array_size_get(struct castle_double_array *da)
+{
+    struct castle_da_cts_proxy *cts_proxy;
+    c_chk_cnt_t size;
+
+    cts_proxy = castle_da_cts_proxy_get(da);
+    size = cts_proxy->da_size;
+
+    castle_da_cts_proxy_put(cts_proxy);
+
+    return size;
 }
 
 /**
@@ -11323,7 +11401,7 @@ static void castle_da_ct_write_complete(c_bvec_t *c_bvec, int err, c_val_tup_t c
     if(err == -ENOSPC)
     {
         /* Release the reference to the tree. */
-        castle_ct_put(ct, WRITE /*rw*/, NULL);
+        castle_ct_put(ct, WRITE /*rw*/);
         /*
          * For now all inserts reserve space, and castle_da_write_bvec_start is not reentrant,
          * therefore err should never be -ENOSPC.
@@ -11543,7 +11621,7 @@ new_ct:
     debug("Number of items in component tree %d, # items %ld. Trying to add a new rwct.\n",
             ct->seq, atomic64_read(&ct->item_count));
     /* Drop reference for old CT. */
-    castle_ct_put(ct, WRITE /*rw*/, NULL);
+    castle_ct_put(ct, WRITE /*rw*/);
 
     ret = castle_da_rwct_create(da, c_bvec->cpu_index, 0 /* in_tran */);
     if((ret == 0) || (ret == -EAGAIN))
@@ -11820,7 +11898,7 @@ void castle_da_destroy_complete(struct castle_double_array *da)
             castle_component_tree_del(da, ct);
             write_unlock(&da->lock);
 
-            castle_ct_put(ct, READ /*rw*/, NULL);
+            castle_ct_put(ct, READ /*rw*/);
         }
     }
 
@@ -12603,7 +12681,7 @@ castle_da_in_stream_start(struct castle_double_array    *da,
 
     if (ret)
     {
-        castle_ct_put(constr->tree, READ, NULL);
+        castle_ct_put(constr->tree, READ);
         constr->tree = NULL;
         goto err_out;
     }
@@ -12625,7 +12703,7 @@ void castle_da_in_stream_complete(struct castle_immut_tree_construct *constr, in
     {
         if (ct)
         {
-            castle_ct_put(ct, READ, NULL);
+            castle_ct_put(ct, READ);
             constr->tree = NULL;
         }
 
