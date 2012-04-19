@@ -1883,13 +1883,13 @@ err0: castle_free(op->key);
  */
 
 static void __castle_back_iter_next(void *data);
-DEFINE_WQ_TRACE_FN(__castle_back_iter_next, struct castle_back_stateful_op, seq_id);
+DEFINE_WQ_TRACE_FN(__castle_back_iter_next, struct castle_back_stateful_op);
 
 static void _castle_back_iter_next(struct castle_back_op *op,
                                    struct castle_back_stateful_op *stateful_op,
                                    int fastpath);
 static void __castle_back_iter_finish(void *data);
-DEFINE_WQ_TRACE_FN(__castle_back_iter_finish, struct castle_back_stateful_op, seq_id);
+DEFINE_WQ_TRACE_FN(__castle_back_iter_finish, struct castle_back_stateful_op);
 
 static void _castle_back_iter_finish(struct castle_back_op *op,
                                      struct castle_back_stateful_op *stateful_op,

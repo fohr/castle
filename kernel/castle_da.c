@@ -11091,7 +11091,7 @@ static inline void _castle_da_bloom_submit(void *data)
 
     castle_da_bloom_submit_cb(c_bvec, key_exists);
 }
-DEFINE_WQ_TRACE_FN(_castle_da_bloom_submit, c_bvec_t, seq_id);
+DEFINE_WQ_TRACE_FN(_castle_da_bloom_submit, c_bvec_t);
 
 /**
  * Perform a lookup in the entire bloom filter.

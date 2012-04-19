@@ -1168,7 +1168,7 @@ static void castle_object_next_available(castle_object_iterator_t *iter)
 {
     castle_object_iter_next(iter, iter->next_available, iter->next_available_data);
 }
-DEFINE_WQ_TRACE_FN(castle_object_next_available, castle_object_iterator_t, seq_id);
+DEFINE_WQ_TRACE_FN(castle_object_next_available, castle_object_iterator_t);
 
 void castle_object_slice_get_end_io(void *obj_iter, int err)
 {
@@ -1287,7 +1287,7 @@ out:
     castle_object_value_release(&cvt);
     castle_utils_bio_free(c_bvec->c_bio);
 }
-DEFINE_WQ_TRACE_FN(__castle_object_get_complete, c_bvec_t, seq_id);
+DEFINE_WQ_TRACE_FN(__castle_object_get_complete, c_bvec_t);
 
 void castle_object_get_io_end(c2_block_t *c2b, int did_io)
 {

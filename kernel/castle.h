@@ -59,10 +59,10 @@ void ATTRIB_NORET bug_fn(char *file, unsigned long line);
 
 #define CASTLE_INIT_WORK_AND_TRACE(_work, _func, _data) INIT_WORK((_work), (void (*)(void *)) (__trace##_func), _data)
 
-#define DEFINE_WQ_TRACE_FN(_func, _struct, _member)                                 \
+#define DEFINE_WQ_TRACE_FN(_func, _struct)                                          \
 static void __trace##_func(void *data)                                              \
 {                                                                                   \
-    int seq_id = ((_struct *)data)->_member;                                        \
+    int seq_id = ((_struct *)data)->seq_id;                                         \
                                                                                     \
     trace_CASTLE_REQUEST_CLAIM(seq_id);                                             \
     _func(data);                                                                    \

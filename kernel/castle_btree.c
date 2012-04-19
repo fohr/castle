@@ -1210,7 +1210,7 @@ void castle_btree_process(c_bvec_t *c_bvec)
     else
         castle_btree_read_process(c_bvec);
 }
-DEFINE_WQ_TRACE_FN(castle_btree_process, c_bvec_t, seq_id);
+DEFINE_WQ_TRACE_FN(castle_btree_process, c_bvec_t);
 
 static void castle_btree_c2b_forget(c_bvec_t *c_bvec)
 {
@@ -1432,7 +1432,7 @@ static void _castle_btree_submit(c_bvec_t *c_bvec)
     castle_debug_bvec_update(c_bvec, C_BVEC_VERSION_FOUND);
     __castle_btree_submit(c_bvec, root_cep, btree->max_key);
 }
-DEFINE_WQ_TRACE_FN(_castle_btree_submit, c_bvec_t, seq_id);
+DEFINE_WQ_TRACE_FN(_castle_btree_submit, c_bvec_t);
 
 
 /**
@@ -1741,7 +1741,7 @@ static void _castle_btree_iter_path_traverse(c_iter_t *c_iter)
     iter_debug("iter %p\n", c_iter);
     __castle_btree_iter_path_traverse(c_iter);
 }
-DEFINE_WQ_TRACE_FN(_castle_btree_iter_path_traverse, c_iter_t, seq_id);
+DEFINE_WQ_TRACE_FN(_castle_btree_iter_path_traverse, c_iter_t);
 
 /**
  * IO completion callback handler for castle_btree_iter_path_traverse().
@@ -1961,7 +1961,7 @@ static void _castle_btree_iter_start(c_iter_t *c_iter)
 {
     __castle_btree_iter_start(c_iter);
 }
-DEFINE_WQ_TRACE_FN(_castle_btree_iter_start, c_iter_t, seq_id);
+DEFINE_WQ_TRACE_FN(_castle_btree_iter_start, c_iter_t);
 
 /**
  * Asynchronously start the btree iterator.
