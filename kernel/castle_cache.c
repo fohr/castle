@@ -3290,7 +3290,7 @@ USED static int castle_cache_block_evictlist_process(void)
  */
 int castle_cache_block_destroy(c2_block_t *c2b)
 {
-    int ret;
+    int ret, part_id;
 
     /* Check whether the c2b is busy, under the hash lock so that no other references
        can be taken. */
@@ -3316,6 +3316,12 @@ int castle_cache_block_destroy(c2_block_t *c2b)
         put_c2b_and_demote(c2b);
         return ret;
     }
+
+    for (part_id = 0; part_id < NR_CACHE_PARTITIONS; part_id++)
+        if (test_clear_c2b_partition(c2b, part_id))
+            c2_partition_budget_return(part_id, 1 /*nr_c2bs*/,
+                    castle_cache_pages_to_c2ps(c2b->nr_pages));
+
     /* Succeeded deleting the c2b from the hash, CLOCK (and evictlist).
      * Decrement the ref count. */
     put_c2b(c2b);
