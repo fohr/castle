@@ -8,8 +8,10 @@ typedef void  (*c2b_end_io_t)(struct castle_cache_block *c2b, int did_io);
 
 #define C2B_STATE_BITS_BITS         56          /**< Bits reserved for c2b state.                 */
 #define C2B_STATE_PARTITION_OFFSET  C2B_STATE_BITS_BITS /**< Offset of c2b_state.partition.       */
-#define C2B_STATE_PARTITION_BITS    8           /**< Bits reserved for c2b cache partition.       */
-STATIC_BUG_ON(C2B_STATE_BITS_BITS + C2B_STATE_PARTITION_BITS != 64);
+#define C2B_STATE_PARTITION_BITS    4           /**< Bits reserved for c2b cache partition.       */
+#define C2B_STATE_ACCESS_BITS       4           /**< Bits reserved for CLOCK access information.  */
+#define C2B_STATE_ACCESS_MAX        ((1 << C2B_STATE_ACCESS_BITS) - 1)
+STATIC_BUG_ON(C2B_STATE_BITS_BITS + C2B_STATE_PARTITION_BITS + C2B_STATE_ACCESS_BITS != 64);
 
 struct castle_cache_page;
 typedef struct castle_cache_block {
@@ -33,6 +35,7 @@ typedef struct castle_cache_block {
     struct c2b_state {
         unsigned long          bits:C2B_STATE_BITS_BITS;           /**< State bitfield            */
         unsigned long          partition:C2B_STATE_PARTITION_BITS; /**< Cache partition bitfield  */
+        unsigned long          accessed:C2B_STATE_ACCESS_BITS;     /**< CLOCK access bitfield     */
     } state;
     atomic_t                   count;           /**< Count of active consumers                    */
     atomic_t                   lock_cnt;

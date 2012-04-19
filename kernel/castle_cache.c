@@ -59,7 +59,6 @@ enum c2b_state_bits {
     C2B_barrier,            /**< Block in write IO, and should be used as a barrier write.      */
     C2B_eio,                /**< Block failed to write to slave(s)                              */
     C2B_evictlist,          /**< Block is on castle_cache_block_evictlist.                      */
-    C2B_accessed,           /**< Block has been accessed recently (used by CLOCK).              */
     C2B_num_state_bits,     /**< Number of allocated c2b state bits (must be last).             */
 };
 STATIC_BUG_ON(C2B_num_state_bits >= C2B_STATE_BITS_BITS); /* Can use 0..C2B_STATE_BITS_BITS-1   */
@@ -105,7 +104,6 @@ C2B_FNS(in_flight, in_flight)
 C2B_FNS(barrier, barrier)
 C2B_FNS(eio, eio)
 C2B_FNS(evictlist, evictlist)
-C2B_FNS(accessed, accessed)
 
 /* c2p encapsulates multiple memory pages (in order to reduce overheads).
    NOTE: In order for this to work, c2bs must necessarily be allocated in
@@ -508,6 +506,80 @@ EXPORT_SYMBOL(castle_cache_stats_print);
 int castle_cache_size_get()
 {
     return castle_cache_size;
+}
+
+/**
+ * Increase the c2b access count.
+ */
+static int c2b_accessed_inc(c2_block_t *c2b)
+{
+    unsigned long old, new;
+    struct c2b_state *p_old, *p_new;
+    p_old = (struct c2b_state *) &old;
+    p_new = (struct c2b_state *) &new;
+
+    do
+    {
+        *p_old = *p_new = c2b->state;
+        if (p_new->accessed < C2B_STATE_ACCESS_MAX) /* prevent overflow */
+            ++p_new->accessed;
+        else break;
+    }
+    while (cmpxchg((unsigned long *) &c2b->state, old, new) != old);
+
+    return p_new->accessed;
+}
+
+/**
+ * Decrease the c2b access count.
+ */
+static int c2b_accessed_dec(c2_block_t *c2b)
+{
+    unsigned long old, new;
+    struct c2b_state *p_old, *p_new;
+    p_old = (struct c2b_state *) &old;
+    p_new = (struct c2b_state *) &new;
+
+    do
+    {
+        *p_old = *p_new = c2b->state;
+        if (p_new->accessed > 0) /* prevent underflow */
+            --p_new->accessed;
+        else break;
+    }
+    while (cmpxchg((unsigned long *) &c2b->state, old, new) != old);
+
+    return p_new->accessed;
+}
+
+/**
+ * Assign a specific value to the c2b access count.
+ */
+static int c2b_accessed_assign(c2_block_t *c2b, int val)
+{
+    unsigned long old, new;
+    struct c2b_state *p_old, *p_new;
+    p_old = (struct c2b_state *) &old;
+    p_new = (struct c2b_state *) &new;
+
+    do
+    {
+        *p_old = *p_new = c2b->state;
+        if (p_new->accessed != val) /* prevent infinite loops */
+            p_new->accessed = val;
+        else break;
+    }
+    while (cmpxchg((unsigned long *) &c2b->state, old, new) != old);
+
+    return p_new->accessed;
+}
+
+/**
+ * Return the value of the c2b access count.
+ */
+inline static int c2b_accessed(c2_block_t *c2b)
+{
+    return c2b->state.accessed;
 }
 
 /**
@@ -2521,7 +2593,7 @@ static c2_block_t* castle_cache_block_hash_find(c_ext_pos_t cep, uint32_t nr_pag
  */
 void put_c2b_and_demote(c2_block_t *c2b)
 {
-    clear_c2b_accessed(c2b);
+    c2b_accessed_assign(c2b, 0);
     put_c2b(c2b);
 }
 
@@ -2534,8 +2606,8 @@ void put_c2b_and_demote(c2_block_t *c2b)
  * @return Matching c2b with an additional reference
  * @return NULL if no matches were found
  *
- * Note that this function does not set the "accessed" bit of the c2b; it is the caller's
- * responsibility to do so if that's the intended outcome.
+ * Note that this function does not modify the "accessed" field of the c2b; it is the
+ * caller's responsibility to do so if that's the intended outcome.
  */
 static inline c2_block_t* castle_cache_block_hash_get(c_ext_pos_t cep,
                                                       uint32_t nr_pages)
@@ -2950,6 +3022,7 @@ static void castle_cache_block_init(c2_block_t *c2b,
     c2b->cep = cep;
     c2b->state.bits = INIT_C2B_BITS | (uptodate ? (1 << C2B_uptodate) : 0);
     c2b->state.partition = 0;
+    c2b->state.accessed = 1;    /* not zero, but not a lot either */
     c2b->nr_pages = nr_pages;
     c2b->c2ps = c2ps;
 
@@ -3160,10 +3233,10 @@ static int castle_cache_block_hash_clean(void)
 
         c2b = list_entry(castle_cache_block_clock_hand, c2_block_t, clock);
 
-        /* skip recently accessed blocks (but clear their "accessed" bit) */
+        /* skip recently accessed blocks (and decrease their "accessed" field) */
         if (c2b_accessed(c2b))
         {
-            clear_c2b_accessed(c2b);
+            c2b_accessed_dec(c2b);
             continue;
         }
 
@@ -3547,6 +3620,11 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
             /* Make sure that the number of pages agrees */
             BUG_ON(c2b->nr_pages != nr_pages);
 
+            /* Bump the "accessed" field of the c2b */
+            c2b_accessed_inc(c2b);
+//            /* Bump the "accessed" field all the way to its maximum value */
+//            c2b_accessed_assign(c2b, C2B_STATE_ACCESS_MAX);
+
             goto out;
         }
 
@@ -3645,9 +3723,6 @@ out:
         c2_partition_budget_claim(part_id,
                 1 /*nr_c2bs*/, castle_cache_pages_to_c2ps(nr_pages));
     }
-
-    /* Bump the "accessed" bit of the c2b */
-    set_c2b_accessed(c2b);
 
     return c2b;
 }
