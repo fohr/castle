@@ -1201,8 +1201,9 @@ static void castle_btree_read_process(c_bvec_t *c_bvec)
  * @also castle_btree_write_process()
  * @also castle_btree_read_process()
  */
-void castle_btree_process(c_bvec_t *c_bvec)
+void castle_btree_process(struct work_struct *work)
 {
+    c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
     int write = (c_bvec_data_dir(c_bvec) == WRITE);
 
     if (write)
@@ -1210,7 +1211,6 @@ void castle_btree_process(c_bvec_t *c_bvec)
     else
         castle_btree_read_process(c_bvec);
 }
-DEFINE_WQ_TRACE_FN(castle_btree_process, c_bvec_t);
 
 static void castle_btree_c2b_forget(c_bvec_t *c_bvec)
 {
@@ -1342,12 +1342,11 @@ static void castle_btree_submit_io_end(c2_block_t *c2b, int did_io)
          * how deep we are in the tree.  A single queue cannot be used, because
          * a requested blocked on lock_c2b() would block the entire queue,
          * which would lead to a deadlock. */
-        CASTLE_INIT_WORK_AND_TRACE(&c_bvec->work, castle_btree_process, c_bvec);
-
+        CASTLE_INIT_WORK(&c_bvec->work, castle_btree_process);
         castle_btree_bvec_queue(c_bvec);
     }
     else
-        castle_btree_process(c_bvec);
+        castle_btree_process(&c_bvec->work);
 }
 
 static void __castle_btree_submit(c_bvec_t *c_bvec,
@@ -1389,13 +1388,33 @@ static void __castle_btree_submit(c_bvec_t *c_bvec,
         castle_btree_c2b_forget(c_bvec);
 
     if(!c2b_uptodate(c2b))
+    {
+        /* If the buffer doesn't contain up to date data, schedule the IO */
         castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_OUTOFDATE);
+        BUG_ON(_castle_cache_block_read(c2b,
+                                        castle_btree_submit_io_end,
+                                        c_bvec));
+    }
+    else
+    {
+        struct castle_btree_node *node;
 
-    /* Submit i/o request irrespective of C2B state. castle_btree_submit_io_end() can
-     * handle all cases. */
-    BUG_ON(_castle_cache_block_read(c2b,
-                                    castle_btree_submit_io_end,
-                                    c_bvec));
+        trace_CASTLE_CACHE_BLOCK_READ(0 /*submitted_c2ps*/,
+                                      c2b->cep.ext_id,
+                                      castle_extent_type_get(c2b->cep.ext_id),
+                                      c2b->cep.offset,
+                                      c2b->nr_pages,
+                                      1 /*async*/);
+
+        node = c2b_bnode(c2b);
+        BUG_ON(node->magic != BTREE_NODE_MAGIC);
+        /* The buffer is up to date.  Copy data and call the node processing
+         * function directly.  c2b_remember should not return an error because
+         * the btree node has been normalized already. */
+        castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_UPTODATE);
+        castle_btree_c2b_remember(c_bvec, c2b);
+        castle_btree_process(&c_bvec->work);
+    }
 }
 
 /**
@@ -1406,13 +1425,15 @@ static void __castle_btree_submit(c_bvec_t *c_bvec,
  * - Except for some stateful ops and gets we expect to go largely uncontended
  *   for CT locks
  */
-static void _castle_btree_submit(c_bvec_t *c_bvec)
+static void _castle_btree_submit(struct work_struct *work)
 {
     struct castle_component_tree *ct;
     struct castle_btree_type *btree;
     c_ext_pos_t root_cep;
+    c_bvec_t *c_bvec;
 
     /* Work out various request details. */
+    c_bvec = container_of(work, c_bvec_t, work);
     ct = c_bvec->tree;
     btree = castle_btree_type_get(ct->btree_type);
 
@@ -1429,8 +1450,6 @@ static void _castle_btree_submit(c_bvec_t *c_bvec)
     castle_debug_bvec_update(c_bvec, C_BVEC_VERSION_FOUND);
     __castle_btree_submit(c_bvec, root_cep, btree->max_key);
 }
-DEFINE_WQ_TRACE_FN(_castle_btree_submit, c_bvec_t);
-
 
 /**
  * Submit request to the btree.
@@ -1445,14 +1464,14 @@ void castle_btree_submit(c_bvec_t *c_bvec, int go_async)
     c_bvec->btree_parent_node = NULL;
     c_bvec->parent_key        = NULL;
 
-    CASTLE_INIT_WORK_AND_TRACE(&c_bvec->work, _castle_btree_submit, c_bvec);
+    CASTLE_INIT_WORK(&c_bvec->work, _castle_btree_submit);
 
     if (go_async)
         /* Submit asynchronously. */
         castle_btree_bvec_queue(c_bvec);
     else
         /* Submit directly. */
-        _castle_btree_submit(c_bvec);
+        _castle_btree_submit(&c_bvec->work);
 }
 
 /**********************************************************************************************/
@@ -1730,12 +1749,15 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
 /**
  * @also castle_btree_iter_path_traverse_endio()
  */
-static void _castle_btree_iter_path_traverse(c_iter_t *c_iter)
+static void _castle_btree_iter_path_traverse(struct work_struct *work)
 {
+    c_iter_t *c_iter = container_of(work, c_iter_t, work);
+
+    trace_CASTLE_REQUEST_CLAIM(c_iter->seq_id);
+
     iter_debug("iter %p\n", c_iter);
     __castle_btree_iter_path_traverse(c_iter);
 }
-DEFINE_WQ_TRACE_FN(_castle_btree_iter_path_traverse, c_iter_t);
 
 /**
  * IO completion callback handler for castle_btree_iter_path_traverse().
@@ -1782,7 +1804,7 @@ static void castle_btree_iter_path_traverse_endio(c2_block_t *c2b, int did_io)
          *
          * NOTE: The +1 is required to match the workqueues we are using in normal
          *       btree walks. */
-        CASTLE_INIT_WORK_AND_TRACE(&c_iter->work, _castle_btree_iter_path_traverse, &c_iter);
+        CASTLE_INIT_WORK(&c_iter->work, _castle_btree_iter_path_traverse);
         queue_work(castle_wqs[c_iter->depth+MAX_BTREE_DEPTH], &c_iter->work);
     }
     else
@@ -1951,11 +1973,14 @@ static int __castle_btree_iter_start(c_iter_t *c_iter)
     return castle_btree_iter_path_traverse(c_iter, root_cep);
 }
 
-static void _castle_btree_iter_start(c_iter_t *c_iter)
+static void _castle_btree_iter_start(struct work_struct *work)
 {
+    c_iter_t *c_iter = container_of(work, c_iter_t, work);
+
+    trace_CASTLE_REQUEST_CLAIM(c_iter->seq_id);
+
     __castle_btree_iter_start(c_iter);
 }
-DEFINE_WQ_TRACE_FN(_castle_btree_iter_start, c_iter_t);
 
 /**
  * Asynchronously start the btree iterator.
@@ -1967,7 +1992,7 @@ DEFINE_WQ_TRACE_FN(_castle_btree_iter_start, c_iter_t);
 void castle_btree_iter_start(c_iter_t* c_iter)
 {
     c_iter->running_async = 1;
-    CASTLE_INIT_WORK_AND_TRACE(&c_iter->work, _castle_btree_iter_start, c_iter);
+    CASTLE_INIT_WORK(&c_iter->work, _castle_btree_iter_start);
     queue_work(castle_wqs[0], &c_iter->work);
 }
 

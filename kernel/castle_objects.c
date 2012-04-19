@@ -967,7 +967,6 @@ int castle_object_replace(struct castle_object_replace *replace,
     c_bvec->cvt_get        = castle_object_replace_cvt_get;
     c_bvec->queue_complete = castle_object_replace_queue_complete;
     c_bvec->orig_complete  = NULL;
-    c_bvec->seq_id         = atomic_inc_return(&castle_req_seq_id);
     atomic_set(&c_bvec->reserv_nodes, 0);
 
     /* Save c_bvec in the replace. */
@@ -975,13 +974,8 @@ int castle_object_replace(struct castle_object_replace *replace,
     CVT_INVALID_INIT(replace->cvt);
     replace->data_c2b = NULL;
 
-    trace_CASTLE_REQUEST_BEGIN(c_bvec->seq_id, CASTLE_RING_REPLACE);
-
     /* Queue up in the DA. */
     castle_double_array_queue(c_bvec);
-
-    trace_CASTLE_REQUEST_RELEASE(c_bvec->seq_id);
-
     return 0;
 
 err0:
@@ -1170,11 +1164,14 @@ int castle_object_iter_finish(castle_object_iterator_t *iterator)
     return 0;
 }
 
-static void castle_object_next_available(castle_object_iterator_t *iter)
+static void castle_object_next_available(struct work_struct *work)
 {
+    castle_object_iterator_t *iter = container_of(work, castle_object_iterator_t, work);
+
+    trace_CASTLE_REQUEST_CLAIM(iter->seq_id);
+
     castle_object_iter_next(iter, iter->next_available, iter->next_available_data);
 }
-DEFINE_WQ_TRACE_FN(castle_object_next_available, castle_object_iterator_t);
 
 void castle_object_slice_get_end_io(void *obj_iter, int err)
 {
@@ -1182,7 +1179,7 @@ void castle_object_slice_get_end_io(void *obj_iter, int err)
 
     BUG_ON(!castle_objects_rq_iter_prep_next(iter));
     debug_rq("Done async key read: Re-scheduling slice_get()- iterator: %p\n", iter);
-    CASTLE_INIT_WORK_AND_TRACE(&iter->work, castle_object_next_available, iter);
+    CASTLE_INIT_WORK(&iter->work, castle_object_next_available);
     queue_work(castle_wq, &iter->work);
 }
 
@@ -1218,8 +1215,9 @@ void castle_object_get_continue(struct castle_bio_vec *c_bvec,
                                 c_ext_pos_t  data_cep,
                                 uint64_t data_length);
 
-static void __castle_object_get_complete(c_bvec_t *c_bvec)
+void __castle_object_get_complete(struct work_struct *work)
 {
+    c_bvec_t *c_bvec = container_of(work, c_bvec_t, work);
     struct castle_object_get *get = c_bvec->c_bio->get;
     c2_block_t *c2b = get->data_c2b;
     c_ext_pos_t cep;
@@ -1293,7 +1291,6 @@ out:
     castle_object_value_release(&cvt);
     castle_utils_bio_free(c_bvec->c_bio);
 }
-DEFINE_WQ_TRACE_FN(__castle_object_get_complete, c_bvec_t);
 
 void castle_object_get_io_end(c2_block_t *c2b, int did_io)
 {
@@ -1311,7 +1308,7 @@ void castle_object_get_io_end(c2_block_t *c2b, int did_io)
         debug("IO end for cep "cep_fmt_str_nl, cep2str(c2b->cep));
 
     /* Requeue regardless of did_io as castle_object_get() is recursive. */
-    CASTLE_INIT_WORK_AND_TRACE(&c_bvec->work, __castle_object_get_complete, c_bvec);
+    CASTLE_INIT_WORK(&c_bvec->work, __castle_object_get_complete);
     queue_work(castle_wq, &c_bvec->work);
 }
 
@@ -1525,9 +1522,6 @@ int castle_object_get(struct castle_object_get *get,
     c_bvec->val_put         = castle_object_value_release;
     c_bvec->submit_complete = castle_object_get_complete;
     c_bvec->orig_complete   = NULL;
-    c_bvec->seq_id          = atomic_inc_return(&castle_req_seq_id);
-
-    trace_CASTLE_REQUEST_BEGIN(c_bvec->seq_id, CASTLE_RING_GET);
 
     /* in the beginning, we will be willing to resolve timestamps or counters, but upon
        retrieval of the first candidate return value, we will pick one or the other. */
@@ -1536,9 +1530,6 @@ int castle_object_get(struct castle_object_get *get,
 
     /* @TODO: add bios to the debugger! */
     castle_double_array_submit(c_bvec);
-
-    trace_CASTLE_REQUEST_RELEASE(c_bvec->seq_id);
-
     return 0;
 
 err0:

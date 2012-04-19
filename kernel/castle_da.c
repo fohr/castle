@@ -20,7 +20,6 @@
 #include "castle_events.h"
 #include "castle_mstore.h"
 #include "castle_ctrl_prog.h"
-#include "castle_systemtap.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -10439,12 +10438,7 @@ static void castle_da_queue_kick(struct work_struct *work)
     {
         c_bvec = list_entry(l, c_bvec_t, io_list);
         list_del(&c_bvec->io_list);
-
-        trace_CASTLE_REQUEST_CLAIM(c_bvec->seq_id);
-
         castle_da_reserve(wq->da, c_bvec);
-
-        trace_CASTLE_REQUEST_RELEASE(c_bvec->seq_id);
     }
 }
 
@@ -11096,7 +11090,6 @@ static inline void _castle_da_bloom_submit(void *data)
 
     castle_da_bloom_submit_cb(c_bvec, key_exists);
 }
-DEFINE_WQ_TRACE_FN(_castle_da_bloom_submit, c_bvec_t);
 
 /**
  * Perform a lookup in the entire bloom filter.
@@ -11111,7 +11104,7 @@ void castle_da_bloom_submit(c_bvec_t *c_bvec, int go_async)
     if (c_bvec->tree->bloom_exists)
     {
         /* Search in bloom filter. */
-        CASTLE_INIT_WORK_AND_TRACE(&c_bvec->work, _castle_da_bloom_submit, c_bvec);
+        INIT_WORK(&c_bvec->work, _castle_da_bloom_submit, c_bvec);
         if (go_async)
             /* Submit asynchronously. */
             queue_work_on(c_bvec->cpu, castle_wqs[19], &c_bvec->work);

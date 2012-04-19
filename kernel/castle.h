@@ -57,18 +57,6 @@ void ATTRIB_NORET bug_fn(char *file, unsigned long line);
 #define CASTLE_PREPARE_WORK(_work, _func) PREPARE_WORK((_work), (_func))
 #endif
 
-#define CASTLE_INIT_WORK_AND_TRACE(_work, _func, _data) INIT_WORK((_work), (void (*)(void *)) (__trace##_func), _data)
-
-#define DEFINE_WQ_TRACE_FN(_func, _struct)                                          \
-static void __trace##_func(void *data)                                              \
-{                                                                                   \
-    int seq_id = ((_struct *)data)->seq_id;                                         \
-                                                                                    \
-    trace_CASTLE_REQUEST_CLAIM(seq_id);                                             \
-    _func(data);                                                                    \
-    trace_CASTLE_REQUEST_RELEASE(seq_id);                                           \
-}
-
 #define USED                 __attribute__((used))
 #define EXIT_SUCCESS         (0)
 
@@ -1523,7 +1511,6 @@ typedef struct castle_bio_vec {
 #ifdef CASTLE_PERF_DEBUG
     struct castle_request_timeline *timeline;
 #endif
-    int                             seq_id;
 } c_bvec_t;
 
 #define REMOVE                        (2)
@@ -2560,6 +2547,5 @@ enum {
     MERGE_COMPLETED = 1,
     MERGE_COMPLETED_NO_OP_TREE = 2,
 };
-extern atomic_t castle_req_seq_id; /**< Unique ID for tracing */
 
 #endif /* __CASTLE_H__ */

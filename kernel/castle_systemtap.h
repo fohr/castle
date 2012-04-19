@@ -24,11 +24,6 @@ DEFINE_TRACE(CASTLE_REQUEST_CLAIM,
         TPPROTO(int seq_id),            /**< Unique sequence ID for request                     */
         TPARGS(seq_id));
 
-/** Request releasing CPU. */
-DEFINE_TRACE(CASTLE_REQUEST_RELEASE,
-        TPPROTO(int seq_id),            /**< Unique sequence ID for request                     */
-        TPARGS(seq_id));
-
 /** New request started. */
 DEFINE_TRACE(CASTLE_REQUEST_BEGIN,
         TPPROTO(int seq_id,             /**< Unique sequence ID for this request                */

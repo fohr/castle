@@ -54,7 +54,7 @@ atomic_t                        castle_back_conn_count; /**< Number of active ca
 spinlock_t                      conns_lock;         /**< Protects castle_back_conns list        */
 static                LIST_HEAD(castle_back_conns); /**< List of all active castle_back_conns   */
 int                             castle_back_inited = 0;
-atomic_t                        castle_req_seq_id = ATOMIC_INIT(0); /**< Unique ID for tracing */
+atomic_t                        castle_back_seq_id = ATOMIC_INIT(0); /**< Unique ID for tracing */
 
 struct castle_back_op;
 
@@ -534,7 +534,7 @@ castle_back_stateful_op_get(struct castle_back_conn *conn,
     BUG_ON(stateful_op->in_use);
     stateful_op->cpu = cpu;
     stateful_op->cpu_index = cpu_index;
-    stateful_op->seq_id = atomic_inc_return(&castle_req_seq_id);
+    stateful_op->seq_id = atomic_inc_return(&castle_back_seq_id);
     stateful_op->last_used_jiffies = jiffies;
     stateful_op->expire = expire;
     stateful_op->expire_enabled = 0;
@@ -1883,14 +1883,10 @@ err0: castle_free(op->key);
  */
 
 static void __castle_back_iter_next(void *data);
-DEFINE_WQ_TRACE_FN(__castle_back_iter_next, struct castle_back_stateful_op);
-
 static void _castle_back_iter_next(struct castle_back_op *op,
                                    struct castle_back_stateful_op *stateful_op,
                                    int fastpath);
 static void __castle_back_iter_finish(void *data);
-DEFINE_WQ_TRACE_FN(__castle_back_iter_finish, struct castle_back_stateful_op);
-
 static void _castle_back_iter_finish(struct castle_back_op *op,
                                      struct castle_back_stateful_op *stateful_op,
                                      int fastpath);
@@ -2140,8 +2136,8 @@ static void castle_back_iter_start(void *data)
     stateful_op->iterator.nr_bytes = 0;
     stateful_op->attachment = attachment;
 
-    CASTLE_INIT_WORK_AND_TRACE(&stateful_op->work[0], __castle_back_iter_next, stateful_op);
-    CASTLE_INIT_WORK_AND_TRACE(&stateful_op->work[1], __castle_back_iter_finish, stateful_op);
+    INIT_WORK(&stateful_op->work[0], __castle_back_iter_next, stateful_op);
+    INIT_WORK(&stateful_op->work[1], __castle_back_iter_finish, stateful_op);
 
     trace_CASTLE_REQUEST_BEGIN(stateful_op->seq_id, stateful_op->tag);
 
@@ -2159,8 +2155,6 @@ static void castle_back_iter_start(void *data)
      * continued via callback handler, _castle_back_iter_start(). */
 
     stateful_debug("op=%p "stateful_op_fmt_str"\n", op, stateful_op2str(stateful_op));
-
-    trace_CASTLE_REQUEST_RELEASE(stateful_op->seq_id);
 
     return;
 
@@ -2433,6 +2427,8 @@ static void __castle_back_iter_next(void *data)
     stateful_debug("op=%p "stateful_op_fmt_str" iterator=%p iterator.saved_key=%p\n",
             op, stateful_op2str(stateful_op), iterator, stateful_op->iterator.saved_key);
 
+    trace_CASTLE_REQUEST_CLAIM(stateful_op->seq_id);
+
     stateful_op->iterator.buf_len      = op->req.iter_next.buffer_len;
     stateful_op->iterator.kv_list_size = 0;
     stateful_op->iterator.kv_list_tail = castle_back_user_to_kernel(op->buf,
@@ -2628,6 +2624,8 @@ static void __castle_back_iter_finish(void *data)
 {
     struct castle_back_stateful_op *stateful_op = data;
     int err;
+
+    trace_CASTLE_REQUEST_CLAIM(stateful_op->seq_id);
 
     /* Verify this iter hasn't been finished twice. */
     BUG_ON(stateful_op->cancelled);
