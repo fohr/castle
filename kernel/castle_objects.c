@@ -967,6 +967,7 @@ int castle_object_replace(struct castle_object_replace *replace,
     c_bvec->cvt_get        = castle_object_replace_cvt_get;
     c_bvec->queue_complete = castle_object_replace_queue_complete;
     c_bvec->orig_complete  = NULL;
+    c_bvec->seq_id         = atomic_inc_return(&castle_req_seq_id);
     atomic_set(&c_bvec->reserv_nodes, 0);
 
     /* Save c_bvec in the replace. */
@@ -974,8 +975,13 @@ int castle_object_replace(struct castle_object_replace *replace,
     CVT_INVALID_INIT(replace->cvt);
     replace->data_c2b = NULL;
 
+    trace_CASTLE_REQUEST_BEGIN(c_bvec->seq_id, CASTLE_RING_REPLACE);
+
     /* Queue up in the DA. */
     castle_double_array_queue(c_bvec);
+
+    trace_CASTLE_REQUEST_RELEASE(c_bvec->seq_id);
+
     return 0;
 
 err0:

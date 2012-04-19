@@ -1342,10 +1342,7 @@ static void castle_btree_submit_io_end(c2_block_t *c2b, int did_io)
          * how deep we are in the tree.  A single queue cannot be used, because
          * a requested blocked on lock_c2b() would block the entire queue,
          * which would lead to a deadlock. */
-        if (c_bvec_data_dir(c_bvec) == READ)
-            CASTLE_INIT_WORK_AND_TRACE(&c_bvec->work, castle_btree_process, c_bvec);
-        else
-            INIT_WORK(&c_bvec->work, (void (*)(void *))castle_btree_process, (void *)c_bvec);
+        CASTLE_INIT_WORK_AND_TRACE(&c_bvec->work, castle_btree_process, c_bvec);
 
         castle_btree_bvec_queue(c_bvec);
     }
@@ -1448,10 +1445,7 @@ void castle_btree_submit(c_bvec_t *c_bvec, int go_async)
     c_bvec->btree_parent_node = NULL;
     c_bvec->parent_key        = NULL;
 
-    if (c_bvec_data_dir(c_bvec) == READ)
-        CASTLE_INIT_WORK_AND_TRACE(&c_bvec->work, _castle_btree_submit, c_bvec);
-    else
-        INIT_WORK(&c_bvec->work, (void (*)(void *))_castle_btree_submit, (void *)c_bvec);
+    CASTLE_INIT_WORK_AND_TRACE(&c_bvec->work, _castle_btree_submit, c_bvec);
 
     if (go_async)
         /* Submit asynchronously. */
