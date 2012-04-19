@@ -1523,6 +1523,7 @@ typedef struct castle_bio_vec {
 #ifdef CASTLE_PERF_DEBUG
     struct castle_request_timeline *timeline;
 #endif
+    int                             seq_id;
 } c_bvec_t;
 
 #define REMOVE                        (2)
@@ -2559,5 +2560,6 @@ enum {
     MERGE_COMPLETED = 1,
     MERGE_COMPLETED_NO_OP_TREE = 2,
 };
+extern atomic_t castle_req_seq_id; /**< Unique ID for tracing */
 
 #endif /* __CASTLE_H__ */

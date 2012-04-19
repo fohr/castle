@@ -80,7 +80,7 @@ probe kernel.trace("CASTLE_CACHE_BLOCK_READ")
  */
 probe kernel.trace("CASTLE_REQUEST_END")
 {
-    if (tid_to_sid[tid()] != 0 && tid_to_sid[tid()] != $seq_id)
+    if (tid_to_sid[tid()] != $seq_id)
     {
         printf("%d: %20s: found %-4d expected %-4d tid=%d(%s)\n",
                 cpu(), $$name, tid_to_sid[tid()], $seq_id, tid(), task_execname(task_current()));
@@ -91,22 +91,6 @@ probe kernel.trace("CASTLE_REQUEST_END")
                 cpu(), $$name, $seq_id, tid(), task_execname(task_current()));
     tid_to_sid[tid()] = 0;
 }
-
-//probe kernel.trace("workqueue_pre_run"),
-/**
- * Workqueue has finished processing a request.
- */
-/*
-probe kernel.trace("workqueue_post_run")
-{
-    if (tid_to_sid[tid()] == 0)
-        next;
-    if (debug)
-        printf("%d: %20s: %-4d tid=%d(%s)\n",
-                cpu(), $$name, tid_to_sid[tid()], tid(), task_execname(task_current()));
-    tid_to_sid[tid()] = 0;
-}
-*/
 
 /**
  * Existing request has come back on CPU.
@@ -131,13 +115,18 @@ probe kernel.trace("CASTLE_REQUEST_CLAIM")
 
 probe kernel.trace("CASTLE_REQUEST_RELEASE")
 {
-    if (tid_to_sid[tid()] == 0)
-        next;
+    if (tid_to_sid[tid()] != $seq_id)
+    {
+        printf("%d: %20s: found %-4d expected %-4d tid=%d(%s)\n",
+                cpu(), $$name, tid_to_sid[tid()], $seq_id, tid(), task_execname(task_current()));
+        exit();
+    }
     if (debug)
         printf("%d: %20s: %-4d tid=%d(%s)\n",
-                cpu(), $$name, tid_to_sid[tid()], tid(), task_execname(task_current()));
+                cpu(), $$name, $seq_id, tid(), task_execname(task_current()));
     tid_to_sid[tid()] = 0;
 }
+
 /**
  * Begin handling new request from the ring.
  *

@@ -286,6 +286,7 @@ c_bio_t *castle_utils_bio_alloc(int nr_bvecs)
 #ifdef CASTLE_DEBUG
         atomic_set(&c_bvecs[i].read_passes, 0);
 #endif
+        c_bvecs[i].seq_id    = 0;
     }
     c_bio->c_bvecs = c_bvecs;
     /* Single reference taken out, the user decides how many more to take */
