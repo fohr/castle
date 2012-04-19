@@ -1388,33 +1388,13 @@ static void __castle_btree_submit(c_bvec_t *c_bvec,
         castle_btree_c2b_forget(c_bvec);
 
     if(!c2b_uptodate(c2b))
-    {
-        /* If the buffer doesn't contain up to date data, schedule the IO */
         castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_OUTOFDATE);
-        BUG_ON(_castle_cache_block_read(c2b,
-                                        castle_btree_submit_io_end,
-                                        c_bvec));
-    }
-    else
-    {
-        struct castle_btree_node *node;
 
-        trace_CASTLE_CACHE_BLOCK_READ(0 /*submitted_c2ps*/,
-                                      c2b->cep.ext_id,
-                                      castle_extent_type_get(c2b->cep.ext_id),
-                                      c2b->cep.offset,
-                                      c2b->nr_pages,
-                                      1 /*async*/);
-
-        node = c2b_bnode(c2b);
-        BUG_ON(node->magic != BTREE_NODE_MAGIC);
-        /* The buffer is up to date.  Copy data and call the node processing
-         * function directly.  c2b_remember should not return an error because
-         * the btree node has been normalized already. */
-        castle_debug_bvec_update(c_bvec, C_BVEC_BTREE_NODE_UPTODATE);
-        castle_btree_c2b_remember(c_bvec, c2b);
-        castle_btree_process(&c_bvec->work);
-    }
+    /* Submit i/o request irrespective of C2B state. castle_btree_submit_io_end() can
+     * handle all cases. */
+    BUG_ON(_castle_cache_block_read(c2b,
+                                    castle_btree_submit_io_end,
+                                    c_bvec));
 }
 
 /**
