@@ -96,6 +96,7 @@ probe kernel.trace("CASTLE_REQUEST_END")
 /**
  * Workqueue has finished processing a request.
  */
+/*
 probe kernel.trace("workqueue_post_run")
 {
     if (tid_to_sid[tid()] == 0)
@@ -105,6 +106,7 @@ probe kernel.trace("workqueue_post_run")
                 cpu(), $$name, tid_to_sid[tid()], tid(), task_execname(task_current()));
     tid_to_sid[tid()] = 0;
 }
+*/
 
 /**
  * Existing request has come back on CPU.
@@ -127,6 +129,15 @@ probe kernel.trace("CASTLE_REQUEST_CLAIM")
     tid_to_sid[tid()] = $seq_id;
 }
 
+probe kernel.trace("CASTLE_REQUEST_RELEASE")
+{
+    if (tid_to_sid[tid()] == 0)
+        next;
+    if (debug)
+        printf("%d: %20s: %-4d tid=%d(%s)\n",
+                cpu(), $$name, tid_to_sid[tid()], tid(), task_execname(task_current()));
+    tid_to_sid[tid()] = 0;
+}
 /**
  * Begin handling new request from the ring.
  *

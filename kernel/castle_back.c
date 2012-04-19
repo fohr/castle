@@ -1883,10 +1883,14 @@ err0: castle_free(op->key);
  */
 
 static void __castle_back_iter_next(void *data);
+DEFINE_WQ_TRACE_FN(__castle_back_iter_next, struct castle_back_stateful_op, seq_id);
+
 static void _castle_back_iter_next(struct castle_back_op *op,
                                    struct castle_back_stateful_op *stateful_op,
                                    int fastpath);
 static void __castle_back_iter_finish(void *data);
+DEFINE_WQ_TRACE_FN(__castle_back_iter_finish, struct castle_back_stateful_op, seq_id);
+
 static void _castle_back_iter_finish(struct castle_back_op *op,
                                      struct castle_back_stateful_op *stateful_op,
                                      int fastpath);
@@ -2136,8 +2140,8 @@ static void castle_back_iter_start(void *data)
     stateful_op->iterator.nr_bytes = 0;
     stateful_op->attachment = attachment;
 
-    INIT_WORK(&stateful_op->work[0], __castle_back_iter_next, stateful_op);
-    INIT_WORK(&stateful_op->work[1], __castle_back_iter_finish, stateful_op);
+    CASTLE_INIT_WORK_AND_TRACE(&stateful_op->work[0], __castle_back_iter_next, stateful_op);
+    CASTLE_INIT_WORK_AND_TRACE(&stateful_op->work[1], __castle_back_iter_finish, stateful_op);
 
     trace_CASTLE_REQUEST_BEGIN(stateful_op->seq_id, stateful_op->tag);
 
@@ -2155,6 +2159,8 @@ static void castle_back_iter_start(void *data)
      * continued via callback handler, _castle_back_iter_start(). */
 
     stateful_debug("op=%p "stateful_op_fmt_str"\n", op, stateful_op2str(stateful_op));
+
+    trace_CASTLE_REQUEST_RELEASE(stateful_op->seq_id);
 
     return;
 
@@ -2427,8 +2433,6 @@ static void __castle_back_iter_next(void *data)
     stateful_debug("op=%p "stateful_op_fmt_str" iterator=%p iterator.saved_key=%p\n",
             op, stateful_op2str(stateful_op), iterator, stateful_op->iterator.saved_key);
 
-    trace_CASTLE_REQUEST_CLAIM(stateful_op->seq_id);
-
     stateful_op->iterator.buf_len      = op->req.iter_next.buffer_len;
     stateful_op->iterator.kv_list_size = 0;
     stateful_op->iterator.kv_list_tail = castle_back_user_to_kernel(op->buf,
@@ -2624,8 +2628,6 @@ static void __castle_back_iter_finish(void *data)
 {
     struct castle_back_stateful_op *stateful_op = data;
     int err;
-
-    trace_CASTLE_REQUEST_CLAIM(stateful_op->seq_id);
 
     /* Verify this iter hasn't been finished twice. */
     BUG_ON(stateful_op->cancelled);

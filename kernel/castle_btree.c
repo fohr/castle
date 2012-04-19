@@ -1749,15 +1749,12 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
 /**
  * @also castle_btree_iter_path_traverse_endio()
  */
-static void _castle_btree_iter_path_traverse(struct work_struct *work)
+static void _castle_btree_iter_path_traverse(c_iter_t *c_iter)
 {
-    c_iter_t *c_iter = container_of(work, c_iter_t, work);
-
-    trace_CASTLE_REQUEST_CLAIM(c_iter->seq_id);
-
     iter_debug("iter %p\n", c_iter);
     __castle_btree_iter_path_traverse(c_iter);
 }
+DEFINE_WQ_TRACE_FN(_castle_btree_iter_path_traverse, c_iter_t, seq_id);
 
 /**
  * IO completion callback handler for castle_btree_iter_path_traverse().
@@ -1804,7 +1801,7 @@ static void castle_btree_iter_path_traverse_endio(c2_block_t *c2b, int did_io)
          *
          * NOTE: The +1 is required to match the workqueues we are using in normal
          *       btree walks. */
-        CASTLE_INIT_WORK(&c_iter->work, _castle_btree_iter_path_traverse);
+        CASTLE_INIT_WORK_AND_TRACE(&c_iter->work, _castle_btree_iter_path_traverse, &c_iter);
         queue_work(castle_wqs[c_iter->depth+MAX_BTREE_DEPTH], &c_iter->work);
     }
     else
@@ -1973,14 +1970,11 @@ static int __castle_btree_iter_start(c_iter_t *c_iter)
     return castle_btree_iter_path_traverse(c_iter, root_cep);
 }
 
-static void _castle_btree_iter_start(struct work_struct *work)
+static void _castle_btree_iter_start(c_iter_t *c_iter)
 {
-    c_iter_t *c_iter = container_of(work, c_iter_t, work);
-
-    trace_CASTLE_REQUEST_CLAIM(c_iter->seq_id);
-
     __castle_btree_iter_start(c_iter);
 }
+DEFINE_WQ_TRACE_FN(_castle_btree_iter_start, c_iter_t, seq_id);
 
 /**
  * Asynchronously start the btree iterator.
@@ -1992,7 +1986,7 @@ static void _castle_btree_iter_start(struct work_struct *work)
 void castle_btree_iter_start(c_iter_t* c_iter)
 {
     c_iter->running_async = 1;
-    CASTLE_INIT_WORK(&c_iter->work, _castle_btree_iter_start);
+    CASTLE_INIT_WORK_AND_TRACE(&c_iter->work, _castle_btree_iter_start, c_iter);
     queue_work(castle_wqs[0], &c_iter->work);
 }
 
