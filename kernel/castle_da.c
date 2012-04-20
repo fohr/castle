@@ -11088,6 +11088,9 @@ c_chk_cnt_t castle_double_array_size_get(struct castle_double_array *da)
     c_chk_cnt_t size;
 
     cts_proxy = castle_da_cts_proxy_get(da);
+    if(!cts_proxy)
+        return 0;
+
     size = cts_proxy->da_size;
 
     castle_da_cts_proxy_put(cts_proxy);
