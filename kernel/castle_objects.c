@@ -1164,14 +1164,11 @@ int castle_object_iter_finish(castle_object_iterator_t *iterator)
     return 0;
 }
 
-static void castle_object_next_available(struct work_struct *work)
+static void castle_object_next_available(castle_object_iterator_t *iter)
 {
-    castle_object_iterator_t *iter = container_of(work, castle_object_iterator_t, work);
-
-    trace_CASTLE_REQUEST_CLAIM(iter->seq_id);
-
     castle_object_iter_next(iter, iter->next_available, iter->next_available_data);
 }
+DEFINE_WQ_TRACE_FN(castle_object_next_available, castle_object_iterator_t);
 
 void castle_object_slice_get_end_io(void *obj_iter, int err)
 {
@@ -1179,7 +1176,7 @@ void castle_object_slice_get_end_io(void *obj_iter, int err)
 
     BUG_ON(!castle_objects_rq_iter_prep_next(iter));
     debug_rq("Done async key read: Re-scheduling slice_get()- iterator: %p\n", iter);
-    CASTLE_INIT_WORK(&iter->work, castle_object_next_available);
+    CASTLE_INIT_WORK_AND_TRACE(&iter->work, castle_object_next_available, iter);
     queue_work(castle_wq, &iter->work);
 }
 
