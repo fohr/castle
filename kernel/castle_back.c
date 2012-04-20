@@ -54,7 +54,7 @@ atomic_t                        castle_back_conn_count; /**< Number of active ca
 spinlock_t                      conns_lock;         /**< Protects castle_back_conns list        */
 static                LIST_HEAD(castle_back_conns); /**< List of all active castle_back_conns   */
 int                             castle_back_inited = 0;
-atomic_t                        castle_back_seq_id = ATOMIC_INIT(0); /**< Unique ID for tracing */
+atomic_t                        castle_req_seq_id = ATOMIC_INIT(0); /**< Unique ID for tracing */
 
 struct castle_back_op;
 
@@ -534,7 +534,7 @@ castle_back_stateful_op_get(struct castle_back_conn *conn,
     BUG_ON(stateful_op->in_use);
     stateful_op->cpu = cpu;
     stateful_op->cpu_index = cpu_index;
-    stateful_op->seq_id = atomic_inc_return(&castle_back_seq_id);
+    stateful_op->seq_id = atomic_inc_return(&castle_req_seq_id);
     stateful_op->last_used_jiffies = jiffies;
     stateful_op->expire = expire;
     stateful_op->expire_enabled = 0;

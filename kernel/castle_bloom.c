@@ -8,6 +8,7 @@
 #include "castle_utils.h"
 #include "castle_debug.h"
 #include "castle_extent.h"
+#include "castle_systemtap.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -750,6 +751,15 @@ static void _castle_bloom_block_read_end_io(void *data)
     castle_bloom_block_process(bl, 1 /*async*/);
 }
 
+static void __trace__castle_bloom_block_read_end_io(void *data)
+{
+    int seq_id = ((c_bvec_t *)((c_bloom_lookup_t *)data)->private)->seq_id;
+
+    trace_CASTLE_REQUEST_CLAIM(seq_id);
+    _castle_bloom_block_read_end_io(data);
+    trace_CASTLE_REQUEST_RELEASE(seq_id);
+}
+
 /**
  * Callback from read I/O on bloom block.
  *
@@ -768,7 +778,7 @@ static void castle_bloom_block_read_end_io(c2_block_t *c2b, int did_io)
                 "I/O completed at "cep_fmt_str" for bf %p.\n",
                 __FUNCTION__, cep2str(c2b->cep), bl->bf);
 
-        INIT_WORK(&bl->work, _castle_bloom_block_read_end_io, bl);
+        CASTLE_INIT_WORK_AND_TRACE(&bl->work, _castle_bloom_block_read_end_io, bl);
         queue_work(castle_da_wqs[0], &bl->work);
     }
     else
