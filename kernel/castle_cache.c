@@ -384,8 +384,8 @@ struct task_struct     *castle_cache_flush_thread;
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq);
 static atomic_t                castle_cache_flush_seq;
 
-static atomic_t                castle_cache_read_stats = ATOMIC_INIT(0);
-static atomic_t                castle_cache_write_stats = ATOMIC_INIT(0);
+static atomic_t                castle_cache_read_stats = ATOMIC_INIT(0); /**< Pgs read from disk  */
+static atomic_t                castle_cache_write_stats = ATOMIC_INIT(0);/**< Pgs written to disk */
 
 struct timer_list              castle_cache_stats_timer;
 
@@ -419,11 +419,12 @@ void castle_cache_stats_print(int verbose)
     atomic_sub(writes, &castle_cache_write_stats);
 
     if (verbose)
-        castle_printk(LOG_PERF, "castle_cache_stats_timer_tick: %d, %d, %d, %d, %d\n",
+        castle_printk(LOG_PERF, "castle_cache_stats_timer_tick: D=%d C=%d F=%d R=%d W=%d\n",
             atomic_read(&castle_cache_dirty_pgs),
             atomic_read(&castle_cache_clean_pgs),
             castle_cache_page_freelist_size * PAGES_PER_C2P,
-            reads, writes);
+            reads,
+            writes);
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_CLEAN_PGS_ID,
                        atomic_read(&castle_cache_clean_pgs), 0);
