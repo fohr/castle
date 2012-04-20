@@ -10494,7 +10494,12 @@ static void castle_da_queue_kick(struct work_struct *work)
     {
         c_bvec = list_entry(l, c_bvec_t, io_list);
         list_del(&c_bvec->io_list);
+
+        trace_CASTLE_REQUEST_CLAIM(c_bvec->seq_id);
+
         castle_da_reserve(wq->da, c_bvec);
+
+        trace_CASTLE_REQUEST_RELEASE(c_bvec->seq_id);
     }
 }
 
