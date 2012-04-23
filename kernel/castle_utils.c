@@ -773,7 +773,11 @@ inline void list_swap(struct list_head *t1, struct list_head *t2)
 }
 
 
-/* Implements O(n^2) list sort using externally provided comparator */
+/**
+ * Sort list (ascending) with externally provided comparator.
+ *
+ * Implemented as bubble sort (O(n^2)).
+ */
 void list_sort(struct list_head *list,
                int (*compare)(struct list_head *l1, struct list_head *l2))
 {
