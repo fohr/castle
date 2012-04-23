@@ -522,7 +522,7 @@ int castle_global_tree_init(void)
         goto err_out;
     }
 
-    ct->dynamic                      = 1;
+    set_bit(CASTLE_CT_DYNAMIC_BIT, &ct->flags);
     ct->internal_ext_free.ext_size   = GLOBAL_TREE_INTERNAL_SIZE * C_CHK_SIZE;
     ct->tree_ext_free.ext_size       = GLOBAL_TREE_LEAF_SIZE * C_CHK_SIZE;
     ct->data_ext_free.ext_size       = GLOBAL_TREE_DATA_SIZE * C_CHK_SIZE;

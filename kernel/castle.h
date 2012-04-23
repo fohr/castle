@@ -1066,8 +1066,11 @@ STATIC_BUG_ON(sizeof(struct castle_bbp_entry) != 70);
 #define CASTLE_CT_BLOOM_EXISTS_BIT      2   /* CT has bloom filter.                             */
 #define CASTLE_CT_MERGE_OUTPUT_BIT      3   /* CT is being created by a merge.                  */
 #define CASTLE_CT_MERGE_INPUT_BIT       4   /* CT is being merged.                              */
-#define CASTLE_CT_PARTIAL_TREE_BIT      5   /* CT tree is partial could be intree/outtree.       */
+#define CASTLE_CT_PARTIAL_TREE_BIT      5   /* CT tree is partial could be intree/outtree.      */
 
+#define CASTLE_CT_ON_DISK_FLAGS_MASK    ((1UL << CASTLE_CT_DYNAMIC_BIT))
+
+#define CT_DYNAMIC(_ct)  (test_bit(CASTLE_CT_DYNAMIC_BIT, &(_ct)->flags))
 /**
  * Is CT queriable.
  */
@@ -1101,7 +1104,6 @@ struct castle_component_tree {
     uint64_t            chkpt_nr_bytes;
     uint64_t            chkpt_nr_drained_bytes;
     btree_t             btree_type;
-    uint8_t             dynamic;           /**< 1 - dynamic modlist btree, 0 - merge result.    */
     struct castle_double_array *da;        /**< DA that this CT belongs to.                     */
     uint8_t             level;             /**< Level in the doubling array.                    */
     uint16_t            node_sizes[MAX_BTREE_DEPTH];
@@ -1181,34 +1183,34 @@ struct castle_clist_entry {
     /* align:   8 */
     /* offset:  0 */ c_da_t          da_id;
     /*          4 */ btree_t         btree_type;
-    /*          5 */ uint8_t         dynamic;
-    /*          6 */ uint8_t         level;
-    /*          7 */ uint64_t        item_count;
-    /*         15 */ c_ext_pos_t     root_node;
-    /*         31 */ c_ext_free_bs_t internal_ext_free_bs;
-    /*         95 */ c_ext_free_bs_t tree_ext_free_bs;
-    /*        159 */ c_ext_free_bs_t data_ext_free_bs;
-    /*        223 */ uint64_t        large_ext_chk_cnt;
-    /*        231 */ uint32_t        bloom_num_chunks;
-    /*        235 */ uint32_t        bloom_num_blocks_last_chunk;
-    /*        239 */ uint64_t        bloom_chunks_offset;
-    /*        247 */ c_ext_id_t      bloom_ext_id;
-    /*        255 */ uint32_t        bloom_num_btree_nodes;
-    /*        259 */ uint32_t        bloom_block_size_pages;
-    /*        263 */ tree_seq_t      seq;
-    /*        271 */ uint8_t         bloom_exists;
-    /*        272 */ uint8_t         bloom_num_hashes;
-    /*        273 */ uint16_t        node_sizes[MAX_BTREE_DEPTH];
-    /*        293 */ tree_seq_t      data_age;
-    /*        301 */ uint32_t        nr_data_exts;
-    /*        305 */ uint64_t        nr_rwcts;
-    /*        313 */ uint64_t        nr_bytes;
-    /*        321 */ uint64_t        nr_drained_bytes;
-    /*        329 */ uint64_t        max_user_timestamp;
-    /*        337 */ uint64_t        min_user_timestamp;
-    /*        345 */ int32_t         tree_depth;
-    /*        349 */ uint32_t        max_versions_per_key;
-    /*        353 */ uint8_t         _unused[159];
+    /*          5 */ uint8_t         level;
+    /*          6 */ uint64_t        item_count;
+    /*         14 */ c_ext_pos_t     root_node;
+    /*         30 */ c_ext_free_bs_t internal_ext_free_bs;
+    /*         94 */ c_ext_free_bs_t tree_ext_free_bs;
+    /*        158 */ c_ext_free_bs_t data_ext_free_bs;
+    /*        222 */ uint64_t        large_ext_chk_cnt;
+    /*        230 */ uint32_t        bloom_num_chunks;
+    /*        234 */ uint32_t        bloom_num_blocks_last_chunk;
+    /*        238 */ uint64_t        bloom_chunks_offset;
+    /*        246 */ c_ext_id_t      bloom_ext_id;
+    /*        254 */ uint32_t        bloom_num_btree_nodes;
+    /*        258 */ uint32_t        bloom_block_size_pages;
+    /*        262 */ tree_seq_t      seq;
+    /*        270 */ uint8_t         bloom_exists;
+    /*        271 */ uint8_t         bloom_num_hashes;
+    /*        272 */ uint16_t        node_sizes[MAX_BTREE_DEPTH];
+    /*        292 */ tree_seq_t      data_age;
+    /*        300 */ uint32_t        nr_data_exts;
+    /*        304 */ uint64_t        nr_rwcts;
+    /*        312 */ uint64_t        nr_bytes;
+    /*        320 */ uint64_t        nr_drained_bytes;
+    /*        328 */ uint64_t        max_user_timestamp;
+    /*        336 */ uint64_t        min_user_timestamp;
+    /*        344 */ int32_t         tree_depth;
+    /*        348 */ uint32_t        max_versions_per_key;
+    /*        352 */ uint64_t        flags;
+    /*        360 */ uint8_t         _unused[152];
     /*        512 */
 } PACKED;
 STATIC_BUG_ON(sizeof(struct castle_clist_entry) != 512);

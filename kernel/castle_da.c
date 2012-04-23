@@ -576,7 +576,7 @@ static int castle_ct_immut_iter_next_node_init(c_immut_iter_t *iter,
 
     /* Non-dynamic trees do not contain leaf pointers => the node must be non-empty,
        and will not contain leaf pointers */
-    if(!iter->tree->dynamic)
+    if (!CT_DYNAMIC(iter->tree))
     {
         iter->next_idx = 0;
         BUG_ON(castle_ct_immut_iter_entry_find(iter, node, 0 /* start_idx */) != iter->next_idx);
@@ -1242,7 +1242,7 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
     {
         castle_printk(LOG_WARN, "Error. Different number of items than expected in CT=%d "
                "(dynamic=%d). Item_idx=%d, item_count=%ld\n",
-               iter->tree->seq, iter->tree->dynamic,
+               iter->tree->seq, CT_DYNAMIC(iter->tree),
                item_idx, atomic64_read(&iter->tree->item_count));
         WARN_ON(1);
     }
@@ -2681,7 +2681,7 @@ static void castle_da_iterator_destroy(struct castle_component_tree *tree,
     if(!iter)
         return;
 
-    if(tree->dynamic)
+    if(CT_DYNAMIC(tree))
     {
         /* For dynamic trees we are using modlist iterator. */
         castle_ct_modlist_iter_free(iter);
@@ -2707,7 +2707,7 @@ static void castle_da_iterator_create(struct castle_da_merge *merge,
                                       c_ext_pos_t *resume_merge_node_cep,
                                       int already_completed)
 {
-    if (tree->dynamic)
+    if (CT_DYNAMIC(tree))
     {
         c_modlist_iter_t *iter = castle_alloc(sizeof(c_modlist_iter_t));
         BUG_ON(merge->serdes.des); /* we should only serialise merges
@@ -2746,7 +2746,7 @@ static void castle_da_iterator_create(struct castle_da_merge *merge,
 
 static struct castle_iterator_type* castle_da_iter_type_get(struct castle_component_tree *ct)
 {
-    if(ct->dynamic)
+    if (CT_DYNAMIC(ct))
         return &castle_ct_modlist_iter;
     else
         return &castle_ct_immut_iter;
@@ -2831,7 +2831,7 @@ static int castle_da_l1_merge_cts_get(struct castle_double_array *da,
         ct = cts[i];
 
         /* Wait until write ref count reaches zero. */
-        BUG_ON(!ct->dynamic && (atomic_read(&ct->write_ref_count) != 0));
+        BUG_ON(!CT_DYNAMIC(ct) && (atomic_read(&ct->write_ref_count) != 0));
         while(atomic_read(&ct->write_ref_count))
         {
             debug("Found non-zero write ref count on ct=%d scheduled for merge cnt=%d\n",
@@ -5895,7 +5895,7 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
 
     debug("Merging Trees:\n");
     for (i=0; i<nr_trees; i++)
-        debug("\tct=0x%x, dynamic=%d, size=%lu\n", in_trees[i]->seq, in_trees[i]->dynamic,
+        debug("\tct=0x%x, dynamic=%d, size=%lu\n", in_trees[i]->seq, CT_DYNAMIC(in_trees[i]),
                                                    atomic64_read(&in_trees[i]->nr_bytes));
 
     /* Sanity checks. Now, we do allow merge on single tree for the sake of
@@ -8774,12 +8774,12 @@ void castle_da_ct_marshall(struct castle_clist_entry *ctm,
 {
     int i;
 
+    ctm->flags                = (ct->flags & CASTLE_CT_ON_DISK_FLAGS_MASK);
     ctm->da_id                = (ct->da)?ct->da->id:INVAL_DA;
     ctm->item_count           = atomic64_read(&ct->item_count);
     ctm->nr_bytes             = ct->chkpt_nr_bytes;
     ctm->nr_drained_bytes     = ct->chkpt_nr_drained_bytes;
     ctm->btree_type           = ct->btree_type;
-    ctm->dynamic              = ct->dynamic;
     ctm->seq                  = ct->seq;
     ctm->data_age             = ct->data_age;
     ctm->level                = ct->level;
@@ -8832,7 +8832,7 @@ static struct castle_component_tree * castle_da_ct_unmarshall(struct castle_clis
     ct->chkpt_nr_bytes       = ctm->nr_bytes;
     ct->chkpt_nr_drained_bytes = ctm->nr_drained_bytes;
     ct->btree_type           = ctm->btree_type;
-    ct->dynamic              = ctm->dynamic;
+    ct->flags                = ctm->flags;
     ct->da                   = da;           BUG_ON(!ct->da && !TREE_GLOBAL(ct->seq));
     ct->level                = ctm->level;
     ct->nr_rwcts             = ctm->nr_rwcts;
@@ -10032,7 +10032,6 @@ static struct castle_component_tree * castle_ct_init(struct castle_double_array 
     ct->chkpt_nr_bytes           = 0;
     ct->chkpt_nr_drained_bytes   = 0;
     ct->btree_type               = da? da->btree_type: MTREE_TYPE;
-    ct->dynamic                  = 0;
     ct->da                       = da;
     ct->level                    = -1;
     ct->root_node                = INVAL_EXT_POS;
@@ -10115,7 +10114,8 @@ struct castle_component_tree* castle_ct_alloc(struct castle_double_array *da,
         return NULL;
     }
 
-    ct->dynamic         = (level == 0);
+    if (level == 0)
+        set_bit(CASTLE_CT_DYNAMIC_BIT, &ct->flags);
     ct->level           = level;
     ct->nr_rwcts        = nr_rwcts;
 
@@ -11253,7 +11253,7 @@ void castle_da_next_ct_read(c_bvec_t *c_bvec)
     } while(1);
 
     debug_verbose("Scheduling btree read in %s tree: %d.\n",
-            c_bvec->tree->dynamic ? "dynamic" : "static", c_bvec->tree->seq);
+                  CT_DYNAMIC(c_bvec->tree) ? "dynamic" : "static", c_bvec->tree->seq);
 
     castle_da_bloom_submit(c_bvec, 1 /*async*/);
 }
