@@ -406,7 +406,7 @@ static void castle_da_merge_debug_lock_state_query(struct castle_da_merge *merge
     }
 
     /* bloom filter stuff */
-    if (out_tree->bloom_exists)
+    if (CT_BLOOM_EXISTS(out_tree))
     {
         struct castle_bloom_build_params *bf_bp = out_tree->bloom.private;
         if (bf_bp)
@@ -2459,7 +2459,7 @@ static inline int castle_da_rq_iter_ct_relevant(struct castle_da_cts_proxy_ct *p
          * partition key - it can't have any relevant results. */
         return 0;
 
-    if (!proxy_ct->ct->bloom_exists)
+    if (!CT_BLOOM_EXISTS(proxy_ct->ct))
         /* Query all trees that do not have bloom filters. */
         return 1;
 
@@ -3861,9 +3861,9 @@ __again:
                                    ct->da->id,
                                    ct->da->btree_type,
                                    bloom_size)))
-        ct->bloom_exists = 0;
+        clear_bit(CASTLE_CT_BLOOM_EXISTS_BIT, &ct->flags);
     else
-        ct->bloom_exists = 1;
+        set_bit(CASTLE_CT_BLOOM_EXISTS_BIT, &ct->flags);
 
     return 0;
 }
@@ -4378,7 +4378,7 @@ int castle_immut_tree_entry_add(struct castle_immut_tree_construct *tree_constr,
                                 &out_tree->min_user_timestamp);
         }
 
-        if (out_tree->bloom_exists && tree_constr->is_new_key)
+        if (CT_BLOOM_EXISTS(out_tree) && tree_constr->is_new_key)
             castle_bloom_add(&out_tree->bloom, tree_constr->btree, orig_key);
 
         atomic64_inc(&out_tree->item_count);
@@ -4822,7 +4822,7 @@ static void castle_immut_tree_complete(struct castle_immut_tree_construct *tree_
         castle_immut_tree_max_path_complete(tree_constr, root_cep);
 
     /* Complete Bloom filters. */
-    if (out_tree->bloom_exists)
+    if (CT_BLOOM_EXISTS(out_tree))
         castle_bloom_complete(&out_tree->bloom);
 
     /* Package the merge result. */
@@ -4917,7 +4917,7 @@ static void castle_da_merge_cts_release(struct castle_da_merge *merge, int err)
     else if (out_tree)
     {
         /* Abort (i.e. free) incomplete bloom filter */
-        if (out_tree->bloom_exists)
+        if (CT_BLOOM_EXISTS(out_tree))
             castle_bloom_abort(&out_tree->bloom);
 
         /* If we are aborting a merge, cleanup output tree in memory. */
@@ -6133,7 +6133,7 @@ error_out:
     if (out_tree)
     {
         castle_da_merge_res_pool_detach(merge, ret);
-        if (out_tree->bloom_exists)
+        if (CT_BLOOM_EXISTS(out_tree))
             castle_bloom_abort(&out_tree->bloom);
         castle_ct_put(out_tree, READ /*rw*/);
         merge->out_tree_constr->tree = out_tree = NULL;
@@ -6893,7 +6893,7 @@ static void castle_da_merge_marshall(struct castle_da_merge *merge,
 
         /* bloom build parameters, so we can resume building the output CT's bloom filter */
         merge_mstore->have_bbp = 0;
-        if(out_tree->bloom_exists)
+        if(CT_BLOOM_EXISTS(out_tree))
         {
             struct castle_bloom_build_params *bf_bp = out_tree->bloom.private;
             BUG_ON(!bf_bp);
@@ -8557,7 +8557,7 @@ void castle_ct_and_exts_get(struct castle_component_tree *ct,
     castle_extent_and_size_get(ct->tree_ext_free.ext_id, &refs->refs[nr_refs++], &size_delta);
     da_size_contrib += size_delta;
 
-    if (ct->bloom_exists)
+    if (CT_BLOOM_EXISTS(ct))
     {
         castle_extent_and_size_get(ct->bloom.ext_id, &refs->refs[nr_refs++], &size_delta);
         da_size_contrib += size_delta;
@@ -8630,7 +8630,7 @@ void castle_ct_put(struct castle_component_tree *ct, int rw)
     castle_ext_freespace_fini(&ct->internal_ext_free);
     castle_ext_freespace_fini(&ct->tree_ext_free);
 
-    if (ct->bloom_exists)
+    if (CT_BLOOM_EXISTS(ct))
         castle_bloom_destroy(&ct->bloom);
 
     /* Poison ct (note this will be repoisoned by kfree on kernel debug build. */
@@ -8796,8 +8796,7 @@ void castle_da_ct_marshall(struct castle_clist_entry *ctm,
     castle_ext_freespace_marshall(&ct->tree_ext_free, &ctm->tree_ext_free_bs);
     castle_ext_freespace_marshall(&ct->data_ext_free, &ctm->data_ext_free_bs);
 
-    ctm->bloom_exists = ct->bloom_exists;
-    if (ct->bloom_exists)
+    if (CT_BLOOM_EXISTS(ct))
         castle_bloom_marshall(&ct->bloom, ctm);
 
     /* if someone changed the typedef of castle_user_timestamp_t, make sure a corresponding
@@ -8849,8 +8848,7 @@ static struct castle_component_tree * castle_da_ct_unmarshall(struct castle_clis
     castle_extent_mark_live(ct->internal_ext_free.ext_id, ctm->da_id);
     castle_extent_mark_live(ct->tree_ext_free.ext_id, ctm->da_id);
     castle_extent_mark_live(ct->data_ext_free.ext_id, ctm->da_id);
-    ct->bloom_exists = ctm->bloom_exists;
-    if (ctm->bloom_exists)
+    if (CT_BLOOM_EXISTS(ct))
         castle_bloom_unmarshall(&ct->bloom, ctm);
     /* Pre-warm cache for T0 btree extents. */
     if (ct->level == 0)
@@ -9047,7 +9045,7 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
     if (!EXT_ID_INVAL(ct->data_ext_free.ext_id))
         castle_cache_extent_flush_schedule(ct->data_ext_free.ext_id, 0,
                                            atomic64_read(&ct->data_ext_free.used));
-    if(ct->bloom_exists)
+    if (CT_BLOOM_EXISTS(ct))
         castle_cache_extent_flush_schedule(ct->bloom.ext_id, 0, 0);
 
 mstore_writeback:
@@ -9218,7 +9216,7 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge,
             castle_cache_extent_flush_schedule(cl->data_ext_free_bs.ext_id, 0,
                                                cl->data_ext_free_bs.used);
 
-        if(cl->bloom_exists)
+        if (CT_BLOOM_EXISTS(ct))
         {
             BUG_ON(EXT_ID_INVAL(cl->bloom_ext_id));
             BUG_ON(ct->bloom.ext_id != cl->bloom_ext_id);
@@ -9500,7 +9498,7 @@ static int castle_da_ct_bloom_build_param_deserialise(struct castle_component_tr
                                                       struct castle_bbp_entry *bbpm)
 {
     /* memory allocation and some sanity checking: */
-    if(!ct->bloom_exists)
+    if (!CT_BLOOM_EXISTS(ct))
     {
         castle_printk(LOG_ERROR, "%s::no bloom filter attached to CT %d, "
                 "yet we have build_params. Weird.\n", __FUNCTION__, ct->seq);
@@ -9516,7 +9514,7 @@ static int castle_da_ct_bloom_build_param_deserialise(struct castle_component_tr
                 "discarding bloom filter on this CT.", __FUNCTION__, ct->seq);
         castle_bloom_abort(&ct->bloom);
         castle_bloom_destroy(&ct->bloom);
-        ct->bloom_exists=0;
+        clear_bit(CASTLE_CT_BLOOM_EXISTS_BIT, &ct->flags);
         BUG(); /* Out of memory at init time? relax this if it's a possible valid situation */
         return -ENOMEM;
     }
@@ -10041,7 +10039,6 @@ static struct castle_component_tree * castle_ct_init(struct castle_double_array 
     ct->data_exts                = castle_zalloc(sizeof(c_ext_id_t) * nr_data_exts);
     ct->data_exts_count          = nr_data_exts;
     ct->nr_data_exts             = 0;
-    ct->bloom_exists             = 0;
     ct->merge                    = NULL;
     ct->merge_id                 = INVAL_MERGE_ID;
     ct->max_versions_per_key     = 0;
@@ -11189,7 +11186,7 @@ DEFINE_WQ_TRACE_FN(_castle_da_bloom_submit, c_bvec_t);
  */
 void castle_da_bloom_submit(c_bvec_t *c_bvec, int go_async)
 {
-    if (c_bvec->tree->bloom_exists)
+    if (CT_BLOOM_EXISTS(c_bvec->tree))
     {
         /* Search in bloom filter. */
         CASTLE_INIT_WORK_AND_TRACE(&c_bvec->work, _castle_da_bloom_submit, c_bvec);
@@ -11289,7 +11286,7 @@ static void castle_da_ct_read_complete(c_bvec_t *c_bvec, int err, c_val_tup_t cv
         if (CVT_INVALID(cvt))
         {
 #ifdef CASTLE_BLOOM_FP_STATS
-            if (c_bvec->tree->bloom_exists && c_bvec->bloom_positive)
+            if (CT_BLOOM_EXISTS(c_bvec->tree) && c_bvec->bloom_positive)
             {
                 atomic64_inc(&c_bvec->tree->bloom.false_positives);
                 c_bvec->bloom_positive = 0;

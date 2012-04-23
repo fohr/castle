@@ -1068,9 +1068,11 @@ STATIC_BUG_ON(sizeof(struct castle_bbp_entry) != 70);
 #define CASTLE_CT_MERGE_INPUT_BIT       4   /* CT is being merged.                              */
 #define CASTLE_CT_PARTIAL_TREE_BIT      5   /* CT tree is partial could be intree/outtree.      */
 
-#define CASTLE_CT_ON_DISK_FLAGS_MASK    ((1UL << CASTLE_CT_DYNAMIC_BIT))
+#define CASTLE_CT_ON_DISK_FLAGS_MASK    ((1UL << CASTLE_CT_DYNAMIC_BIT)         |   \
+                                         (1UL << CASTLE_CT_BLOOM_EXISTS_BIT))
 
-#define CT_DYNAMIC(_ct)  (test_bit(CASTLE_CT_DYNAMIC_BIT, &(_ct)->flags))
+#define CT_DYNAMIC(_ct)         (test_bit(CASTLE_CT_DYNAMIC_BIT, &(_ct)->flags))
+#define CT_BLOOM_EXISTS(_ct)    (test_bit(CASTLE_CT_BLOOM_EXISTS_BIT, &(_ct)->flags))
 /**
  * Is CT queriable.
  */
@@ -1082,7 +1084,7 @@ STATIC_BUG_ON(sizeof(struct castle_bbp_entry) != 70);
  * Total number of extents associated with a CT.
  */
 #define CASTLE_CT_EXTENTS(_ct)                                                      \
-    (((_ct)->bloom_exists) ? 3 + (_ct)->nr_data_exts : 2 + (_ct)->nr_data_exts)
+    ((CT_BLOOM_EXISTS(_ct)) ? 3 + (_ct)->nr_data_exts : 2 + (_ct)->nr_data_exts)
 
 struct castle_component_tree {
     tree_seq_t          seq;               /**< Unique ID identifying this tree.                */
@@ -1132,7 +1134,6 @@ struct castle_component_tree {
     /* FIXME: Just for debugging sake. get rid of data_exts_count later. */
     uint32_t            data_exts_count;
     atomic64_t          large_ext_chk_cnt;
-    uint8_t             bloom_exists;
     castle_bloom_t      bloom;
     struct kobject      kobj;
     struct kobject      data_extents_kobj;
@@ -1197,20 +1198,19 @@ struct castle_clist_entry {
     /*        254 */ uint32_t        bloom_num_btree_nodes;
     /*        258 */ uint32_t        bloom_block_size_pages;
     /*        262 */ tree_seq_t      seq;
-    /*        270 */ uint8_t         bloom_exists;
-    /*        271 */ uint8_t         bloom_num_hashes;
-    /*        272 */ uint16_t        node_sizes[MAX_BTREE_DEPTH];
-    /*        292 */ tree_seq_t      data_age;
-    /*        300 */ uint32_t        nr_data_exts;
-    /*        304 */ uint64_t        nr_rwcts;
-    /*        312 */ uint64_t        nr_bytes;
-    /*        320 */ uint64_t        nr_drained_bytes;
-    /*        328 */ uint64_t        max_user_timestamp;
-    /*        336 */ uint64_t        min_user_timestamp;
-    /*        344 */ int32_t         tree_depth;
-    /*        348 */ uint32_t        max_versions_per_key;
-    /*        352 */ uint64_t        flags;
-    /*        360 */ uint8_t         _unused[152];
+    /*        270 */ uint8_t         bloom_num_hashes;
+    /*        271 */ uint16_t        node_sizes[MAX_BTREE_DEPTH];
+    /*        291 */ tree_seq_t      data_age;
+    /*        299 */ uint32_t        nr_data_exts;
+    /*        303 */ uint64_t        nr_rwcts;
+    /*        311 */ uint64_t        nr_bytes;
+    /*        319 */ uint64_t        nr_drained_bytes;
+    /*        327 */ uint64_t        max_user_timestamp;
+    /*        335 */ uint64_t        min_user_timestamp;
+    /*        343 */ int32_t         tree_depth;
+    /*        347 */ uint32_t        max_versions_per_key;
+    /*        351 */ uint64_t        flags;
+    /*        359 */ uint8_t         _unused[153];
     /*        512 */
 } PACKED;
 STATIC_BUG_ON(sizeof(struct castle_clist_entry) != 512);
