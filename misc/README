@@ -38,3 +38,7 @@ Given the maximum size of the VLBA keys passed from userspace,
 calculates the maximum size of the resulting normalized keys. Needs to
 be forward-ported / rerun every time the size limit or the normalized
 keys implementation changes.
+
+IKG.patch
+===
+In-kernel replace generator. Inserts are fired via the clone ioctl (hijacked for our nefarious performance testing purposes). With some manual tweaking it's possible to set this up to bypass or go through the back queue (by using castle_back_request_process, or going directly to castle_back_replace). Furthermore, it's possible to play with batching effects by changing the loop count in castle_in_kernel_replace.

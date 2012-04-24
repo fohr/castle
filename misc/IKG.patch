@@ -1,0 +1,438 @@
+# HG changeset patch
+# User Tirath Ramdas <tramdas@acunu.com>
+# Date 1335271745 -3600
+# Node ID 95a6d33b0f39dea2b03a45bdbdb70979f3c7f272
+# Parent  8e2e8e7ce6fcd86c4909c8711e0b6bc0aed3acf3
+PATCH: in kernel load generator
+
+diff --git a/kernel/castle_back.c b/kernel/castle_back.c
+--- a/kernel/castle_back.c
++++ b/kernel/castle_back.c
+@@ -64,6 +64,7 @@ struct castle_back_op;
+ #define CASTLE_BACK_CONN_NOTIFY_FLAG        (1 << CASTLE_BACK_CONN_NOTIFY_BIT)
+ #define CASTLE_BACK_CONN_DEAD_BIT           (2)
+ #define CASTLE_BACK_CONN_DEAD_FLAG          (1 << CASTLE_BACK_CONN_DEAD_BIT)
++#define CASTLE_RING_IN_KERNEL_REPLACE       (69)
+ 
+ struct castle_back_conn
+ {
+@@ -1109,6 +1110,154 @@ err1: castle_free(bkey);
+ err0: return err;
+ }
+ 
++
++#define castle_key_header_size(_nr_dims) castle_object_btree_key_header_size(_nr_dims)
++
++
++uint32_t castle_build_key_len(c_vl_bkey_t            *key,
++                              size_t                  buf_len,
++                              int                     dims,
++                              const int              *key_lens,
++                              const uint8_t * const  *keys,
++                              const uint8_t          *key_flags)
++{
++    int *lens = (int *)key_lens;
++    uint32_t needed;
++    uint32_t payload_offset;
++    int i;
++
++    /* Workout the header size (including the dim_head array). */
++    needed = castle_key_header_size(dims);
++    for (i = 0; i < dims; i++)
++        needed += lens[i];
++
++    if (!key || buf_len == 0 || !keys || buf_len < needed)
++        return needed;
++
++    payload_offset = castle_key_header_size(dims);
++    key->length = needed - 4; /* Length doesn't include length field. */
++    key->nr_dims = dims;
++    *((uint64_t *)key->_unused) = 0;
++
++    /* Go through all okey dimensions and write them in. */
++    for(i=0; i<dims; i++)
++    {
++        if (key_flags)
++            key->dim_head[i] = KEY_DIMENSION_HEADER(payload_offset, key_flags[i]);
++        else
++            key->dim_head[i] = KEY_DIMENSION_HEADER(payload_offset, 0);
++        memcpy((char *)key + payload_offset, keys[i], lens[i]);
++        payload_offset += lens[i];
++    }
++
++    BUG_ON(payload_offset != needed);
++
++    return needed;
++}
++
++static size_t castle_test_make_1d_64bkey(void *buffer, uint32_t buffer_length, uint64_t _key)
++{
++    size_t total_size = 0;
++    uint64_t keys[1];
++    uint8_t *key_ptr[1];
++    int key_lens[1];
++    c_vl_bkey_t *key = buffer;
++
++    key_lens[0] = 8;
++    keys[0] = __cpu_to_be64(_key);
++    key_ptr[0] = (uint8_t *)&keys[0];
++
++    total_size = castle_build_key_len(key, buffer_length, 1, key_lens, (const uint8_t * const *) key_ptr, NULL);
++
++    BUG_ON(total_size > buffer_length);
++
++    return total_size;
++}
++
++atomic64_t castle_in_kernel_key_current = ATOMIC64_INIT(0);
++static void * castle_in_kernel_key_gen(void)
++{
++    char * key_buffer;
++    int key_len;
++    key_buffer=castle_alloc(128);
++    BUG_ON(!key_buffer);
++
++    key_len = castle_test_make_1d_64bkey(key_buffer, 128,
++                                         atomic64_add_return(1, &castle_in_kernel_key_current));
++    return (void *)key_buffer;
++}
++
++
++
++static int castle_in_kernel_back_key_copy_get(c_vl_bkey_t **key_out)
++{
++    char * in_kernel_buf;
++    c_vl_bkey_t *bkey;
++    int i, err;
++
++    in_kernel_buf = castle_in_kernel_key_gen();
++
++    bkey = (void *)in_kernel_buf;
++
++    if (*((uint64_t *)bkey->_unused) != 0)
++    {
++        error("Unused bits need to be set to 0\n");
++        err = -EINVAL;
++        goto err1;
++    }
++
++    if (bkey->nr_dims == 0)
++    {
++        error("Zero-dimensional key\n");
++        err = -EINVAL;
++        goto err1;
++    }
++
++    /* Check if all the key dimensions or sane. */
++    for (i=0; i < bkey->nr_dims; i++)
++    {
++        uint32_t dim_len    = castle_object_btree_key_dim_length(bkey, i);
++        uint8_t  dim_flags  = castle_object_btree_key_dim_flags_get(bkey, i);
++
++        /* Flags other than INFINITY flags are not supported. */
++        if (dim_flags & (KEY_DIMENSION_FLAGS_MASK ^ KEY_DIMENSION_INFINITY_FLAGS_MASK))
++        {
++            error("Found flags other than INFINITY %u\n", dim_flags);
++            err = -EINVAL;
++            goto err1;
++        }
++
++        /* Only one kind of infinity is possible. */
++        if ((dim_flags & KEY_DIMENSION_MINUS_INFINITY_FLAG) &&
++            (dim_flags & KEY_DIMENSION_PLUS_INFINITY_FLAG))
++        {
++            error("Found both PLUS_INFINITY and MINUS_INFINITY for the same dimension.\n");
++            err = -EINVAL;
++            goto err1;
++        }
++
++        /* Length should be zero, if the dimension is infinity. */
++        if ((dim_flags & KEY_DIMENSION_INFINITY_FLAGS_MASK) && (dim_len != 0))
++        {
++            error("Found mis-match for INFINITY flags and dimension length.\n");
++            err = -EINVAL;
++            goto err1;
++        }
++    }
++
++    *key_out = bkey;
++
++#ifdef DEBUG
++    vl_bkey_print(LOG_DEBUG, bkey);
++#endif
++
++    return 0;
++
++err1: castle_free(bkey);
++      return err;
++}
++
++
+ /**
+  * Copy key to buffer pointed at by key_dst and update buf_used.
+  *
+@@ -1279,7 +1428,8 @@ static void castle_back_replace_complete
+ 
+     debug("castle_back_replace_complete\n");
+ 
+-    if (op->replace.value_len > 0)
++    /* if no connection, this must have been an in-kernel op */
++    if (op->conn && op->replace.value_len > 0)
+         castle_back_buffer_put(op->conn, op->buf);
+ 
+     /* Update stats. */
+@@ -1289,6 +1439,8 @@ static void castle_back_replace_complete
+         atomic64_add(op->replace.value_len, &op->attachment->put.bytes);
+     }
+ 
++    ///* if no connection, this must have been an in-kernel op */
++    //if (op->conn)
+     castle_free(replace->key);
+ 
+     castle_attachment_put(op->attachment);
+@@ -1299,7 +1451,11 @@ static void castle_back_replace_complete
+     if(err==-EEXIST)
+         err=0;
+ 
+-    castle_back_reply(op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
++    /* if no connection, this must have been an in-kernel op */
++    if (op->conn)
++        castle_back_reply(op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
++    else
++        castle_free(op);
+ }
+ 
+ static uint32_t castle_back_replace_data_length_get(struct castle_object_replace *replace)
+@@ -1324,8 +1480,11 @@ static void castle_back_replace_data_cop
+ 
+     BUG_ON(op->buffer_offset + buffer_length > op->req.replace.value_len);
+ 
+-    memcpy(buffer, castle_back_user_to_kernel(op->buf, op->req.replace.value_ptr) + op->buffer_offset,
+-        buffer_length);
++    if (!op->buf) /* must be an in-kernel workload */
++        memcpy(buffer, op->req.replace.value_ptr, buffer_length);
++    else
++        memcpy(buffer, castle_back_user_to_kernel(op->buf, op->req.replace.value_ptr) + op->buffer_offset,
++            buffer_length);
+ 
+     op->buffer_offset += buffer_length;
+ }
+@@ -1391,6 +1550,79 @@ err0: castle_free(op->key);
+       castle_back_reply(op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
+ }
+ 
++#define CASTLE_IK_KV_GEN_BQ
++
++static void castle_back_request_process(struct castle_back_conn *conn, struct castle_back_op *op);
++static void castle_in_kernel_back_replace(void *data);
++void castle_in_kernel_replace(void)
++{
++    struct castle_back_op * op;
++    static int64_t val = 42;
++    int i;
++
++    for (i=0; i<1000000; i++)
++    {
++        op = castle_alloc(sizeof(struct castle_back_op));
++        BUG_ON(!op);
++        op->req.replace.value_ptr = &val;
++        op->req.replace.value_len = 8;
++        op->req.tag = CASTLE_RING_IN_KERNEL_REPLACE;
++        op->conn = NULL;
++
++        //////go through request_process or not?
++#ifdef CASTLE_IK_KV_GEN_BQ
++        castle_back_request_process(NULL, op);
++#else
++        op->key = NULL;
++        CVT_INVALID_INIT(op->replace.cvt);
++        op->cpu_index = 0;
++        if (castle_in_kernel_back_key_copy_get(&op->key))
++            BUG();
++        castle_in_kernel_back_replace(op);
++#endif
++    }
++    return;
++}
++
++static void castle_in_kernel_back_replace(void *data)
++{
++    struct castle_back_op *op = data;
++    struct castle_back_conn *conn = op->conn;
++    int err;
++
++    op->attachment = castle_attachment_get(0, WRITE); /* Note: make sure coll 0 is writable! */
++    if (op->attachment == NULL)
++    {
++        error("Collection not found id=0x%x\n", op->req.replace.collection_id);
++        err = -ENOTCONN;
++        goto err0;
++    }
++
++    op->buf = NULL;
++
++    op->buffer_offset = 0;
++
++    op->replace.value_len = op->req.replace.value_len;
++    op->replace.replace_continue = NULL;
++    op->replace.complete = castle_back_replace_complete;
++    op->replace.data_length_get = castle_back_replace_data_length_get;
++    op->replace.data_copy = castle_back_replace_data_copy;
++    op->replace.counter_type = CASTLE_OBJECT_NOT_COUNTER;
++    op->replace.has_user_timestamp = 0;
++    op->replace.key = op->key;  /* key will be freed by replace_complete() */
++
++    err = castle_object_replace(&op->replace, op->attachment, op->cpu_index, 0);
++    if (err)
++        goto err2;
++
++    return;
++
++err2: if (conn && op->buf) castle_back_buffer_put(conn, op->buf);
++      castle_attachment_put(op->attachment);
++err0: castle_free(op->key);
++      castle_back_reply(op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
++}
++
+ static void castle_back_timestamped_replace(void *data)
+ {
+     struct castle_back_op *op = data;
+@@ -3562,7 +3794,8 @@ static void castle_back_request_process(
+     /* Required in case castle_back_key_copy_get() fails to return a key.
+      * It won't matter that the op ends up on the wrong CPU because it will
+      * return before hitting the DA. */
+-    op->cpu_index = conn->cpu_index;
++    if (conn)
++        op->cpu_index = conn->cpu_index;
+ 
+     CVT_INVALID_INIT(op->replace.cvt);
+     switch (op->req.tag)
+@@ -3571,6 +3804,14 @@ static void castle_back_request_process(
+          *
+          * Have CPU affinity based on hash of the key.  They must hit the
+          * correct CPU (op->cpu) and CT (op->cpu_index). */
++        case CASTLE_RING_IN_KERNEL_REPLACE:
++            BUG_ON(conn);
++            op->cpu_index = 0;
++            if ((err = castle_in_kernel_back_key_copy_get(&op->key)))
++                BUG(); //goto err;
++            INIT_WORK(&op->work, castle_in_kernel_back_replace, op);
++            break;
++
+ 
+         case CASTLE_RING_TIMESTAMPED_REMOVE:
+             if ((err = castle_back_key_copy_get(conn, op->req.timestamped_remove.key_ptr,
+@@ -3709,7 +3950,7 @@ static void castle_back_request_process(
+     }
+ 
+     /* Hash key for cpu_index. */
+-    if (op->key != NULL)
++    if (conn && op->key != NULL)
+         op->cpu_index = castle_double_array_key_cpu_index(op->key);
+ 
+     /* Get CPU and queue work. */
+@@ -3717,10 +3958,12 @@ static void castle_back_request_process(
+     queue_work_on(op->cpu, castle_back_wq, &op->work);
+ 
+     /* Bump conn cpu_index/cpu for next op (might be used by stateful ops). */
+-    if (++conn->cpu_index >= castle_double_array_request_cpus())
+-        conn->cpu_index = 0;
+-    conn->cpu = castle_double_array_request_cpu(conn->cpu_index);
+-
++    if (conn)
++    {
++        if (++conn->cpu_index >= castle_double_array_request_cpus())
++            conn->cpu_index = 0;
++        conn->cpu = castle_double_array_request_cpu(conn->cpu_index);
++    }
+     return;
+ 
+ err:
+@@ -4241,7 +4484,7 @@ int castle_back_init(void)
+ {
+     int err;
+ 
+-    debug("castle_back initing...");
++    castle_printk(LOG_INIT, "castle_back initing...\n");
+ 
+     castle_back_wq = create_workqueue("castle_back");
+     if (!castle_back_wq)
+diff --git a/kernel/castle_back.h b/kernel/castle_back.h
+--- a/kernel/castle_back.h
++++ b/kernel/castle_back.h
+@@ -1,6 +1,7 @@
+ #ifndef __CASTLE_BACK_H__
+ #define __CASTLE_BACK_H__
+ 
++void castle_in_kernel_replace(void);
+ int castle_back_open(struct inode *inode, struct file *file);
+ int castle_back_mmap(struct file *file, struct vm_area_struct *vma);
+ long castle_back_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
+diff --git a/kernel/castle_ctrl.c b/kernel/castle_ctrl.c
+--- a/kernel/castle_ctrl.c
++++ b/kernel/castle_ctrl.c
+@@ -191,6 +191,10 @@ err_out:
+  */
+ void castle_control_clone(c_ver_t version, int *ret, c_ver_t *clone)
+ {
++    castle_in_kernel_replace();
++    return;
++
++#if 0
+     if (version == 0)
+     {
+         castle_printk(LOG_WARN, "Do not clone version 0. Create a new volume.\n");
+@@ -223,6 +227,7 @@ void castle_control_clone(c_ver_t versio
+         *clone = 0;
+     else
+         *clone = version;
++#endif
+ }
+ 
+ void castle_control_snapshot(uint32_t dev, int *ret, c_ver_t *version)
+@@ -966,6 +971,18 @@ int castle_control_ioctl(struct file *fi
+     if(castle_ctrl_prog_ioctl(&ioctl))
+         goto copy_out;
+ 
++    if (ioctl.cmd == CASTLE_CTRL_CLONE)
++    {
++        castle_control_clone( ioctl.clone.version,
++                             &ioctl.clone.ret,
++                             &ioctl.clone.clone);
++        /* Copy the results back */
++        if(copy_to_user(udata, &ioctl, sizeof(cctrl_ioctl_t)))
++            return -EFAULT;
++
++        return 0;
++    }
++
+     CASTLE_TRANSACTION_BEGIN;
+     debug("Lock taken: in_atomic=%d.\n", in_atomic());
+     debug("IOCTL Cmd: %u\n", (uint32_t)ioctl.cmd);
+@@ -1057,6 +1074,7 @@ int castle_control_ioctl(struct file *fi
+             break;
+ 
+         case CASTLE_CTRL_CLONE:
++            //BUG(); /* should already have taken care of this case! */
+             castle_control_clone( ioctl.clone.version,
+                                  &ioctl.clone.ret,
+                                  &ioctl.clone.clone);
+diff --git a/kernel/castle_objects.c b/kernel/castle_objects.c
+--- a/kernel/castle_objects.c
++++ b/kernel/castle_objects.c
+@@ -942,6 +942,7 @@ int castle_object_replace(struct castle_
+     /* Create the packed key out of the backend key. */
+     btree = castle_double_array_btree_type_get(attachment);
+     key = btree->key_pack(replace->key, NULL, NULL);
++
+     if (!key)
+         return -ENOMEM;
+ 
+@@ -985,6 +986,7 @@ int castle_object_replace(struct castle_
+     return 0;
+ 
+ err0:
++    castle_printk(LOG_ERROR, "%s::error %d\n", __FUNCTION__, ret);
+     btree->key_dealloc(key);
+     return ret;
+ }
