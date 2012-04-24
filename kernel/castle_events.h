@@ -24,6 +24,8 @@ void castle_netlink_fini(void);
 #define CASTLE_EVENT_MERGE_WORK_FINISHED    (132)
 #define CASTLE_EVENT_VERSION_TREE_CREATED   (133)
 #define CASTLE_EVENT_VERSION_TREE_DESTROYED (134)
+#define CASTLE_EVENT_TREE_DELETED           (135)
+
 /* Events delivered to the ctrl prog go through a different interface (netlink socket).
    This range controls which ones exactly. */
 #define CASTLE_CTRL_PROG_EVENT_RANGE_START   CASTLE_EVENT_NEW_TREE_ADDED
@@ -79,6 +81,9 @@ void castle_netlink_fini(void);
 
 #define castle_events_new_tree_added(_array_id, _da_id) \
     castle_uevent3(CASTLE_EVENT_NEW_TREE_ADDED, CASTLE_EVENTS_SUCCESS, _array_id, _da_id)
+
+#define castle_events_tree_deleted(_array_id, _da_id) \
+    castle_uevent3(CASTLE_EVENT_TREE_DELETED, CASTLE_EVENTS_SUCCESS, _array_id, _da_id)
 
 #define castle_events_merge_work_finished(_da_id, _merge_id, _work_id, _work_done, _is_merge_finished) \
     castle_uevent6(CASTLE_EVENT_MERGE_WORK_FINISHED, CASTLE_EVENTS_SUCCESS, _da_id, _merge_id, _work_id, _work_done, _is_merge_finished)
