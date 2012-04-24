@@ -12,7 +12,7 @@ $(TARGET)-objs := castle_utils.o castle_main.o castle_cache.o \
 	castle_vmap.o castle_trace.o castle_rebuild.o castle_bloom.o \
 	castle_btree_mtree.o castle_btree_vlba_tree.o castle_btree_slim.o \
 	castle_keys_vlba.o castle_keys_normalized.o castle_ctrl_prog.o \
-	castle_timestamps.o castle_mstore.o
+	castle_timestamps.o castle_mstore.o castle_instream.o
 
 # Add your debugging flag (or not) to CFLAGS
 ifeq ($(DEBUG),y)

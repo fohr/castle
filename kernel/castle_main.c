@@ -598,6 +598,7 @@ static int castle_unit_tests(void)
     int err = 0;
 
     test_seq_id++; if (0 != (err = castle_slim_tree_unit_tests_do() ) ) goto fail;
+    test_seq_id++; if (0 != (err = castle_instream_unit_tests_do() ) ) goto fail;
 
     BUG_ON(err);
     castle_printk(LOG_INIT, "%s::%d tests passed.\n", __FUNCTION__, test_seq_id);

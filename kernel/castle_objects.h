@@ -38,6 +38,7 @@ int          castle_object_pull              (struct castle_object_pull *pull,
 void         castle_object_chunk_pull        (struct castle_object_pull *pull,
                                               void *buf, size_t len);
 
+
 enum{
     CASTLE_OBJECT_NOT_COUNTER = 0,
     CASTLE_OBJECT_COUNTER_SET,
