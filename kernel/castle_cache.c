@@ -3498,6 +3498,14 @@ static int castle_cache_block_evictlist_process(void)
 }
 
 /**
+ * Wake up the castle_cache_flush() thread.
+ */
+void castle_cache_flush_wakeup(void)
+{
+    wake_up_process(castle_cache_flush_thread);
+}
+
+/**
  * Evict c2bs to the freelist so they can be used by specified partition.
  */
 static int _castle_cache_freelists_grow(c2_partition_id_t part_id)
@@ -3516,19 +3524,28 @@ static int _castle_cache_freelists_grow(c2_partition_id_t part_id)
      * available resources between partitions. */
     part_id = c2_partition_most_overbudget_find();
 
-    /* Return immediately if the partition to evict from is > 90% dirty.
+    /* Return immediately if the partition to evict from is > 95% dirty.
      *
      * By doing this we expect the caller to wake the flush thread to write back
-     * dirty c2ps to disk.
+     * dirty c2ps to disk.  If we're more than 75% dirty then proceed to grow
+     * the freelists but manually wake the flush thread now.
      *
      * If we are the flush thread, skip this check and instead attempt to return
      * as much as we can to the freelist so the active flush can progress. */
-    if (likely(current != castle_cache_flush_thread)
-            && castle_cache_partition[part_id].dirty_pct > 90)
+    if (likely(current != castle_cache_flush_thread))
     {
-        /* Inform the flush thread which partition is too dirty. */
-        castle_cache_flush_part_id = part_id;
-        return 2;
+        if (castle_cache_partition[part_id].dirty_pct > 95)
+        {
+            /* Inform the flush thread which partition is too dirty. */
+            castle_cache_flush_part_id = part_id;
+            return 2;
+        }
+        else if (castle_cache_partition[part_id].dirty_pct > 75)
+        {
+            /* Inform the flush thread which partition is too dirty. */
+            castle_cache_flush_part_id = part_id;
+            castle_cache_flush_wakeup();
+        }
     }
 
 #ifdef DEBUG
@@ -3612,14 +3629,6 @@ int castle_cache_block_destroy(c2_block_t *c2b)
     castle_cache_block_free(c2b);
 
     return 0;
-}
-
-/**
- * Wake up the castle_cache_flush() thread.
- */
-void castle_cache_flush_wakeup(void)
-{
-    wake_up_process(castle_cache_flush_thread);
 }
 
 /**
