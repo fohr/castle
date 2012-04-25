@@ -29,7 +29,7 @@ void castle_netlink_fini(void);
 /* Events delivered to the ctrl prog go through a different interface (netlink socket).
    This range controls which ones exactly. */
 #define CASTLE_CTRL_PROG_EVENT_RANGE_START   CASTLE_EVENT_NEW_TREE_ADDED
-#define CASTLE_CTRL_PROG_EVENT_RANGE_END     CASTLE_EVENT_VERSION_TREE_DESTROYED
+#define CASTLE_CTRL_PROG_EVENT_RANGE_END     CASTLE_EVENT_TREE_DELETED
 
 #define CASTLE_EVENTS_SUCCESS (0)
 
