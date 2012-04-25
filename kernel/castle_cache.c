@@ -3506,7 +3506,14 @@ static int _castle_cache_freelists_grow(c2_partition_id_t part_id)
     c2_partition_id_t grow_for_part_id = part_id;
 #endif
 
-    /* Always pick the most overbudget cache partition to evict blocks from. */
+    /* Always pick the most overbudget cache partition to evict blocks from.
+     *
+     * If growing the freelists to satisfy an allocation for a partition which
+     * is itself over budget, it does not necessarily make sense to evict from
+     * its own clean c2bs.  Because c2bs can overlap we tend towards a situation
+     * where all cache partitions are overbudget at all times.  Unless we always
+     * evict from the most overbudget partition we are not fairly sharing the
+     * available resources between partitions. */
     part_id = c2_partition_most_overbudget_find();
 
     /* Return immediately if the partition to evict from is > 90% dirty.
