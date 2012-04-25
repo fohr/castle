@@ -369,6 +369,8 @@ static atomic_t                castle_cache_clean_pgs;              /**< Clean p
 static atomic_t                castle_cache_block_victims;          /**< Clean blocks evicted     */
                                                                     /**< TODO, should be made per
                                                                      *   cache partition          */
+static c2_partition_id_t       castle_cache_flush_part_id = NR_CACHE_PARTITIONS; /**< Cache
+                                                                         partition to flush       */
 
 /**
  * Castle cache partition states.
@@ -3516,7 +3518,11 @@ static int _castle_cache_freelists_grow(c2_partition_id_t part_id)
      * as much as we can to the freelist so the active flush can progress. */
     if (likely(current != castle_cache_flush_thread)
             && castle_cache_partition[part_id].dirty_pct > 90)
+    {
+        /* Inform the flush thread which partition is too dirty. */
+        castle_cache_flush_part_id = part_id;
         return 2;
+    }
 
 #ifdef DEBUG
     if (grow_for_part_id == USER)
@@ -5560,8 +5566,10 @@ static int castle_cache_flush(void *unused)
         /* Wait until we have a worthwhile number of pages to flush.
          * This limits us to a min of 10 MIN_BATCHES/s. */
         wait_event_interruptible_timeout(castle_cache_flush_wq,
-                exiting || (atomic_read(&castle_cache_dirty_pgs)
-                    - target_dirty_pgs >= MIN_FLUSH_SIZE),
+                exiting
+                    || (atomic_read(&castle_cache_dirty_pgs)
+                        - target_dirty_pgs >= MIN_FLUSH_SIZE)
+                    || (castle_cache_flush_part_id < NR_CACHE_PARTITIONS),
                 HZ/MIN_FLUSH_FREQ);
 
         dirty_pgs = atomic_read(&castle_cache_dirty_pgs);
@@ -5585,22 +5593,47 @@ static int castle_cache_flush(void *unused)
         {
             /* We're not exiting, calculate the number of pages to flush.
              *
-             * Calculate the number of pages dirtied since the last iteration.
+             * If _castle_cache_freelists_grow() gave us a hint as to which
+             * partition is too dirty and we're not already going to flush the
+             * MAX_FLUSH_SIZE pages then set to_flush so that 3/4 of the target
+             * partition is dirty.
+             *
              * Flush at least MIN_FLUSH_SIZE, at most MAX_FLUSH_SIZE and not
              * more than the number of dirty pages within the cache. */
             to_flush = dirty_pgs - target_dirty_pgs;    /* ~#pgs dirtied since last iter    */
+            if (to_flush < MAX_FLUSH_SIZE
+                    && castle_cache_flush_part_id < NR_CACHE_PARTITIONS)
+            {
+                c2_partition_t *partition;
+                int target, dirty, cur;
+
+                partition = &castle_cache_partition[castle_cache_flush_part_id];
+
+                dirty  = atomic_read(&partition->dirty_pgs);
+                cur    = atomic_read(&partition->cur_pgs);
+                target = 3 * (cur / 4);
+                if (dirty > target)
+                    to_flush = dirty - target;
+
+                /* Clear dirty partition hint. */
+                castle_cache_flush_part_id = NR_CACHE_PARTITIONS;
+            }
             to_flush = max(MIN_FLUSH_SIZE, to_flush);   /* at least MIN_FLUSH_SIZE pgs      */
             to_flush = min(MAX_FLUSH_SIZE, to_flush);   /* at max MAX_FLUSH_SIZE pgs        */
             to_flush = min(dirty_pgs,      to_flush);   /* and no more than are dirty.      */
         }
         last_flush = to_flush;
 
-        /* Iterate over all dirty extents trying to find pages to flush.
-           Try flushing extents from high priority (i.e. low value) dirtylists first.
-           Start with 'non-aggressive' flush (i.e. when only extents that are deemed
-           to be worth-while flushing are flushed), if to_flush pages aren't found,
-           switch to aggressive.
+        /*
+         * We have now decided how many pages to flush.
+         *
+         * Iterate over all dirty extents trying to find pages to flush.
+         * Try flushing extents from high priority (i.e. low value) dirtylists first.
+         * Start with 'non-aggressive' flush (i.e. when only extents that are deemed
+         * to be worth-while flushing are flushed), if to_flush pages aren't found,
+         * switch to aggressive.
          */
+
         aggressive = 0;
 aggressive:
         for(prio = 0; prio < NR_EXTENT_FLUSH_PRIOS; prio++)
