@@ -3804,7 +3804,6 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
 
     BUG_ON(BLOCK_OFFSET(cep.offset));
 
-    castle_cache_flush_wakeup();
     might_sleep();
     for(;;)
     {
