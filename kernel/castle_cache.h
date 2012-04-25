@@ -41,7 +41,6 @@ typedef struct castle_cache_block {
     atomic_t                   lock_cnt;
     c2b_end_io_t               end_io;          /**< IO CB handler routine*/
     void                      *private;         /**< Can only be used if c2b is locked            */
-    struct work_struct         work;
 #ifdef CASTLE_DEBUG
     char                      *file;
     int                        line;
