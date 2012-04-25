@@ -482,8 +482,9 @@ void castle_cache_stats_print(int verbose)
     atomic_sub(writes, &castle_cache_write_stats);
 
     if (verbose)
-        castle_printk(LOG_PERF, "castle_cache_stats_timer_tick: D=%d C=%d F=%d R=%d W=%d\n",
+        castle_printk(LOG_PERF, "castle_cache_stats_timer_tick: D=%d(%d%%) C=%d F=%d R=%d W=%d\n",
             atomic_read(&castle_cache_dirty_pgs),
+            100 * atomic_read(&castle_cache_dirty_pgs) / castle_cache_size,
             atomic_read(&castle_cache_clean_pgs),
             castle_cache_page_freelist_size * PAGES_PER_C2P,
             reads,
@@ -516,16 +517,16 @@ void castle_cache_stats_print(int verbose)
     castle_trace_cache(TRACE_VALUE, TRACE_CACHE_WRITES_ID, writes, 0);
 
     if (verbose)
-        castle_printk(LOG_PERF, "USER: %d%% %d/%d D=%d(%d%%) clock=%d MERGE: %d%% %d/%d D=%d(%d%%) evict=%d\n",
-                castle_cache_partition[USER].use_pct,
+        castle_printk(LOG_PERF, "USER: %d/%d(%d%%) D=%d(%d%%) clock=%d MERGE: %d/%d(%d%%) D=%d(%d%%) evict=%d\n",
                 atomic_read(&castle_cache_partition[USER].cur_pgs),
                 atomic_read(&castle_cache_partition[USER].max_pgs),
+                castle_cache_partition[USER].use_pct,
                 atomic_read(&castle_cache_partition[USER].dirty_pgs),
                 castle_cache_partition[USER].dirty_pct,
                 atomic_read(&castle_cache_block_clock_size),
-                castle_cache_partition[MERGE_OUT].use_pct,
                 atomic_read(&castle_cache_partition[MERGE_OUT].cur_pgs),
                 atomic_read(&castle_cache_partition[MERGE_OUT].max_pgs),
+                castle_cache_partition[MERGE_OUT].use_pct,
                 atomic_read(&castle_cache_partition[MERGE_OUT].dirty_pgs),
                 castle_cache_partition[MERGE_OUT].dirty_pct,
                 atomic_read(&castle_cache_block_evictlist_size));
@@ -3503,28 +3504,19 @@ static int _castle_cache_freelists_grow(c2_partition_id_t part_id)
     c2_partition_id_t grow_for_part_id = part_id;
 #endif
 
-    /* Return immediately if the c2p cleanlist is < 10% of the cache.
-     *
-     * @TODO: This will need better tuning, perhaps integration with partition
-     * clean_pgs, dirty_pgs, etc.  Future work.
+    /* Always pick the most overbudget cache partition to evict blocks from. */
+    part_id = c2_partition_most_overbudget_find();
+
+    /* Return immediately if the partition to evict from is > 90% dirty.
      *
      * By doing this we expect the caller to wake the flush thread to write back
      * dirty c2ps to disk.
      *
      * If we are the flush thread, skip this check and instead attempt to return
      * as much as we can to the freelist so the active flush can progress. */
-    if (likely(current != castle_cache_flush_thread))
-    {
-        int clean, dirty;
-
-        clean = atomic_read(&castle_cache_clean_pgs);
-        dirty = atomic_read(&castle_cache_dirty_pgs);
-        if (clean < (clean + dirty) / 10)
-            return 2;
-    }
-
-    /* Always pick the most overbudget cache partition to evict blocks from. */
-    part_id = c2_partition_most_overbudget_find();
+    if (likely(current != castle_cache_flush_thread)
+            && castle_cache_partition[part_id].dirty_pct > 90)
+        return 2;
 
 #ifdef DEBUG
     if (grow_for_part_id == USER)
