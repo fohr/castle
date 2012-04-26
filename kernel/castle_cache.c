@@ -3312,7 +3312,7 @@ static inline int c2b_busy(c2_block_t *c2b, int expected_count)
  * @also _castle_cache_block_get()
  * @also castle_cache_freelists_grow()
  */
-static int castle_cache_block_clock_process(c2_partition_id_t part_id, int target_pages)
+static int castle_cache_block_clock_process(int target_pages, c2_partition_id_t part_id)
 {
     static const int CLOCK_ROUNDS = 3;
     struct list_head *next;
@@ -3503,9 +3503,8 @@ void castle_cache_flush_wakeup(void)
 /**
  * Evict c2bs to the freelist so they can be used by specified partition.
  */
-static int _castle_cache_freelists_grow(c2_partition_id_t part_id)
+static int _castle_cache_freelists_grow(int nr_pages, c2_partition_id_t part_id)
 {
-    static const int BATCH_FREE = 100*256; /* 100MB */
 #ifdef DEBUG
     c2_partition_id_t grow_for_part_id = part_id;
 #endif
@@ -3553,13 +3552,16 @@ static int _castle_cache_freelists_grow(c2_partition_id_t part_id)
                 castle_cache_partition[grow_for_part_id].use_pct);
 #endif
 
+    /* Evict 2% of the cache, unless more pages have been requested. */
+    nr_pages = max(castle_cache_size / 50, nr_pages);
+
     /* Evict blocks from overbudget partition. */
     if (part_id == MERGE_OUT)
-        return castle_cache_block_evictlist_process(BATCH_FREE);
+        return castle_cache_block_evictlist_process(nr_pages);
     else
     {
         BUG_ON(!castle_cache_partition[part_id].use_clock);
-        return castle_cache_block_clock_process(part_id, BATCH_FREE);
+        return castle_cache_block_clock_process(nr_pages, part_id);
     }
 }
 
@@ -3648,7 +3650,7 @@ static void castle_cache_freelists_grow(int nr_c2bs, int nr_pages, c2_partition_
 {
     int flush_seq, success;
 
-    while (_castle_cache_freelists_grow(part_id) != EXIT_SUCCESS)
+    while (_castle_cache_freelists_grow(nr_pages, part_id) != EXIT_SUCCESS)
     {
         debug("Failed to clean the hash.\n");
 
