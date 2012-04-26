@@ -242,6 +242,7 @@ static void castle_objects_rq_iter_init(castle_object_iterator_t *iter,
                            iter->start_key,
                            iter->end_key,
                            iter->seq_id,
+                           iter->flags,
                            _castle_objects_rq_iter_init, /*init_cb*/
                            iter /*private*/);
 
@@ -1098,6 +1099,7 @@ int castle_object_iter_init(struct castle_attachment *attachment,
                              c_vl_bkey_t *end_key,
                              castle_object_iterator_t **iter,
                              int seq_id,
+                             uint8_t flags,
                              castle_object_iter_start_cb_t start_cb,
                              void *private)
 {
@@ -1142,6 +1144,7 @@ int castle_object_iter_init(struct castle_attachment *attachment,
 
     /* Initialise the rest of the iterator */
     iterator->seq_id        = seq_id;
+    iterator->flags         = flags;
     iterator->version       = attachment->version;
     iterator->da_id         = castle_version_da_id_get(iterator->version);
     iterator->start_cb      = start_cb;

@@ -2159,6 +2159,7 @@ static void castle_back_iter_start(void *data)
                                   end_key,
                                   &stateful_op->iterator.iterator,
                                   stateful_op->seq_id,
+                                  stateful_op->flags,
                                   _castle_back_iter_start, /*async_cb*/
                                   stateful_op /*private*/);
     if (err)

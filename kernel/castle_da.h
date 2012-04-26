@@ -196,6 +196,7 @@ void castle_da_rq_iter_init    (c_da_rq_iter_t *iter,
                                 void *start_key,
                                 void *end_key,
                                 int seq_id,
+                                uint8_t flags,
                                 castle_da_rq_iter_init_cb_t init_cb,
                                 void *private);
 extern struct castle_iterator_type castle_da_rq_iter;

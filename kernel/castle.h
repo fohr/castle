@@ -1836,6 +1836,7 @@ struct castle_da_rq_iterator
     void                       *private;            /**< Passed to init_cb().                   */
 
     int                         seq_id;             /**< Unique ID for tracing.                 */
+    uint8_t                     flags;
     int                         err;
 };
 
@@ -2159,6 +2160,7 @@ struct castle_object_iterator
     struct castle_btree_type           *btree;
     void                               *start_key;
     void                               *end_key;
+    uint8_t                             flags;
 
     /* Rest */
     int                                 seq_id;                 /**< Unique ID for tracing.     */

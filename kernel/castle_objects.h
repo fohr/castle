@@ -21,6 +21,7 @@ int          castle_object_iter_init         (struct castle_attachment *attachme
                                               c_vl_bkey_t *end_key,
                                               castle_object_iterator_t **iter,
                                               int seq_id,
+                                              uint8_t flags,
                                               castle_object_iter_start_cb_t start_cb,
                                               void *private);
 int          castle_object_iter_next         (castle_object_iterator_t *iterator,

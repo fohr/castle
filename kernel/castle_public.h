@@ -957,6 +957,8 @@ enum {
     CASTLE_RING_FLAG_ITER_GET_OOL     = (1 << 4),        /**< Return out-of-line values inline.              */
     CASTLE_RING_FLAG_RET_TIMESTAMP    = (1 << 5),        /**< Return value timestamps.                       */
     CASTLE_RING_FLAG_RET_TOMBSTONE    = (1 << 6),        /**< Return tombstones (instead of ENOENT).         */
+    CASTLE_RING_FLAG_INC_BACKUP       = (1 << 7),        /**< Iterator for Incremental Backup.               */
+    /* Note: Flags are stored in 8-bit fields. Don't overflow. */
 };
 
 typedef struct castle_response {
