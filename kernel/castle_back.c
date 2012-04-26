@@ -2154,6 +2154,10 @@ static void castle_back_iter_start(void *data)
 
     trace_CASTLE_REQUEST_BEGIN(stateful_op->seq_id, stateful_op->tag);
 
+    /* For incremental backup we want to return tombstones also. */
+    if (stateful_op->flags & CASTLE_RING_FLAG_INC_BACKUP)
+        stateful_op->flags |= CASTLE_RING_FLAG_RET_TOMBSTONE;
+
     err = castle_object_iter_init(attachment,
                                   start_key,
                                   end_key,

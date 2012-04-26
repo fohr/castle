@@ -2278,6 +2278,10 @@ void castle_da_rq_iter_cancel(c_da_rq_iter_t *iter)
 
     /* Put DA CTs proxy structure. */
     castle_da_cts_proxy_put(iter->cts_proxy);
+
+    /* Complete incremental backup. */
+    if (iter->flags & CASTLE_RING_FLAG_INC_BACKUP)
+        castle_da_incremental_backup_finish(iter->da, iter->err);
 }
 
 /**
@@ -2408,6 +2412,10 @@ alloc_fail:
     else
         BUG();
 
+    /* If the iterator is for incremental backup, get-rid of the backup state. */
+    if (iter->flags & CASTLE_RING_FLAG_INC_BACKUP)
+        castle_da_incremental_backup_finish(iter->da, -ENOMEM);
+
     BUG_ON(iter->relevant_cts == NULL);
     castle_check_free(iter->relevant_cts);
 
@@ -2458,8 +2466,13 @@ static inline int castle_da_rq_iter_ct_relevant(struct castle_da_cts_proxy_ct *p
                                                 void *start_key,
                                                 void *end_key,
                                                 void **start_stripped,
-                                                void **end_stripped)
+                                                void **end_stripped,
+                                                int inc_backup_iter)
 {
+    if (inc_backup_iter && !castle_da_inc_backup_needed(proxy_ct->ct))
+        /* Skip this tree for backup. */
+        return 0;
+
     if (proxy_ct->state == REDIR_INTREE
             && btree->key_compare(proxy_ct->pk_next, end_key) > 0)
         /* Skip this input tree if the next(partition key) is greater than
@@ -2556,7 +2569,8 @@ int castle_da_rq_iter_relevant_cts_get(c_da_rq_iter_t *iter,
                                               start_key,
                                               end_key,
                                               &iter->start_stripped,
-                                              &iter->end_stripped))
+                                              &iter->end_stripped,
+                                              (iter->flags & CASTLE_RING_FLAG_INC_BACKUP)))
         {
             case 0:
                 /* CT is not relevant to range query. */
@@ -2638,6 +2652,14 @@ void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
     BUG_ON(!da);
     BUG_ON(!castle_version_is_ancestor(da->root_version, version));
 
+    /* If the iterator is for incremental backup, setup backup. */
+    if (flags & CASTLE_RING_FLAG_INC_BACKUP)
+    {
+        iter->err = castle_da_incremental_backup_start(da);
+        if (iter->err)
+            goto backup_fail;
+    }
+
     /* Get CTs proxy structure. */
     iter->cts_proxy = castle_da_cts_proxy_get(da);
     if (!iter->cts_proxy)
@@ -2676,6 +2698,11 @@ alloc_fail2:
     }
 alloc_fail:
     iter->err = -ENOMEM;
+
+    /* If we set-up backup, destroy the state. */
+    if (flags & CASTLE_RING_FLAG_INC_BACKUP)
+        castle_da_incremental_backup_finish(da, iter->err);
+backup_fail:
     init_cb(private);
 }
 
