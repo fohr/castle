@@ -12755,6 +12755,9 @@ void castle_da_in_stream_complete(struct castle_immut_tree_construct *constr, in
 
     /* We don't need constructor any more. */
     castle_immut_tree_constr_dealloc(constr);
+
+    /* Invalidate any existing DA CTs proxy structure. */
+    castle_da_cts_proxy_invalidate(da);
 }
 
 int castle_da_in_stream_entry_add(struct castle_immut_tree_construct *constr,
