@@ -4278,9 +4278,11 @@ static c_val_tup_t _castle_immut_tree_entry_add(struct castle_immut_tree_constru
         tree_constr->last_key = level->last_key;
 
     /* Dirty the node, and unlock if non-leaf node. */
-    dirty_c2b(level->node_c2b);
     if (depth > 0)
+    {
+        dirty_c2b(level->node_c2b);
         write_unlock_c2b(level->node_c2b);
+    }
 
     if(new_root_node)
     {
