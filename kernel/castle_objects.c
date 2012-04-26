@@ -1026,8 +1026,10 @@ int castle_object_batch_in_stream(struct  castle_attachment *attachment,
         if (!key)
             return -ENOMEM;
 
+#if 0
         castle_printk(LOG_DEVEL, "%s::key: \n", __FUNCTION__);
         btree->key_print(LOG_DEVEL, key);
+#endif
 
         BUG_ON(castle_da_in_stream_entry_add(da_stream,
                     key,
