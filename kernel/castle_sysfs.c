@@ -909,7 +909,9 @@ static ssize_t ct_merge_state_show(struct kobject *kobj,
 
     read_lock(&ct->da->lock);
 
-    if (!ct->merge)
+    if (test_bit(CASTLE_CT_BACKUP_BARRIER_BIT, &ct->flags))
+        ret = sprintf(buf, "barrier");
+    else if (!ct->merge)
         ret = sprintf(buf, "idle\n");
     else if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags))
         ret = sprintf(buf, "output\n");
@@ -1010,7 +1012,7 @@ int castle_sysfs_ct_add(struct castle_component_tree *ct)
 
     /* It is definitely, not recommended, when DA is just getting created as the parent is not
      * yet created. */
-    BUG_ON(ct->level < 2);
+    BUG_ON(ct->level < 2 && !test_bit(CASTLE_CT_BACKUP_BARRIER_BIT, &ct->flags));
 
     /* Add a directory for list of arrays. */
     memset(&ct->kobj, 0, sizeof(struct kobject));
@@ -1070,7 +1072,7 @@ void castle_sysfs_ct_del(struct castle_component_tree *ct)
 {
     int i;
 
-    if (ct->level < 2)
+    if (ct->level < 2 && !test_bit(CASTLE_CT_BACKUP_BARRIER_BIT, &ct->flags))
         return;
 
     /* Remove all the links for data extents. */

@@ -138,6 +138,9 @@ typedef enum {
     DAM_MARSHALL_OUTTREE   /**< Marshall only output cct state    */
 } c_da_merge_marshall_set_t;
 
+#define DA_TRANSACTION_BEGIN(_da) do { CASTLE_TRANSACTION_BEGIN; write_lock(&(_da)->lock); } while(0)
+#define DA_TRANSACTION_END(_da) do { write_unlock(&(_da)->lock); CASTLE_TRANSACTION_END; } while(0)
+
 /**********************************************************************************************/
 /* Prototypes */
 static struct castle_component_tree * castle_ct_init(struct castle_double_array *da,
@@ -236,6 +239,12 @@ atomic_t castle_da_max_merge_id = ATOMIC(0);
 
 tree_seq_t castle_da_next_ct_seq(void);
 
+static int castle_da_inc_backup_needed(struct castle_component_tree *ct);
+
+static int castle_da_incremental_backup_start(struct castle_double_array *da);
+
+static int castle_da_incremental_backup_finish(struct castle_double_array *da,
+                                               int                         err);
 /**********************************************************************************************/
 /* Merges */
 #define MAX_IOS             (1000) /* Arbitrary constants */
@@ -2843,20 +2852,27 @@ static int castle_da_l1_merge_cts_get(struct castle_double_array *da,
             msleep_interruptible(10);
         }
 
+        /* Just promote barrier_ct to next level (L2). This tree is empty, just a barrier. */
+        if (test_bit(CASTLE_CT_BACKUP_BARRIER_BIT, &ct->flags))
+        {
+            DA_TRANSACTION_BEGIN(da);
+            castle_component_tree_promote(da, ct);
+            DA_TRANSACTION_END(da);
+
+            return -EAGAIN;
+        }
+
         /* Check that the tree has non-zero elements. */
         if(atomic64_read(&ct->item_count) == 0)
         {
             castle_printk(LOG_DEBUG, "Found empty CT=0x%llx, freeing it up.\n", ct->seq);
             /* No items in this CT, deallocate it by removing it from the DA,
                and dropping the ref. */
-            CASTLE_TRANSACTION_BEGIN;
-
             castle_sysfs_ct_del(ct);
 
-            write_lock(&da->lock);
+            DA_TRANSACTION_BEGIN(da);
             castle_component_tree_del(da, ct);
-            write_unlock(&da->lock);
-            CASTLE_TRANSACTION_END;
+            DA_TRANSACTION_END(da);
             castle_ct_put(ct, READ /*rw*/);
 
             return -EAGAIN;
@@ -7853,6 +7869,8 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id, c_da_opts_t opt
     rwlock_init(&da->lock);
     da->flags           = 0;
     da->nr_trees        = 0;
+    da->inc_backup.active_barrier_ct = INVAL_TREE;
+    da->inc_backup.barrier_ct = NULL;
     atomic_set(&da->ref_cnt, 1);
     atomic_set(&da->attachment_cnt, 0);
     atomic_set(&da->ios_waiting_cnt, 0);
@@ -7942,6 +7960,7 @@ void castle_da_marshall(struct castle_dlist_entry *dam,
     dam->root_version      = da->root_version;
     dam->btree_type        = da->btree_type;
     dam->creation_opts     = da->creation_opts;
+    dam->active_barrier_ct = da->inc_backup.active_barrier_ct;
 
     dam->tombstone_discard_threshold_time_s =
             atomic64_read(&da->tombstone_discard_threshold_time_s);
@@ -7955,6 +7974,7 @@ static void castle_da_unmarshall(struct castle_double_array *da,
     da->root_version      = dam->root_version;
     da->btree_type        = dam->btree_type;
     da->creation_opts     = dam->creation_opts;
+    da->inc_backup.active_barrier_ct = dam->active_barrier_ct;
 
     atomic64_set(&da->tombstone_discard_threshold_time_s,
             dam->tombstone_discard_threshold_time_s);
@@ -8064,8 +8084,9 @@ static void castle_component_tree_promote(struct castle_double_array *da,
     castle_component_tree_del(da, ct);
     ct->level++;
 
-    BUG_ON(ct->level != 1);
-    ct->data_age = atomic64_inc_return(&castle_next_tree_data_age);
+    /* If promoting to level-1 assign it a data age. */
+    if (ct->level == 1)
+        ct->data_age = atomic64_inc_return(&castle_next_tree_data_age);
 
     castle_ct_stats_commit(ct);
 
@@ -8538,9 +8559,9 @@ void castle_ct_get(struct castle_component_tree *ct, int rw)
  *       partial merges, i.e. those that are the result of a merge.
  *
  */
-void castle_ct_and_exts_get(struct castle_component_tree *ct,
-                            c_ct_ext_ref_t *refs,
-                            c_chk_cnt_t *da_size_contrib_p)
+static void castle_ct_and_exts_get(struct castle_component_tree *ct,
+                                   c_ct_ext_ref_t *refs,
+                                   c_chk_cnt_t *da_size_contrib_p)
 {
     int i, nr_refs = 0;
     c_chk_cnt_t da_size_contrib, size_delta;
@@ -9019,6 +9040,11 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
 
     mstores = (struct castle_da_writeback_mstores *)mstores_p;
 
+    /* Don't checkpoint inactive barrier CTs. */
+    if (test_bit(CASTLE_CT_BACKUP_BARRIER_BIT, &ct->flags) &&
+                        (da->inc_backup.active_barrier_ct != ct->seq))
+        return 0;
+
     /* Partial merge output tree is being checkpointed using merge serialisation. */
     /* FIXME: Move that to here. */
     if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags))
@@ -9048,8 +9074,9 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
     if(!EXT_ID_INVAL(ct->internal_ext_free.ext_id))
         castle_cache_extent_flush_schedule(ct->internal_ext_free.ext_id, 0,
                                        atomic64_read(&ct->internal_ext_free.used));
-    castle_cache_extent_flush_schedule(ct->tree_ext_free.ext_id, 0,
-                                       atomic64_read(&ct->tree_ext_free.used));
+    if (!EXT_ID_INVAL(ct->tree_ext_free.ext_id))
+        castle_cache_extent_flush_schedule(ct->tree_ext_free.ext_id, 0,
+                                           atomic64_read(&ct->tree_ext_free.used));
     if (!EXT_ID_INVAL(ct->data_ext_free.ext_id))
         castle_cache_extent_flush_schedule(ct->data_ext_free.ext_id, 0,
                                            atomic64_read(&ct->data_ext_free.used));
@@ -12304,6 +12331,15 @@ static int castle_da_merge_fill_trees(uint32_t nr_arrays, c_array_id_t *array_id
             goto out;
         }
 
+        /* Barrier Cts should never be merged. */
+        if (test_bit(CASTLE_CT_BACKUP_BARRIER_BIT, &ct->flags))
+        {
+            castle_printk(LOG_USERINFO, "Array 0x%llx is a back-up barrier. Can't be merged.\n",
+                                        ct->seq);
+            ret = C_ERR_MERGE_BACKUP_BARRIER;
+            goto out;
+        }
+
         /* Check if the tree is already marked for merge. */
         if (ct->merge)
         {
@@ -12777,4 +12813,144 @@ int castle_da_in_stream_entry_add(struct castle_immut_tree_construct *constr,
                                        cvt,
                                        0,       /* Not a re-add. */
                                        1);      /* Complete nodes, if possible. */
+}
+
+static struct castle_component_tree * castle_da_barrier_ct_create(struct castle_double_array *da)
+{
+    struct castle_component_tree *ct;
+
+    /* Create a CT to add as barrier. */
+    ct = castle_ct_alloc(da,
+                         1 /* Level */,
+                         INVAL_TREE,
+                         0 /* # data extents */,
+                         0 /* # rwcts*/);
+    if (ct == NULL)
+    {
+        castle_printk(LOG_USERINFO, "Failed to create barrier CT for backup.\n");
+        return NULL;
+    }
+    set_bit(CASTLE_CT_BACKUP_BARRIER_BIT, &ct->flags);
+
+    /* Add it at the end of level-1. */
+    DA_TRANSACTION_BEGIN(da);
+
+    ct->data_age = atomic64_inc_return(&castle_next_tree_data_age);
+    castle_component_tree_add(da, ct, NULL);
+
+    DA_TRANSACTION_END(da);
+
+    castle_sysfs_ct_add(ct);
+
+    castle_events_new_tree_added(ct->seq, da->id);
+
+    /* Invalidate old proxy, so we can see barrier CT immediatly. */
+    castle_da_cts_proxy_invalidate(da);
+
+    /* Trigger merges, so level-1 merge will promote the barrier to level-2. */
+    castle_da_merge_restart(da, NULL);
+
+    castle_printk(LOG_USERINFO, "Created barrier CT: 0x%llx\n", ct->seq);
+
+    return ct;
+}
+
+static void castle_da_barrier_ct_destroy(struct castle_double_array *da,
+                                         struct castle_component_tree *ct)
+{
+    if (!ct)
+        return;
+
+    castle_printk(LOG_USERINFO, "Destroying barrier CT: 0x%llx\n", ct->seq);
+
+    castle_events_tree_deleted(ct->seq, da->id);
+    castle_sysfs_ct_del(ct);
+
+    DA_TRANSACTION_BEGIN(da);
+    castle_component_tree_del(da, ct);
+    DA_TRANSACTION_END(da);
+
+    castle_ct_put(ct, READ);
+}
+
+static int castle_da_inc_backup_needed(struct castle_component_tree *ct)
+{
+    struct castle_double_array *da = ct->da;
+    tree_seq_t barrier_age, prev_barrier_age;
+
+    barrier_age      = da->inc_backup.barrier_ct->data_age;
+    prev_barrier_age = TREE_INVAL(da->inc_backup.active_barrier_ct) ? 0 :
+                       (castle_ct_hash_get(da->inc_backup.active_barrier_ct))->data_age;
+
+    if ((ct->data_age < barrier_age) && (ct->data_age > prev_barrier_age))
+        return 1;
+
+    return 0;
+}
+
+/**
+ * Set-up DA for a incremental back-up.
+ */
+static int castle_da_incremental_backup_start(struct castle_double_array *da)
+{
+    castle_printk(LOG_USERINFO, "Starting back-up\n");
+
+    /* Don't allow multiple backups concurrently. */
+    if (test_and_set_bit(CASTLE_DA_BACK_UP_ONGOING, &da->flags))
+    {
+        castle_printk(LOG_USERINFO, "Already another back-up is going on.\n");
+        return -EBUSY;
+    }
+
+    /* Sanity Checks. */
+    BUG_ON(castle_da_deleted(da));
+    BUG_ON(da->inc_backup.barrier_ct != NULL);
+    {
+        struct castle_component_tree *ct = castle_ct_hash_get(da->inc_backup.active_barrier_ct);
+
+        BUG_ON(ct && !test_bit(CASTLE_CT_BACKUP_BARRIER_BIT, &ct->flags));
+    }
+
+    /* Create barrier CT. */
+    da->inc_backup.barrier_ct = castle_da_barrier_ct_create(da);
+    if (da->inc_backup.barrier_ct == NULL)
+    {
+        castle_printk(LOG_USERINFO, "Failed to create barrier CT for backup.\n");
+        castle_da_incremental_backup_finish(da, -ENOMEM);
+        return -ENOMEM;
+    }
+
+    return 0;
+}
+
+static int castle_da_incremental_backup_finish(struct castle_double_array *da, int err)
+{
+    /* Sanity Checks. */
+    BUG_ON(!test_bit(CASTLE_DA_BACK_UP_ONGOING, &da->flags));
+
+    if (!err)
+    {
+        tree_seq_t ct_seq;
+
+        BUG_ON(da->inc_backup.barrier_ct == NULL);
+
+        /* Done with back-up activate new barrier. */
+        DA_TRANSACTION_BEGIN(da);
+        ct_seq = da->inc_backup.active_barrier_ct;
+        da->inc_backup.active_barrier_ct = da->inc_backup.barrier_ct->seq;
+        DA_TRANSACTION_END(da);
+
+        /* Get-rid of old barrier CT. */
+        castle_da_barrier_ct_destroy(da, castle_ct_hash_get(ct_seq));
+    }
+    else
+        castle_da_barrier_ct_destroy(da, da->inc_backup.barrier_ct);
+
+    clear_bit(CASTLE_DA_BACK_UP_ONGOING, &da->flags);
+
+    castle_printk(LOG_USERINFO, "Completed Backup.\n");
+
+    da->inc_backup.barrier_ct = NULL;
+
+    return 0;
 }

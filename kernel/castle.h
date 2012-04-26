@@ -1067,9 +1067,12 @@ STATIC_BUG_ON(sizeof(struct castle_bbp_entry) != 70);
 #define CASTLE_CT_MERGE_OUTPUT_BIT      3   /* CT is being created by a merge.                  */
 #define CASTLE_CT_MERGE_INPUT_BIT       4   /* CT is being merged.                              */
 #define CASTLE_CT_PARTIAL_TREE_BIT      5   /* CT tree is partial could be intree/outtree.      */
+#define CASTLE_CT_BACKUP_BARRIER_BIT    6   /* CT is the last tree backed-up. Everything after
+                                               this, yet to be backed-up.                       */
 
 #define CASTLE_CT_ON_DISK_FLAGS_MASK    ((1UL << CASTLE_CT_DYNAMIC_BIT)         |   \
-                                         (1UL << CASTLE_CT_BLOOM_EXISTS_BIT))
+                                         (1UL << CASTLE_CT_BLOOM_EXISTS_BIT)    |   \
+                                         (1UL << CASTLE_CT_BACKUP_BARRIER_BIT))
 
 #define CT_DYNAMIC(_ct)         (test_bit(CASTLE_CT_DYNAMIC_BIT, &(_ct)->flags))
 #define CT_BLOOM_EXISTS(_ct)    (test_bit(CASTLE_CT_BLOOM_EXISTS_BIT, &(_ct)->flags))
@@ -1077,8 +1080,9 @@ STATIC_BUG_ON(sizeof(struct castle_bbp_entry) != 70);
  * Is CT queriable.
  */
 #define CASTLE_CT_QUERIABLE(_ct)                                            \
-    (test_bit(CASTLE_CT_PARTIAL_TREE_BIT, &((_ct)->flags))                  \
-        || !test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &((_ct)->flags)))
+    (!test_bit(CASTLE_CT_BACKUP_BARRIER_BIT, &((_ct)->flags)) &&            \
+        (test_bit(CASTLE_CT_PARTIAL_TREE_BIT, &((_ct)->flags))  ||          \
+        !test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &((_ct)->flags))))
 
 /**
  * Total number of extents associated with a CT.
@@ -1175,7 +1179,8 @@ struct castle_dlist_entry {
     /*          8 */ btree_t     btree_type;
     /*          9 */ uint64_t    creation_opts;
     /*         17 */ uint64_t    tombstone_discard_threshold_time_s;
-    /*         25 */ uint8_t     _unused[231];
+    /*         25 */ tree_seq_t  active_barrier_ct;
+    /*         33 */ uint8_t     _unused[223];
     /*        256 */
 } PACKED;
 STATIC_BUG_ON(sizeof(struct castle_dlist_entry) != 256);
@@ -2334,6 +2339,8 @@ typedef enum {
 #define CASTLE_DA_CTS_PROXY_CREATE_BIT      (2)     /**< Serialises creation of da->cts_proxy.  */
 #define CASTLE_DA_INSERTS_DISABLED          (3)     /**< Set when inserts are disabled.         */
 #define CASTLE_DA_INSERTS_BLOCKED_ON_MERGE  (4)
+#define CASTLE_DA_BACK_UP_ONGOING           (5)
+
 #define CASTLE_TOMBSTONE_DISCARD_TD_DEFAULT (0)
 
 #define PARTIAL_MERGES_QUERY_REDIRECTION_BTREE_NODE_LEVEL (0)
@@ -2375,6 +2382,12 @@ struct castle_double_array {
     struct list_head            hash_list;
     atomic_t                    ref_cnt;
     atomic_t                    attachment_cnt;
+    struct {
+        struct castle_component_tree *barrier_ct;
+        tree_seq_t              active_barrier_ct;  /**< There could be more than one (two!)
+                                                         barrier CTs. But, only one persistant/
+                                                         active any time.                       */
+    } inc_backup;
 
     /* Write IO wait queue members */
     struct castle_da_io_wait_queue {

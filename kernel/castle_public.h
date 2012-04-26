@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 38 /* last updated by TR */
+#define CASTLE_PROTOCOL_VERSION 39 /* last updated by BM */
 
 #ifdef SWIG
 #define PACKED               //override gcc intrinsics for SWIG
@@ -1084,6 +1084,7 @@ struct castle_fs_superblock_public {
     CASTLE_ERROR_CODE(111, C_ERR_MERGE_ERROR, "Internal error in merges.")                      \
     CASTLE_ERROR_CODE(112, C_ERR_MERGE_INVAL_ID, "Invalid merge ID.")                           \
     CASTLE_ERROR_CODE(113, C_ERR_MERGE_RUNNING, "Merge is already running.")                    \
+    CASTLE_ERROR_CODE(114, C_ERR_MERGE_BACKUP_BARRIER, "Trying to merge beyond back-up barrier.")\
                                                                                                 \
     CASTLE_ERROR_CODE(201, C_ERR_INVAL_DA, "Invalid version tree.")                             \
                                                                                                 \
