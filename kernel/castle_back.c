@@ -3544,7 +3544,6 @@ static void castle_back_stream_in_continue(void *data)
     switch (stateful_op->curr_op->req.tag)
     {
         case CASTLE_RING_STREAM_IN_NEXT:
-            castle_printk(LOG_ERROR, "%s::foo\n", __FUNCTION__);
             spin_unlock(&stateful_op->lock);
             BUG_ON(castle_object_batch_in_stream(attachment,
                                           stateful_op->stream_in.da_stream,
