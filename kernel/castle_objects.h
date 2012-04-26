@@ -1,6 +1,8 @@
 #ifndef __CASTLE_OBJECTS_H__
 #define __CASTLE_OBJECTS_H__
 
+#include "castle_da.h"
+
 #if 0
 c_vl_bkey_t* castle_object_key_convert       (c_vl_okey_t *obj_key);
 c_vl_bkey_t* castle_object_key_convert_to_buf(c_vl_okey_t *obj_key,
@@ -37,6 +39,11 @@ int          castle_object_pull              (struct castle_object_pull *pull,
                                               int cpu_index);
 void         castle_object_chunk_pull        (struct castle_object_pull *pull,
                                               void *buf, size_t len);
+int          castle_object_batch_in_stream   (struct  castle_attachment *attachment,
+                                              struct  castle_immut_tree_construct *da_stream,
+                                              char   *batch_buf,
+                                              size_t  batch_buf_size);
+
 
 
 enum{

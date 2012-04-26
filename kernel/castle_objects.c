@@ -11,6 +11,7 @@
 #include "castle_objects.h"
 #include "castle_extent.h"
 #include "castle_systemtap.h"
+#include "castle_instream.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -617,6 +618,63 @@ static void castle_object_replace_on_disk_start(struct castle_object_replace *re
     }
 }
 
+char val_buf[1024];
+char key_buf[1024];
+
+//static int castle_object_cvt_create(struct castle_object_replace *replace)
+//{
+//    uint64_t value_len;
+//    void *value;
+//    int counter;
+//
+//    replace->cvt = INVAL_VAL_TUP;
+//
+//    value_len = replace->value_len;
+//
+//    BUG_ON(value_len > MAX_INLINE_VAL_SIZE);
+//
+//    counter = (replace->counter_type != CASTLE_OBJECT_NOT_COUNTER);
+//    BUG_ON(counter && (value_len != 8));
+//    /* Allocate memory. 16 bytes for accumulating counter. */
+//    value = val_buf;
+//    if(!value)
+//        return -ENOMEM;
+//
+//    /* Construct the cvt. */
+//    if(replace->has_user_timestamp)
+//    {
+//        if(unlikely(replace->counter_type == CASTLE_OBJECT_COUNTER_SET) ||
+//            (replace->counter_type == CASTLE_OBJECT_COUNTER_SET))
+//        {
+//            castle_free(value);
+//            castle_printk(LOG_ERROR, "%s::counters cannot be timestamped... we don't even provide an interface to do it, so what's going on?!?\n", __FUNCTION__);
+//            WARN_ON(1);
+//            return -EINVAL;
+//        }
+//    }
+//    if(unlikely(replace->counter_type == CASTLE_OBJECT_COUNTER_SET))
+//    {
+//        CVT_COUNTER_ACCUM_SET_SET_INIT(replace->cvt, 16, value);
+//    }
+//    else if(replace->counter_type == CASTLE_OBJECT_COUNTER_ADD)
+//    {
+//        CVT_COUNTER_ACCUM_ADD_ADD_INIT(replace->cvt, 16, value);
+//    }
+//    else
+//        {CVT_INLINE_INIT(replace->cvt, value_len, value);}
+//    /* Get the data copied into the cvt. It should all be available in one shot. */
+//    BUG_ON(replace->data_length_get(replace) < value_len);
+//
+//    replace->data_copy(replace, value, value_len, 0);
+//    //castle_object_replace_data_copy(replace, value, value_len, 0 /* not partial */);
+//    /* If we are handling a counter, accumulating sub-counter needs to be the same
+//       as the non-accumulating sub-counter. */
+//    if(counter)
+//        memcpy(value + 8, value, 8);
+//
+//    return 0;
+//}
+
 /**
  * Returns the CVT for the object being inserted and does the appropriate bookkeeping
  * (by registering large objects with the DA code, and updating the chunk counter on
@@ -912,10 +970,12 @@ int castle_object_replace(struct castle_object_replace *replace,
                           int tombstone)
 {
     struct castle_btree_type *btree;
+    //struct castle_double_array *da = attachment->col.da;
     void *key;
     c_bio_t *c_bio;
     c_bvec_t *c_bvec;
     int ret;
+    //size_t dest_len = 1024;
 
     if(replace->has_user_timestamp)
         debug("%s::user provided timestamp %llu\n", __FUNCTION__, replace->user_timestamp);
@@ -944,6 +1004,17 @@ int castle_object_replace(struct castle_object_replace *replace,
     key = btree->key_pack(replace->key, NULL, NULL);
     if (!key)
         return -ENOMEM;
+
+    //BUG_ON(castle_object_cvt_create(replace));
+
+    //BUG_ON(castle_da_in_stream_entry_add(da->in_str_tree_constr,
+    //                            key,
+    //                            attachment->version,
+    //                            replace->cvt));
+
+    //replace->complete(replace, 0);
+
+    //return 0;
 
     /* Allocate castle bio with a single bvec. */
     ret = -ENOMEM;
@@ -989,6 +1060,42 @@ err0:
     return ret;
 }
 EXPORT_SYMBOL(castle_object_replace);
+
+int castle_object_batch_in_stream(struct  castle_attachment *attachment,
+                                  struct  castle_immut_tree_construct *da_stream,
+                                  char   *batch_buf,
+                                  size_t  batch_buf_size)
+{
+    struct castle_btree_type *btree;
+    void *key, *raw_key;
+    int err;
+    c_instream_batch_proc proc;
+    c_val_tup_t cvt;
+
+    /* Sanity checks. */
+    BUG_ON(!attachment);
+    btree = castle_double_array_btree_type_get(attachment);
+
+    castle_instream_batch_proc_construct(&proc, batch_buf, batch_buf_size);
+    while(!(err = castle_instream_batch_proc_next(&proc, &raw_key, &cvt)))
+    {
+        key = btree->key_pack(raw_key, NULL, NULL);
+        if (!key)
+            return -ENOMEM;
+
+        castle_printk(LOG_DEVEL, "%s::key: \n", __FUNCTION__);
+        btree->key_print(LOG_DEVEL, key);
+
+        BUG_ON(castle_da_in_stream_entry_add(da_stream,
+                    key,
+                    attachment->version,
+                    cvt));
+        castle_free(key);
+    }
+    BUG_ON(err != ENOSR);
+    castle_instream_batch_proc_destroy(&proc);
+    return 0;
+}
 
 void castle_object_slice_get_end_io(void *obj_iter, int err);
 

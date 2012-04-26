@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 37 /* last updated by TR */
+#define CASTLE_PROTOCOL_VERSION 38 /* last updated by TR */
 
 #ifdef SWIG
 #define PACKED               //override gcc intrinsics for SWIG
@@ -26,6 +26,26 @@ extern "C" {
 #define PAGE_SIZE 4096
 #define PAGE_SHIFT 12
 #endif
+
+/* Streaming format */
+#define CASTLE_STREAMING_ENTRY_HEADER_TYPE_NULL        (0)
+#define CASTLE_STREAMING_ENTRY_HEADER_TYPE_VALUE       (1)
+#define CASTLE_STREAMING_ENTRY_HEADER_TYPE_COUNTER_SET (2)
+#define CASTLE_STREAMING_ENTRY_HEADER_TYPE_COUNTER_ADD (3)
+#define CASTLE_STREAMING_ENTRY_HEADER_TYPE_TOMBSTONE   (4)
+
+#define MAX_INLINE_VAL_SIZE            512      /* In bytes */
+
+typedef uint64_t castle_user_timestamp_t;
+
+struct castle_streaming_entry_header
+{
+    unsigned char type;
+    castle_user_timestamp_t timestamp;
+    uint32_t key_length;
+    uint64_t val_length;
+} PACKED;
+typedef struct castle_streaming_entry_header c_stream_entry_hdr;
 
 typedef enum {
     NO_FAULT,           /* 0 */
@@ -767,10 +787,12 @@ typedef struct castle_var_length_btree_key {
 #define CASTLE_RING_TIMESTAMPED_REPLACE 13
 #define CASTLE_RING_TIMESTAMPED_REMOVE 14
 #define CASTLE_RING_TIMESTAMPED_BIG_PUT 15
+/* Sequential stream insertion interface */
+#define CASTLE_RING_STREAM_IN_START 16
+#define CASTLE_RING_STREAM_IN_NEXT 17
+#define CASTLE_RING_STREAM_IN_FINISH 18
 
 typedef uint32_t castle_interface_token_t;
-
-typedef uint64_t castle_user_timestamp_t;
 
 typedef struct castle_request_replace {
     c_collection_id_t     collection_id;
@@ -834,15 +856,32 @@ typedef struct castle_request_iter_start {
     uint32_t             buffer_len;        /**< Size of buffer_ptr buffer.                 */
 } castle_request_iter_start_t;
 
+typedef struct castle_request_stream_in_start {
+    c_collection_id_t    collection_id;
+    uint64_t             entries_count;
+    uint32_t             medium_object_chunks;
+} castle_request_stream_in_start_t;
+
 typedef struct castle_request_iter_next {
     castle_interface_token_t  token;
     uint32_t                  buffer_len;
     void                     *buffer_ptr;
 } castle_request_iter_next_t;
 
+typedef struct castle_request_stream_in_next {
+    castle_interface_token_t  token;
+    uint32_t                  buffer_len;
+    void                     *buffer_ptr;
+} castle_request_stream_in_next_t;
+
 typedef struct castle_request_iter_finish {
     castle_interface_token_t token;
 } castle_request_iter_finish_t;
+
+typedef struct castle_request_stream_in_finish {
+    castle_interface_token_t token;
+    int8_t                   abort;
+} castle_request_stream_in_finish_t;
 
 typedef struct castle_request_big_get {
     c_collection_id_t  collection_id;
@@ -899,6 +938,10 @@ typedef struct castle_request {
         castle_request_iter_start_t         iter_start;
         castle_request_iter_next_t          iter_next;
         castle_request_iter_finish_t        iter_finish;
+
+        castle_request_stream_in_start_t    stream_in_start;
+        castle_request_stream_in_next_t     stream_in_next;
+        castle_request_stream_in_finish_t   stream_in_finish;
     };
     uint8_t     flags;                      /**< Flags affecting op, see CASTLE_RING_FLAGs.     */
 } castle_request_t;

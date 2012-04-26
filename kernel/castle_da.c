@@ -281,6 +281,10 @@ static int castle_da_ct_compare(struct castle_component_tree *ct1,
      * merge. */
     BUG_ON(ct1->merge != ct2->merge);
 
+    /* A tree that is streamed in is considered latest */
+    if (test_bit(CASTLE_CT_STREAM_IN_BIT, &ct1->flags))
+        return -1;
+
     /* Treat output tree as the latest. We want it to be added before all input trees. */
     if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct1->flags))
     {
@@ -4646,9 +4650,9 @@ static void castle_immut_tree_package(struct castle_immut_tree_construct *tree_c
 
     BUG_ON(!CASTLE_IN_TRANSACTION);
 
-    castle_printk(LOG_INFO, "Depth of ct=%d (%p) is: %d\n",
+    debug("Depth of ct=%d (%p) is: %d\n",
             out_tree->seq, out_tree, atomic_read(&out_tree->tree_depth) );
-    castle_printk(LOG_INFO, "Max key version set size of ct=%d (%p) is: %d\n",
+    debug("Max key version set size of ct=%d (%p) is: %d\n",
             out_tree->seq, out_tree, out_tree->max_versions_per_key );
     BUG_ON(out_tree->root_node.ext_id != root_cep.ext_id);
     BUG_ON(out_tree->root_node.offset != root_cep.offset);
@@ -12027,6 +12031,15 @@ int castle_double_array_prefetch(struct castle_double_array *da)
     return 0;
 }
 
+//int castle_double_array_destroy(c_da_t da_id)
+//{
+//    struct castle_double_array *da = castle_da_hash_get(da_id);
+//
+//    castle_da_in_stream_complete(da->in_str_tree_constr, 0);
+//
+//    return 0;
+//}
+
 int castle_double_array_destroy(c_da_t da_id)
 {
     struct castle_double_array *da;
@@ -12656,6 +12669,10 @@ castle_da_in_stream_start(struct castle_double_array    *da,
     struct castle_da_lfs_ct_t lfs;
     int ret = 0;
 
+    castle_printk(LOG_USERINFO, "%s::preparing for stream_in of %llu items "
+            "(int ext size: %u, tree ext size: %u, data ext size: %u, nr_rwcts: %u)\n",
+            __FUNCTION__, item_count, internal_ext_size, tree_ext_size, data_ext_size, nr_rwcts);
+
     constr = castle_immut_tree_constr_alloc(castle_btree_type_get(da->btree_type),
                                             da,
                                             0,
@@ -12708,26 +12725,31 @@ void castle_da_in_stream_complete(struct castle_immut_tree_construct *constr, in
     struct castle_double_array *da = constr->da;
     struct castle_component_tree *ct = constr->tree;
 
-    if (err)
+    BUG_ON(atomic_read(&ct->ref_count)!=1);
+    castle_printk(LOG_USERINFO, "%s::finalizing stream-in tree %p (with %lld entries)\n",
+        __FUNCTION__, ct, atomic64_read(&ct->item_count));
+
+    /* Complete Output tree and get it ready to promote to DA. */
+    castle_immut_tree_complete(constr);
+
+    if (err || (atomic64_read(&ct->item_count)==0) )
     {
-        if (ct)
-        {
-            castle_ct_put(ct, READ);
-            constr->tree = NULL;
-        }
+        castle_printk(LOG_USERINFO, "%s::aborting stream-in tree %p/%d (with %lld entries)\n",
+            __FUNCTION__, ct, ct->seq, atomic64_read(&ct->item_count));
+        castle_ct_put(ct, READ);
+        constr->tree = NULL;
 
         castle_immut_tree_constr_dealloc(constr);
 
         return;
     }
 
-    /* Complete Output tree and get it ready to promote to DA. */
-    castle_immut_tree_complete(constr);
-
     /* Link CT to DA. */
+    set_bit(CASTLE_CT_STREAM_IN_BIT, &constr->tree->flags);
     write_lock(&da->lock);
     castle_component_tree_add(da, constr->tree, NULL);
     write_unlock(&da->lock);
+    clear_bit(CASTLE_CT_STREAM_IN_BIT, &constr->tree->flags);
 
     castle_sysfs_ct_add(constr->tree);
 

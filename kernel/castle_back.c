@@ -25,6 +25,7 @@
 #include "castle_back.h"
 #include "castle_ring.h"
 #include "castle_systemtap.h"
+#include "castle_da.h"
 
 DEFINE_RING_TYPES(castle, castle_request_t, castle_response_t);
 
@@ -151,6 +152,15 @@ struct castle_back_iterator
     uint64_t                      nr_bytes;         /**< Stats: number of Bytes.            */
 };
 
+struct castle_back_stream_in
+{
+    c_collection_id_t     collection_id;           /**< Collection ID.                            */
+    c_chk_cnt_t           expected_entries;        /**< How many entries the user said to expect. */
+    c_chk_cnt_t           expected_dataext_chunks; /**< How many chunks the user said we would need
+                                                        for medium objects extent.                */
+    struct castle_immut_tree_construct *da_stream; /**< DA in_stream structure.                   */
+};
+
 #define stateful_op_fmt_str     "conn=%p stateful_op=%p curr_op=%p in_use=%d "                  \
                                 "cancel_on_op_complete=%d tag=%u token=0x%x"
 #define stateful_op2str(_s_op)  (_s_op)->conn, (_s_op), (_s_op)->curr_op, (_s_op)->in_use,      \
@@ -207,6 +217,7 @@ struct castle_back_stateful_op
     union
     {
         struct castle_back_iterator     iterator;
+        struct castle_back_stream_in    stream_in;
         struct castle_object_replace    replace;
         struct castle_object_get        get;
         struct castle_object_pull       pull;
@@ -2766,9 +2777,33 @@ static void castle_back_big_put_expire(struct castle_back_stateful_op *stateful_
     castle_attachment_put(attachment);
 }
 
+static void castle_back_stream_in_expire(struct castle_back_stateful_op *stateful_op)
+{
+    struct castle_attachment *attachment;
+
+    debug("%s::token=%u.\n", __FUNCTION__, stateful_op->token);
+
+    BUG_ON(!stateful_op->expiring);
+    BUG_ON(!list_empty(&stateful_op->op_queue));
+    stateful_op->curr_op = NULL;
+
+    CASTLE_TRANSACTION_BEGIN;
+    castle_da_in_stream_complete(stateful_op->stream_in.da_stream, 1);
+    CASTLE_TRANSACTION_END;
+
+    spin_lock(&stateful_op->lock);
+    attachment = stateful_op->attachment;
+    stateful_op->attachment = NULL;
+
+    castle_back_put_stateful_op(stateful_op->conn, stateful_op); /* drops stateful_op->lock */
+
+    castle_attachment_put(attachment);
+}
+
+
 static void castle_back_put_chunk_continue(void *data);
 
-static void castle_back_big_put_call_queued(struct castle_back_stateful_op *stateful_op)
+static void castle_back_stateful_call_queued(struct castle_back_stateful_op *stateful_op)
 {
     BUG_ON(!spin_is_locked(&stateful_op->lock));
 
@@ -2808,7 +2843,7 @@ static void castle_back_big_put_continue(struct castle_object_replace *replace)
         return;
 
     /* Look for more queued ops (put_chunks in this case). */
-    castle_back_big_put_call_queued(stateful_op);
+    castle_back_stateful_call_queued(stateful_op);
 
     spin_unlock(&stateful_op->lock);
 
@@ -2922,12 +2957,12 @@ static void castle_back_big_put_data_copy(struct castle_object_replace *replace,
  *
  *  castle_back_put_chunk()
  *      - queue the op
- *      - castle_back_big_put_call_queued()
+ *      - castle_back_stateful_call_queued()
  *      - Schedule castle_back_put_chunk_continue()
  *                                      ->          castle_object_replace_continue
  *        data_copy()                   <-
  *        replace_continue()            <-
- *          - castle_back_big_put_call_queued()
+ *          - castle_back_stateful_call_queued()
  */
 
 /**
@@ -2981,7 +3016,6 @@ static void castle_back_big_put(void *data)
     debug("key: \n");
     vl_bkey_print(LOG_DEBUG, op->key);
 #endif
-
     /* Initialize stateful op. */
     stateful_op->tag = CASTLE_RING_BIG_PUT;
     stateful_op->queued_size = 0;
@@ -3040,6 +3074,263 @@ err0: castle_free(op->key);
       castle_back_reply(op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
       /* To prevent #3144. */
       might_resched();
+}
+
+static c_chk_cnt_t castle_back_stream_in_tree_ext_size_wc_estimate(struct castle_back_stateful_op *stateful_op)
+{
+    struct castle_btree_type *btree;
+    int nodes;
+    c_chk_cnt_t tree_ext_size;
+    int wc_entries_per_node;
+
+    btree = castle_double_array_btree_type_get(stateful_op->attachment);
+    wc_entries_per_node = btree->max_entries(HDD_RO_TREE_NODE_SIZE);
+    nodes = DIV_ROUND_UP(stateful_op->stream_in.expected_entries, wc_entries_per_node);
+    tree_ext_size = DIV_ROUND_UP(nodes*HDD_RO_TREE_NODE_SIZE*PAGE_SIZE, C_CHK_SIZE);
+
+    return tree_ext_size;
+    //TODO@tr: fix this! atm we are basically ignoring it!
+}
+
+static c_chk_cnt_t castle_back_stream_in_internal_ext_size_wc_estimate(struct castle_back_stateful_op *stateful_op,
+                                                                  c_chk_cnt_t tree_ext_size)
+{
+    struct castle_btree_type *btree;
+    c_chk_cnt_t internal_ext_size;
+
+    btree = castle_double_array_btree_type_get(stateful_op->attachment);
+    /* The following "inspired" by castle_da_merge_output_size, a true story */
+    internal_ext_size = tree_ext_size;
+    internal_ext_size /= (HDD_RO_TREE_NODE_SIZE * C_BLK_SIZE);
+    internal_ext_size /= btree->max_entries(SSD_RO_TREE_NODE_SIZE);
+    internal_ext_size ++;
+    internal_ext_size *= (SSD_RO_TREE_NODE_SIZE * C_BLK_SIZE);
+    internal_ext_size  = MASK_CHK_OFFSET(internal_ext_size + C_CHK_SIZE);
+    internal_ext_size *= 2;
+    return internal_ext_size;
+}
+
+static void castle_back_stream_in_continue(void *data);
+static void castle_back_stream_in_start(void *data)
+{
+    struct castle_back_op *op = data;
+    struct castle_back_conn *conn = op->conn;
+    struct castle_back_stateful_op *stateful_op;
+    c_chk_cnt_t tree_ext_size;
+    c_chk_cnt_t internal_ext_size;
+    struct castle_attachment *attachment;
+    struct castle_immut_tree_construct *constr;
+    int err = 0;
+
+    /* Get a new stateful op to handle stream_in. */
+    castle_back_stateful_op_get(conn,
+                                &stateful_op,
+                                op->cpu,
+                                op->cpu_index,
+                                castle_back_stream_in_expire);
+
+    /* Couldn't find a free stateful op. */
+    if (!stateful_op)
+    {
+        error("castle_back: no more free stateful ops!\n");
+        err = -EAGAIN;
+        goto err0;
+    }
+
+    /* Get reference on attachment - Consequently on DA. */
+    attachment = castle_attachment_get(op->req.stream_in_start.collection_id, WRITE);
+    if (attachment == NULL)
+    {
+        error("Collection not found id=0x%x\n", op->req.stream_in_start.collection_id);
+        err = -ENOTCONN;
+        goto err1;
+    }
+
+    /* Initialize stateful op. */
+    stateful_op->tag = CASTLE_RING_STREAM_IN_START;
+    stateful_op->flags = op->req.flags;
+    stateful_op->queued_size = 0;
+    stateful_op->attachment = attachment;
+
+    stateful_op->stream_in.collection_id
+                                    = op->req.stream_in_start.collection_id;
+    stateful_op->stream_in.expected_entries
+                                    = op->req.stream_in_start.entries_count;
+    stateful_op->stream_in.expected_dataext_chunks
+                                    = op->req.stream_in_start.medium_object_chunks;
+
+    tree_ext_size     = castle_back_stream_in_tree_ext_size_wc_estimate(stateful_op);
+    internal_ext_size = castle_back_stream_in_internal_ext_size_wc_estimate(stateful_op, tree_ext_size);
+    internal_ext_size = tree_ext_size;
+
+    castle_printk(LOG_DEBUG, "%s:: stream_in op expected_entries: %lld, expected_dataext_chunks: %ld, stateful_op:%p\n",
+                __FUNCTION__,
+                stateful_op->stream_in.expected_entries,
+                stateful_op->stream_in.expected_dataext_chunks,
+                stateful_op);
+
+    CASTLE_TRANSACTION_BEGIN;
+    constr = castle_da_in_stream_start(stateful_op->attachment->col.da,
+                                       stateful_op->stream_in.expected_entries,
+                                       internal_ext_size,
+                                       tree_ext_size,
+                                       stateful_op->stream_in.expected_dataext_chunks,
+                                       0);
+    CASTLE_TRANSACTION_END;
+
+    if (!constr)
+    {
+        castle_printk(LOG_ERROR, "%s::castle_da_in_stream_start failed for "
+                "collection id 0x%x, expected entries %lld, expected MO chunks %lld\n",
+                __FUNCTION__,
+                stateful_op->stream_in.collection_id,
+                stateful_op->stream_in.expected_entries,
+                stateful_op->stream_in.expected_dataext_chunks);
+        err = -ENOSPC;
+        goto err2;
+    }
+    /* Work structure to run every queued op. Every stream_in_next gets queued. */
+    INIT_WORK(&stateful_op->work[0], castle_back_stream_in_continue, stateful_op);
+
+    spin_lock(&stateful_op->lock);
+    stateful_op->stream_in.da_stream = constr;
+    castle_back_stateful_op_enable_expire(stateful_op);
+    //castle_back_stateful_op_disable_expire(stateful_op);
+    spin_unlock(&stateful_op->lock);
+
+    /* stream_in_start is the first op, but we already finished it now. */
+    stateful_op->curr_op = NULL;
+    stateful_op->in_use = 1;
+    castle_back_reply(op, 0, stateful_op->token, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
+    /* To prevent #3144. */
+    might_resched();
+    return;
+
+err2:
+    castle_attachment_put(attachment);
+    stateful_op->attachment = NULL;
+err1:
+    /* Safe as no-one could have queued up an op - we have not returned token */
+    spin_lock(&stateful_op->lock);
+    stateful_op->curr_op = NULL;
+    /* will drop stateful_op->lock */
+    castle_back_put_stateful_op(conn, stateful_op);
+err0:
+    castle_back_reply(op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
+    /* To prevent #3144. */
+    might_resched();
+}
+
+static void castle_back_stream_in_next(void *data)
+{
+    struct castle_back_op *op = data;
+    struct castle_back_conn *conn = op->conn;
+    struct castle_back_stateful_op *stateful_op;
+    int err;
+
+    castle_printk(LOG_DEBUG, "%s::start, with token %llu on conn op->conn %p\n",
+            __FUNCTION__, op->req.stream_in_finish.token, op->conn);
+    stateful_op = castle_back_find_stateful_op(op->conn,
+                                               op->req.stream_in_next.token,
+                                               CASTLE_RING_STREAM_IN_START);
+
+    if (!stateful_op)
+    {
+        stateful_debug("op=%p stateful_op=%p token=0x%x not found\n",
+                op, stateful_op, op->req.stream_in_next.token);
+        err = -EBADFD;
+        castle_printk(LOG_ERROR, "%s:: failed to get stateful op, err:%d\n", __FUNCTION__, err);
+        goto err0;
+    }
+
+    /* Get buffer with batch in it and save it. */
+    op->buf = castle_back_buffer_get(conn,
+                                     (unsigned long) op->req.stream_in_next.buffer_ptr,
+                                     op->req.stream_in_next.buffer_len);
+    if (op->buf == NULL)
+    {
+        error("Couldn't get buffer for pointer=%p length=%u\n",
+                op->req.stream_in_next.buffer_ptr, op->req.stream_in_next.buffer_len);
+        err = -EINVAL;
+        goto err0;
+    }
+    op->buffer_offset = 0;
+
+    /*
+     * Put this op on the queue for the stream_in
+     */
+    spin_lock(&stateful_op->lock);
+    err = castle_back_stateful_op_queue_op(stateful_op, op->req.stream_in_next.token, op);
+    if (err)
+    {
+        castle_printk(LOG_ERROR, "%s:: failed to queue, err:%u\n", __FUNCTION__, err);
+        spin_unlock(&stateful_op->lock);
+        goto err0;
+    }
+
+    /* Go through Q and handle ops. */
+    castle_back_stateful_call_queued(stateful_op);
+
+    //castle_back_stateful_op_disable_expire(stateful_op);
+    spin_unlock(&stateful_op->lock);
+
+    /* To prevent #3144. */
+    might_resched();
+
+    return;
+
+err0:
+    castle_back_reply(op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
+    /* To prevent #3144. */
+    might_resched();
+}
+
+static void castle_back_stream_in_finish(void *data)
+{
+    struct castle_back_op *op = data;
+    struct castle_back_stateful_op *stateful_op;
+    int err;
+
+    stateful_op = castle_back_find_stateful_op(op->conn,
+                                               op->req.stream_in_finish.token,
+                                               CASTLE_RING_STREAM_IN_START);
+
+    if (!stateful_op)
+    {
+        stateful_debug("op=%p stateful_op=%p token=0x%x not found\n",
+                op, stateful_op, op->req.stream_in_finish.token);
+        err = -EBADFD;
+        castle_printk(LOG_ERROR, "%s:: failed to get stateful op, err:%d\n", __FUNCTION__, err);
+        goto err0;
+    }
+    /*
+     * Put this op on the queue for the stream_in
+     */
+    spin_lock(&stateful_op->lock);
+    err = castle_back_stateful_op_queue_op(stateful_op, op->req.stream_in_finish.token, op);
+    if (err)
+    {
+        castle_printk(LOG_ERROR, "%s:: failed to queue, err:%u\n", __FUNCTION__, err);
+        spin_unlock(&stateful_op->lock);
+        goto err0;
+    }
+
+    /* Go through Q and handle ops. */
+    castle_back_stateful_call_queued(stateful_op);
+    stateful_op->in_use = 0;
+
+    castle_back_stateful_op_disable_expire(stateful_op);
+    spin_unlock(&stateful_op->lock);
+
+    /* To prevent #3144. */
+    might_resched();
+
+    return;
+
+err0:
+    castle_back_reply(op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
+    /* To prevent #3144. */
+    might_resched();
 }
 
 /**
@@ -3208,7 +3499,7 @@ static void castle_back_put_chunk(void *data)
     }
 
     /* Go through Q and handle ops. */
-    castle_back_big_put_call_queued(stateful_op);
+    castle_back_stateful_call_queued(stateful_op);
 
     spin_unlock(&stateful_op->lock);
 
@@ -3228,6 +3519,69 @@ static void castle_back_put_chunk_continue(void *data)
     struct castle_back_stateful_op *stateful_op = data;
 
     castle_object_replace_continue(&stateful_op->replace);
+
+    /* To prevent #3144. */
+    might_resched();
+}
+
+static void castle_back_stream_in_continue(void *data)
+{
+    struct castle_back_stateful_op *stateful_op = data;
+    struct castle_attachment *attachment;
+    int ret = 0;
+    castle_interface_token_t token = stateful_op->token;
+    struct castle_back_op *op = stateful_op->curr_op;
+
+    spin_lock(&stateful_op->lock);
+    stateful_op->in_use = 1;
+
+    /* Check if stateful_op is expired, if so no need to handle anymore ops. Return back. */
+    /* drops the lock if return non-zero */
+    if (castle_back_stateful_op_completed_op(stateful_op))
+        return;
+    attachment = stateful_op->attachment;
+
+    switch (stateful_op->curr_op->req.tag)
+    {
+        case CASTLE_RING_STREAM_IN_NEXT:
+            castle_printk(LOG_ERROR, "%s::foo\n", __FUNCTION__);
+            spin_unlock(&stateful_op->lock);
+            BUG_ON(castle_object_batch_in_stream(attachment,
+                                          stateful_op->stream_in.da_stream,
+                                          stateful_op->curr_op->buf->buffer,
+                                          stateful_op->curr_op->buf->size));
+            spin_lock(&stateful_op->lock);
+            castle_back_buffer_put(stateful_op->conn, op->buf);
+            castle_back_reply(op, ret, token, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
+            stateful_op->curr_op = NULL;
+            spin_unlock(&stateful_op->lock);
+            break;
+        case CASTLE_RING_STREAM_IN_FINISH:
+            castle_printk(LOG_DEBUG, "%s::finishing stream in for token %u, abort=%u\n",
+                    __FUNCTION__,
+                    stateful_op->token,
+                    stateful_op->curr_op->req.stream_in_finish.abort);
+
+            spin_unlock(&stateful_op->lock);
+            CASTLE_TRANSACTION_BEGIN;
+            castle_da_in_stream_complete(stateful_op->stream_in.da_stream,
+                    stateful_op->curr_op->req.stream_in_finish.abort);
+            CASTLE_TRANSACTION_END;
+            spin_lock(&stateful_op->lock);
+
+            castle_back_stateful_op_finish_all(stateful_op, 0);
+            stateful_op->curr_op = NULL;
+            stateful_op->attachment = NULL;
+            /* Will drop stateful_op->lock. */
+            castle_back_put_stateful_op(stateful_op->conn, stateful_op);
+            castle_back_reply(op, ret, token, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
+            castle_attachment_put(attachment);
+            break;
+        default:
+            castle_printk(LOG_ERROR, "%s::Invalid tag %d.\n",
+                    __FUNCTION__, stateful_op->curr_op->req.tag);
+            BUG();
+    }
 
     /* To prevent #3144. */
     might_resched();
@@ -3571,6 +3925,25 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
          *
          * Have CPU affinity based on hash of the key.  They must hit the
          * correct CPU (op->cpu) and CT (op->cpu_index). */
+
+        case CASTLE_RING_STREAM_IN_START: /* iterator, round-robin CPU selection */
+            op->cpu_index = conn->cpu_index;
+            INIT_WORK(&op->work, castle_back_stream_in_start, op);
+            break;
+
+        case CASTLE_RING_STREAM_IN_NEXT:
+            op->cpu_index = castle_back_stateful_op_cpu_index_get(conn,
+                                                                  op->req.stream_in_next.token,
+                                                                  CASTLE_RING_STREAM_IN_START);
+            INIT_WORK(&op->work, castle_back_stream_in_next, op);
+            break;
+
+        case CASTLE_RING_STREAM_IN_FINISH:
+            op->cpu_index = castle_back_stateful_op_cpu_index_get(conn,
+                                                                  op->req.stream_in_finish.token,
+                                                                  CASTLE_RING_STREAM_IN_START);
+            INIT_WORK(&op->work, castle_back_stream_in_finish, op);
+            break;
 
         case CASTLE_RING_TIMESTAMPED_REMOVE:
             if ((err = castle_back_key_copy_get(conn, op->req.timestamped_remove.key_ptr,
@@ -4268,10 +4641,7 @@ err1:
 
 void castle_back_fini(void)
 {
-    debug("castle_back exiting...");
-
     /* wait for all connections to be closed */
-    debug("castle_back_fini, connection count = %u.\n", atomic_read(&castle_back_conn_count));
     wait_event(conn_close_wait, (atomic_read(&castle_back_conn_count) == 0));
 
     BUG_ON(!list_empty(&castle_back_conns));

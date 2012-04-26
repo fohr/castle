@@ -1062,7 +1062,7 @@ STATIC_BUG_ON(sizeof(struct castle_bbp_entry) != 70);
 
 /* Component tree flags bits. */
 #define CASTLE_CT_DYNAMIC_BIT           0   /* CT is dynamic. RW Tree.                          */
-#define CASTLE_CT_NEW_TREE_BIT          1   /* CT is not yet committed to disk.                 */
+#define CASTLE_CT_STREAM_IN_BIT         1   /* CT is the result of a stream in op        .      */
 #define CASTLE_CT_BLOOM_EXISTS_BIT      2   /* CT has bloom filter.                             */
 #define CASTLE_CT_MERGE_OUTPUT_BIT      3   /* CT is being created by a merge.                  */
 #define CASTLE_CT_MERGE_INPUT_BIT       4   /* CT is being merged.                              */
