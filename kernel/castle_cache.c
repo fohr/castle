@@ -3312,18 +3312,14 @@ static inline int c2b_busy(c2_block_t *c2b, int expected_count)
  * @also _castle_cache_block_get()
  * @also castle_cache_freelists_grow()
  */
-static int castle_cache_block_clock_process(c2_partition_id_t part_id)
+static int castle_cache_block_clock_process(c2_partition_id_t part_id, int target_pages)
 {
-    static const int BATCH_FREE = 200;
     static const int CLOCK_ROUNDS = 3;
     struct list_head *next;
     struct hlist_node *le, *te;
     HLIST_HEAD(victims_to_free);
     c2_block_t *c2b;
-    int nr_victims, unevictable_pgs, rounds;
-
-    /* Initialise. */
-    nr_victims = unevictable_pgs = 0;
+    int nr_pages = 0, unevictable_pages = 0, rounds = 0;
 
     /* Taking castle_cache_block_hash_lock allows us to remove from the
      * hash but also prevents further c2b references being taken and
@@ -3333,8 +3329,8 @@ static int castle_cache_block_clock_process(c2_partition_id_t part_id)
     /* A c2b will be busy while being inserted/removed from the eviction list
      * so there is no need to take castle_cache_block_evictionlist_lock here. */
 
-    for (next = castle_cache_block_clock_hand->next, rounds = 0;
-         nr_victims < BATCH_FREE && rounds < CLOCK_ROUNDS;
+    for (next = castle_cache_block_clock_hand->next;
+         nr_pages < target_pages && rounds < CLOCK_ROUNDS;
          castle_cache_block_clock_hand = next, next = castle_cache_block_clock_hand->next)
     {
         /* skip the list's head (which isn't part of an actual entry) if necessary */
@@ -3368,7 +3364,7 @@ static int castle_cache_block_clock_process(c2_partition_id_t part_id)
         /* Skip busy blocks or those fron non-evictable extents. */
         if (c2b_busy(c2b, 0) || !EVICTABLE_EXTENT(c2b->cep.ext_id))
         {
-            unevictable_pgs += c2b->nr_pages;
+            unevictable_pages += c2b->nr_pages;
             continue;
         }
 
@@ -3392,18 +3388,18 @@ static int castle_cache_block_clock_process(c2_partition_id_t part_id)
         }
         list_del(&c2b->clock);
 
-        nr_victims++;
+        nr_pages += c2b->nr_pages;
     }
 
     spin_unlock_irq(&castle_cache_block_clock_lock);
     write_unlock(&castle_cache_block_hash_lock);
 
     /* We couldn't find any victims */
-    if (nr_victims == 0)
+    if (nr_pages == 0)
     {
-        if (unevictable_pgs > castle_cache_size / 2)
+        if (unevictable_pages > castle_cache_size / 2)
             castle_printk(LOG_WARN, "Couldn't find a victim page in %d pages, cache size %d\n",
-                    unevictable_pgs, castle_cache_size);
+                    unevictable_pages, castle_cache_size);
         debug("No victims found!!\n");
         return 1;
     }
@@ -3423,13 +3419,12 @@ static int castle_cache_block_clock_process(c2_partition_id_t part_id)
  *
  * NOTE: All blocks on evictlist are expected to be in MERGE_OUT partition.
  */
-static int castle_cache_block_evictlist_process(void)
+static int castle_cache_block_evictlist_process(int target_pages)
 {
-#define BATCH_FREE  200
     struct list_head *lh, *th;
     LIST_HEAD(victims_to_free);
     c2_block_t *c2b;
-    int nr_victims = 0;
+    int nr_pages = 0;
 
     /* Taking castle_cache_block_hash_lock allows us to remove from the
      * hash but also prevents further c2b references from being taken
@@ -3476,14 +3471,14 @@ static int castle_cache_block_evictlist_process(void)
         else
             list_del(&c2b->evict);
 
-        if (++nr_victims >= BATCH_FREE)
+        if ((nr_pages += c2b->nr_pages) >= target_pages)
             break;
     }
 
     spin_unlock_irq(&castle_cache_block_evictlist_lock);
     write_unlock(&castle_cache_block_hash_lock);
 
-    if (nr_victims == 0)
+    if (nr_pages == 0)
         return 1;
 
     /* Free victims that were not in CLOCK. */
@@ -3510,6 +3505,7 @@ void castle_cache_flush_wakeup(void)
  */
 static int _castle_cache_freelists_grow(c2_partition_id_t part_id)
 {
+    static const int BATCH_FREE = 100*256; /* 100MB */
 #ifdef DEBUG
     c2_partition_id_t grow_for_part_id = part_id;
 #endif
@@ -3559,11 +3555,11 @@ static int _castle_cache_freelists_grow(c2_partition_id_t part_id)
 
     /* Evict blocks from overbudget partition. */
     if (part_id == MERGE_OUT)
-        return castle_cache_block_evictlist_process();
+        return castle_cache_block_evictlist_process(BATCH_FREE);
     else
     {
         BUG_ON(!castle_cache_partition[part_id].use_clock);
-        return castle_cache_block_clock_process(part_id);
+        return castle_cache_block_clock_process(part_id, BATCH_FREE);
     }
 }
 
