@@ -3792,6 +3792,8 @@ static void castle_da_merge_output_size(struct castle_da_merge *merge,
        on SSDs, because the overheads are smaller (node headers amortised between greater
        number of entries in the node). */
 
+    BUG_ON(internal_tree_size > tree_size);
+
     *internal_tree_size_p   = internal_tree_size;
     *tree_size_p            = tree_size;
     *data_size_p            = data_size;
