@@ -12979,8 +12979,6 @@ static int castle_da_inc_backup_needed(struct castle_component_tree *ct)
  */
 static int castle_da_incremental_backup_start(struct castle_double_array *da)
 {
-    castle_printk(LOG_USERINFO, "Starting back-up\n");
-
     /* Don't allow multiple backups concurrently. */
     if (test_and_set_bit(CASTLE_DA_BACK_UP_ONGOING, &da->flags))
     {
@@ -12996,6 +12994,8 @@ static int castle_da_incremental_backup_start(struct castle_double_array *da)
 
         BUG_ON(ct && !test_bit(CASTLE_CT_BACKUP_BARRIER_BIT, &ct->flags));
     }
+
+    castle_printk(LOG_USERINFO, "Starting back-up on DA: 0x%x\n", da->id);
 
     /* Create barrier CT. */
     da->inc_backup.barrier_ct = castle_da_barrier_ct_create(da);
@@ -13034,7 +13034,7 @@ static int castle_da_incremental_backup_finish(struct castle_double_array *da, i
 
     clear_bit(CASTLE_DA_BACK_UP_ONGOING, &da->flags);
 
-    castle_printk(LOG_USERINFO, "Completed Backup.\n");
+    castle_printk(LOG_USERINFO, "Completed Backup on DA: 0x%x.\n", da->id);
 
     da->inc_backup.barrier_ct = NULL;
 
