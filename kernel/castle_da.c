@@ -12910,7 +12910,7 @@ static struct castle_component_tree * castle_da_barrier_ct_create(struct castle_
                          1 /* Level */,
                          INVAL_TREE,
                          0 /* # data extents */,
-                         0 /* # rwcts*/);
+                         1 /* # rwcts*/);
     if (ct == NULL)
     {
         castle_printk(LOG_USERINFO, "Failed to create barrier CT for backup.\n");
