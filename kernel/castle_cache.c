@@ -445,9 +445,11 @@ typedef struct page *castle_cache_vmap_pgs_t[CASTLE_CACHE_VMAP_PGS];
 DEFINE_PER_CPU(castle_cache_vmap_pgs_t, castle_cache_vmap_pgs);
 DEFINE_PER_CPU(struct mutex, castle_cache_vmap_lock);
 
-struct task_struct     *castle_cache_flush_thread;
+struct task_struct            *castle_cache_flush_thread;
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq);
 static atomic_t                castle_cache_flush_seq;
+
+struct task_struct            *castle_cache_evict_thread;
 
 static atomic_t                castle_cache_read_stats = ATOMIC_INIT(0); /**< Pgs read from disk  */
 static atomic_t                castle_cache_write_stats = ATOMIC_INIT(0);/**< Pgs written to disk */
@@ -3503,8 +3505,9 @@ void castle_cache_flush_wakeup(void)
 /**
  * Evict c2bs to the freelist so they can be used by specified partition.
  */
-static int _castle_cache_freelists_grow(int nr_pages, c2_partition_id_t part_id)
+static int _castle_cache_freelists_grow(int req_pages, c2_partition_id_t part_id)
 {
+    int target_pages, free_pages;
 #ifdef DEBUG
     c2_partition_id_t grow_for_part_id = part_id;
 #endif
@@ -3546,22 +3549,40 @@ static int _castle_cache_freelists_grow(int nr_pages, c2_partition_id_t part_id)
 #ifdef DEBUG
     if (grow_for_part_id == USER)
         castle_printk(LOG_DEBUG, "Evicting from %s (%d%%) to satisfy allocation for %s (%d%%)\n",
-                part_id == USER ? "USER" : "MERGE",
+                part_id == USER ? "USER" : (part_id == MERGE ? "MERGE" : "UNKNOWN"),
                 castle_cache_partition[part_id].use_pct,
-                grow_for_part_id == USER ? "USER" : "MERGE",
+                grow_for_part_id == USER ? "USER" : (grow_for_part_id == MERGE ? "MERGE" : "UNKNOWN"),
                 castle_cache_partition[grow_for_part_id].use_pct);
 #endif
 
-    /* Evict 2% of the cache, unless more pages have been requested. */
-    nr_pages = max(castle_cache_size / 50, nr_pages);
+    /* Determine how much of the cache to evict:
+     *
+     * - If the cache is 2% free or more, evict nothing.
+     * - If the cache is between 1% and 2% free, evict 0.1% of it.
+     * - If the cache is less than 1% free, evict proportionally up to 1%.
+     *
+     * These figures are overriden if they are less than the requested number of pages. */
+
+    spin_lock(&castle_cache_freelist_lock);
+    free_pages = castle_cache_page_freelist_size;
+    spin_unlock(&castle_cache_freelist_lock);
+
+    if (free_pages >= castle_cache_size / 50)
+        target_pages = 0;
+    else if (free_pages >= castle_cache_size / 100)
+        target_pages = castle_cache_size / 1000;
+    else
+        target_pages = (10 * castle_cache_size - 900 * free_pages) / 1000;
+
+    target_pages = max(target_pages, req_pages);
 
     /* Evict blocks from overbudget partition. */
     if (part_id == MERGE_OUT)
-        return castle_cache_block_evictlist_process(nr_pages);
+        return castle_cache_block_evictlist_process(target_pages);
     else
     {
         BUG_ON(!castle_cache_partition[part_id].use_clock);
-        return castle_cache_block_clock_process(nr_pages, part_id);
+        return castle_cache_block_clock_process(target_pages, part_id);
     }
 }
 
@@ -3723,6 +3744,20 @@ static inline void castle_cache_block_freelist_grow(c2_partition_id_t part_id)
 static inline void castle_cache_page_freelist_grow(int nr_pages, c2_partition_id_t part_id)
 {
     castle_cache_freelists_grow(0 /*nr_c2bs*/, nr_pages, part_id);
+}
+
+/**
+ * Wake up 10 times/second and perform some evictions.
+ */
+static int castle_cache_evict(void *unused)
+{
+    while (!kthread_should_stop())
+    {
+        _castle_cache_freelists_grow(0, NR_CACHE_PARTITIONS);
+        msleep_interruptible(100); /* can be woken up if necessary */
+    }
+
+    return EXIT_SUCCESS;
 }
 
 /**
@@ -5780,14 +5815,16 @@ err_out:
 }
 
 /***** Init/fini functions *****/
-static int castle_cache_flush_init(void)
+static int castle_cache_threads_init(void)
 {
     castle_cache_flush_thread = kthread_run(castle_cache_flush, NULL, "castle_flush");
+    castle_cache_evict_thread = kthread_run(castle_cache_evict, NULL, "castle_evict");
     return 0;
 }
 
-static void castle_cache_flush_fini(void)
+static void castle_cache_threads_fini(void)
 {
+    kthread_stop(castle_cache_evict_thread);
     kthread_stop(castle_cache_flush_thread);
 }
 
@@ -6581,7 +6618,7 @@ int castle_cache_init(void)
     if((ret = castle_cache_hashes_init()))    goto err_out;
     if((ret = castle_cache_freelists_init())) goto err_out;
     if((ret = castle_vmap_fast_map_init()))   goto err_out;
-    if((ret = castle_cache_flush_init()))     goto err_out;
+    if((ret = castle_cache_threads_init()))   goto err_out;
 
     /* Initialise per-cpu vmap mutexes */
     for(cpu_iter = 0; cpu_iter < NR_CPUS; cpu_iter++) {
@@ -6643,7 +6680,7 @@ void castle_cache_fini(void)
 {
     castle_cache_debug_fini();
     castle_cache_prefetch_fini();
-    castle_cache_flush_fini();
+    castle_cache_threads_fini();
     castle_cache_hashes_fini();
     castle_vmap_fast_map_fini();
     castle_cache_freelists_fini();
