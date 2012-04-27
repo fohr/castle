@@ -329,6 +329,13 @@ static ssize_t da_tree_list_show(struct kobject *kobj,
             else
                 ct_size = atomic64_read(&ct->nr_bytes);
 
+            if (test_bit(CASTLE_CT_BACKUP_BARRIER_BIT, &ct->flags))
+            {
+                ret = snprintf(buf, PAGE_SIZE, "%s*", buf);
+                if (ret >= PAGE_SIZE)
+                    goto err;
+            }
+
             ret = snprintf(buf, PAGE_SIZE,
                            "%s[%lu %u %u %u %llu %lu %lu] ",
                            buf,
