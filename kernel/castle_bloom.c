@@ -1061,14 +1061,14 @@ void castle_bloom_unmarshall(castle_bloom_t *bf, struct castle_clist_entry *ctm)
     bf->private = NULL;
 
     /* Pre-warm cache for bloom filters. */
-    if (bf->num_chunks <= BLOOM_MAX_PREFETCH_CHUNKS)
+    if (bf->num_chunks && bf->num_chunks <= BLOOM_MAX_PREFETCH_CHUNKS)
     {
         /* A bf chunk is not the same as a c2b chunk.
          * CHUNK() will give us an offset starting from 0, bump it by 1 to get
          * the number of chunks we need to prefetch & pin. */
         int chunks = CHUNK(bf->chunks_offset + bf->num_chunks * BLOOM_CHUNK_SIZE) + 1;
         castle_cache_advise((c_ext_pos_t){bf->ext_id, 0},
-                C2_ADV_EXTENT|C2_ADV_PREFETCH, USER, chunks);
+                C2_ADV_PREFETCH, USER, chunks);
     }
 
 #ifdef CASTLE_BLOOM_FP_STATS

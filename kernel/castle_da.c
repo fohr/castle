@@ -8917,7 +8917,7 @@ static struct castle_component_tree * castle_da_ct_unmarshall(struct castle_clis
         int chunks = (nr_bytes)? (CHUNK(nr_bytes - 1) + 1): 0;
 
         castle_cache_advise((c_ext_pos_t){ct->tree_ext_free.ext_id, 0},
-                C2_ADV_EXTENT|C2_ADV_PREFETCH, USER, chunks);
+                C2_ADV_PREFETCH, USER, chunks);
     }
 
     atomic64_set(&ct->max_user_timestamp, ctm->max_user_timestamp);
