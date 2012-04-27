@@ -70,6 +70,26 @@ void castle_atomic64_max(uint64_t new_val, atomic64_t *v)
     }
 }
 
+/**
+ *Saturating increment, which resets to 0 upon saturation.
+ *
+ *@return post-increment value
+ */
+uint32_t castle_atomic_inc_cycle(uint32_t max, atomic_t *v)
+{
+    uint32_t c;
+    uint32_t old;
+
+    while(1)
+    {
+        c = atomic_read(v);
+        old = atomic_cmpxchg(v, c, ((c+1)>max?0:(c+1)));
+        if(likely(old == c))
+            break;
+    }
+    return c;
+}
+
 /****** Stack implementation, designed to hold array indices ******/
 int castle_uint32_stack_construct(c_uint32_stack *stack, uint32_t size)
 {

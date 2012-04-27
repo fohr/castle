@@ -3168,8 +3168,10 @@ static void castle_back_stream_in_start(void *data)
     internal_ext_size = castle_back_stream_in_internal_ext_size_wc_estimate(stateful_op, tree_ext_size);
     internal_ext_size = tree_ext_size;
 
-    castle_printk(LOG_DEBUG, "%s:: stream_in op expected_entries: %lld, expected_dataext_chunks: %ld, stateful_op:%p\n",
+    castle_printk(LOG_DEBUG, "%s:: stream_in op on cpu %u, expected_entries: %lld, "
+                "expected_dataext_chunks: %ld, stateful_op:%p\n",
                 __FUNCTION__,
+                op->cpu,
                 stateful_op->stream_in.expected_entries,
                 stateful_op->stream_in.expected_dataext_chunks,
                 stateful_op);
@@ -4210,6 +4212,7 @@ long castle_back_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned lo
  *
  * @also castle_back_cleanup_conn()
  */
+atomic_t castle_next_conn_cpu_index = ATOMIC_INIT(0);
 int castle_back_open(struct inode *inode, struct file *file)
 {
     castle_sring_t *sring;
@@ -4234,7 +4237,8 @@ int castle_back_open(struct inode *inode, struct file *file)
     }
 
     conn->flags = 0;
-    conn->cpu_index = 0;
+    conn->cpu_index = castle_atomic_inc_cycle(castle_double_array_request_cpus()-1,
+                                              &castle_next_conn_cpu_index);
     conn->cpu = castle_double_array_request_cpu(conn->cpu_index);
     atomic_set(&conn->ref_count, 1);
 
