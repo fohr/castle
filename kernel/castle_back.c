@@ -4212,12 +4212,12 @@ long castle_back_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned lo
  *
  * @also castle_back_cleanup_conn()
  */
-atomic_t castle_next_conn_cpu_index = ATOMIC_INIT(0);
 int castle_back_open(struct inode *inode, struct file *file)
 {
     castle_sring_t *sring;
     struct castle_back_conn *conn;
     int i, err = 0;
+    static atomic_t castle_next_conn_cpu_index = ATOMIC_INIT(0);
 
     debug("castle_back_dev_open\n");
 
@@ -4237,7 +4237,7 @@ int castle_back_open(struct inode *inode, struct file *file)
     }
 
     conn->flags = 0;
-    conn->cpu_index = castle_atomic_inc_cycle(castle_double_array_request_cpus()-1,
+    conn->cpu_index = castle_atomic_inc_cycle(castle_double_array_request_cpus(),
                                               &castle_next_conn_cpu_index);
     conn->cpu = castle_double_array_request_cpu(conn->cpu_index);
     atomic_set(&conn->ref_count, 1);

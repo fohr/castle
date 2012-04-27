@@ -71,9 +71,11 @@ void castle_atomic64_max(uint64_t new_val, atomic64_t *v)
 }
 
 /**
- *Saturating increment, which resets to 0 upon saturation.
+ *Increment until max (exclusive upper bound) then "overflow" to 0.
  *
- *@return post-increment value
+ *@param max     Exclusive upper bound
+ *@param v       atomic counter
+ *@return        post-increment value of v
  */
 uint32_t castle_atomic_inc_cycle(uint32_t max, atomic_t *v)
 {
@@ -83,7 +85,7 @@ uint32_t castle_atomic_inc_cycle(uint32_t max, atomic_t *v)
     while(1)
     {
         c = atomic_read(v);
-        old = atomic_cmpxchg(v, c, ((c+1)>max?0:(c+1)));
+        old = atomic_cmpxchg(v, c, ( (c+1) % max ));
         if(likely(old == c))
             break;
     }
