@@ -131,7 +131,6 @@ DEFINE_HASH_TBL(castle_ct, castle_ct_hash, CASTLE_CT_HASH_SIZE, struct castle_co
 DEFINE_HASH_TBL(castle_data_exts, castle_data_exts_hash, CASTLE_DATA_EXTS_HASH_SIZE, struct castle_data_extent, hash_list, c_ext_id_t, ext_id);
 
 atomic_t castle_zombie_da_count = ATOMIC(0);
-atomic_t castle_backup_count = ATOMIC(0);
 
 typedef enum {
     DAM_MARSHALL_ALL = 0,  /**< Marshall all merge state          */
@@ -219,6 +218,7 @@ static void castle_da_lfs_all_rwcts_callback(void *data);
 static int castle_immut_tree_nodes_complete(struct castle_immut_tree_construct *tree_constr);
 static void castle_immut_tree_constr_dealloc(struct castle_immut_tree_construct *tree_constr);
 
+static atomic_t castle_da_merge_thread_count = ATOMIC(0);
 
 static struct list_head        *castle_merge_threads_hash = NULL;
 
@@ -245,58 +245,6 @@ static int castle_da_incremental_backup_start(struct castle_double_array *da);
 
 static int castle_da_incremental_backup_finish(struct castle_double_array *da,
                                                int                         err);
-
-static int castle_da_incremental_backup_test(struct castle_double_array *da, void *private)
-{
-    int i;
-
-    struct castle_da_cts_proxy *proxy;
-
-    if (castle_da_incremental_backup_start(da))
-        return 0;
-
-    proxy = castle_da_cts_proxy_get(da);
-    if (proxy == NULL)
-    {
-        castle_da_incremental_backup_finish(da, -ENOMEM);
-        return 0;
-    }
-
-    for (i=0; i<proxy->nr_cts; i++)
-    {
-        if (castle_da_inc_backup_needed(proxy->cts[i].ct))
-            castle_printk(LOG_USERINFO, "Backup 0x%llx\n", proxy->cts[i].ct->seq);
-    }
-
-    msleep(1000);
-
-    castle_da_cts_proxy_put(proxy);
-
-    castle_da_incremental_backup_finish(da, 0);
-
-    return 0;
-}
-
-static atomic_t castle_da_merge_thread_count = ATOMIC(0);
-static void castle_da_backups_func(void *unused)
-{
-    __castle_da_hash_iterate(castle_da_incremental_backup_test, NULL);
-    atomic_dec(&castle_backup_count);
-}
-
-static DECLARE_WORK(castle_da_backup_work, castle_da_backups_func, 0 /*da_locked*/);
-static struct timer_list castle_da_backup_timer;
-static void castle_da_backup_timer_fire(unsigned long first)
-{
-    /* Timeout any existing DA CTs proxy structures. */
-    if (schedule_work(&castle_da_backup_work))
-        atomic_inc(&castle_backup_count);
-
-    /* Reschedule ourselves. */
-    setup_timer(&castle_da_backup_timer, castle_da_backup_timer_fire, 0);
-    mod_timer(&castle_da_backup_timer, jiffies + HZ * 60);
-}
-
 /**********************************************************************************************/
 /* Merges */
 #define MAX_IOS             (1000) /* Arbitrary constants */
@@ -11899,7 +11847,6 @@ int castle_double_array_init(void)
     castle_data_exts_hash_init();
 
     castle_da_cts_proxy_timer_fire(1);
-    castle_da_backup_timer_fire(1);
 
     return 0;
 
@@ -11932,10 +11879,6 @@ void castle_double_array_merges_fini(void)
     /* Wait for all merge threads to complete. */
     while (atomic_read(&castle_da_merge_thread_count))
         msleep(1000);
-
-    del_singleshot_timer_sync(&castle_da_backup_timer);
-    while (atomic_read(&castle_backup_count))
-        msleep(10);
 
     /* Stop DA CTs proxy timer and invalidate any existing proxies. */
     del_singleshot_timer_sync(&castle_da_cts_proxy_timer);
